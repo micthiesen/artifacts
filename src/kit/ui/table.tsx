@@ -172,7 +172,7 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter…" className="pl-9" aria-label="Filter rows" />
         </div>
       )}
-      <div className="overflow-x-auto rounded-xl border border-border bg-card">
+      <div className="scroll-cue-x overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full border-collapse text-[14px] leading-snug">
           <thead>
             <tr className="border-b border-border bg-muted/50">
@@ -221,6 +221,7 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
                       key={c.key}
                       className={cn(
                         "px-4 py-2.5 align-top first:pl-5 last:pr-5",
+                        c.align === "left" && "max-sm:min-w-36",
                         alignClass(c.align),
                         c.align === "right" && "tabular-nums",
                         j === 0 && "font-medium",

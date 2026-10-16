@@ -152,7 +152,7 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
               >
                 {done && <Check className="size-3.5" strokeWidth={3} />}
               </button>
-              <span className={cn("min-w-0 flex-1 text-[15px] leading-snug transition-colors", done && "text-muted-foreground line-through decoration-muted-foreground/40")}>
+              <span className={cn("min-w-0 flex-1 text-[15px] leading-snug transition-colors", done && "text-foreground/70 line-through decoration-foreground/40")}>
                 {text}
               </span>
               {done && st?.by && (

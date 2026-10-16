@@ -53,33 +53,53 @@ function page(title: string, body: string, init: ResponseInit = {}): Response {
   return new Response(html, { ...init, headers });
 }
 
+function topBar(right = ""): string {
+  return `<header class="bar"><a class="brand" href="/"><span class="mark">◆</span>Shared Artifacts</a><span class="spacer"></span>${right}</header>`;
+}
+
+function relativeTime(iso: string): string {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)} d ago`;
+  return iso.slice(0, 10);
+}
+
 export function indexPage(viewer: { email: string | null }, artifacts: (ArtifactMeta & { role: Role })[], loginConfigured: boolean): Response {
-  const items = artifacts.length
-    ? `<ul class="list">${artifacts
-        .map(
-          (a) => `<li><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}</span>${
-            a.description ? `<span class="desc">${escapeHtml(a.description)}</span>` : ""
-          }<span class="meta">${a.role} · updated ${a.updatedAt.slice(0, 10)}</span></a></li>`,
-        )
-        .join("")}</ul>`
-    : `<p class="muted">${viewer.email ? "Nothing has been shared with you yet." : ""}</p>`;
   const account = viewer.email
-    ? `<form method="post" action="/logout"><span class="muted">${escapeHtml(viewer.email)}</span> <button class="link">Sign out</button></form>`
+    ? `<form class="account" method="post" action="/logout"><span class="muted email">${escapeHtml(viewer.email)}</span><button class="link">Sign out</button></form>`
     : loginConfigured
-      ? `<a class="button" href="/login?return=/">Sign in</a>`
-      : `<span class="muted">Sign-in is not configured yet.</span>`;
-  return page(
-    "Shared Artifacts",
-    `<main class="index"><header><h1>Shared Artifacts</h1>${account}</header>${viewer.email ? items : `<p class="muted">Sign in with your email to see artifacts shared with you.</p>`}</main>`,
-  );
+      ? `<a class="button small" href="/login?return=/">Sign in</a>`
+      : "";
+  let body: string;
+  if (!viewer.email) {
+    body = `<section class="empty"><h1>Shared Artifacts</h1><p class="muted">${
+      loginConfigured
+        ? "Sign in with your email to see artifacts shared with you."
+        : "Open the link you were sent to view an artifact."
+    }</p><p class="fine"><a href="/owner">Owner sign-in</a></p></section>`;
+  } else if (!artifacts.length) {
+    body = `<section class="empty"><h1>Nothing here yet</h1><p class="muted">Artifacts shared with ${escapeHtml(viewer.email)} will show up here.</p></section>`;
+  } else {
+    body = `<h1 class="page-title">Artifacts</h1><ul class="list">${artifacts
+      .map(
+        (a) => `<li><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}</span>${
+          a.description ? `<span class="desc">${escapeHtml(a.description)}</span>` : ""
+        }<span class="meta">${relativeTime(a.updatedAt)} · v${a.version}${a.public ? " · public" : ""}${
+          a.role === "owner" ? "" : ` · ${a.role}`
+        } · <code>${a.id}</code></span></a></li>`,
+      )
+      .join("")}</ul>`;
+  }
+  return page("Shared Artifacts", `${topBar(account)}<main class="content">${body}</main>`);
 }
 
 export function messagePage(title: string, message: string, status: number, action?: { href: string; label: string }): Response {
+  const act = action ?? { href: "/", label: "All artifacts" };
   return page(
     title,
-    `<main class="message"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>${
-      action ? `<p><a class="button" href="${escapeHtml(action.href)}">${escapeHtml(action.label)}</a></p>` : ""
-    }</main>`,
+    `${topBar()}<main class="content"><section class="empty"><h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p><p><a class="button" href="${escapeHtml(act.href)}">${escapeHtml(act.label)}</a></p></section></main>`,
     { status },
   );
 }
@@ -87,8 +107,8 @@ export function messagePage(title: string, message: string, status: number, acti
 export function ownerLoginPage(): Response {
   return page(
     "Owner sign-in",
-    `<main class="message"><h1>Owner sign-in</h1><p id="owner-status" class="muted">Signing in…</p>
-<form id="owner-form" hidden><input id="owner-key" type="password" autocomplete="current-password" placeholder="Owner key" aria-label="Owner key"> <button class="button" type="submit">Sign in</button></form></main>
+    `${topBar()}<main class="content"><section class="empty"><h1>Owner sign-in</h1><p id="owner-status" class="muted">Signing in…</p>
+<form id="owner-form" class="key-form" hidden><input type="text" name="username" value="owner" autocomplete="username" hidden><label for="owner-key">Owner key</label><div class="row"><input id="owner-key" class="input" type="password" autocomplete="current-password" required><button class="button" type="submit">Sign in</button></div></form></section></main>
 <script type="module" src="${asset("/static/owner.js")}"></script>`,
   );
 }
@@ -97,7 +117,7 @@ export function shellPage(boot: ShellBoot): Response {
   return page(
     boot.title,
     `<div class="shell">
-<header class="bar"><a class="home" href="/" title="All artifacts">◆</a><span class="title">${escapeHtml(boot.title)}</span><span id="presence" class="presence"></span><span id="status" class="status"></span></header>
+<header class="bar"><a class="home" href="/" title="All artifacts" aria-label="All artifacts">◆</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span><span id="status" class="status"></span><span id="presence" class="presence"></span></header>
 <div id="frame-host" class="frame-host"></div>
 </div>
 <script type="application/json" id="shell-boot">${scriptJson(boot)}</script>

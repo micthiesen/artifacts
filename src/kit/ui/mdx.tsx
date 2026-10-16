@@ -45,7 +45,7 @@ export const markdownComponents = {
     />
   ),
   table: ({ className, ...p }: P<"table">) => (
-    <div className="my-6 overflow-x-auto rounded-xl border border-border bg-card">
+    <div className="my-6 scroll-cue-x overflow-x-auto rounded-xl border border-border bg-card">
       <table className={cn("w-full border-collapse text-[14px] leading-snug", className)} {...p} />
     </div>
   ),
@@ -55,7 +55,8 @@ export const markdownComponents = {
   th: ({ className, ...p }: P<"th">) => (
     <th className={cn("px-4 py-2.5 text-left font-medium whitespace-nowrap text-muted-foreground first:pl-5 last:pr-5", className)} {...p} />
   ),
-  td: ({ className, ...p }: P<"td">) => <td className={cn("px-4 py-2.5 align-top first:pl-5 last:pr-5", className)} {...p} />,
+  // On phones, cells keep a readable width and the table scrolls sideways.
+  td: ({ className, ...p }: P<"td">) => <td className={cn("px-4 py-2.5 align-top first:pl-5 last:pr-5 max-sm:min-w-36", className)} {...p} />,
   hr: ({ className, ...p }: P<"hr">) => <hr className={cn("my-10 border-0 border-t border-border", className)} {...p} />,
   img: ({ className, alt = "", ...p }: P<"img">) => <img alt={alt} className={cn("my-6 max-w-full rounded-lg border border-border", className)} {...p} />,
 };
