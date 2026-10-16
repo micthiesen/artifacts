@@ -173,7 +173,7 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter…" className="pl-9" aria-label="Filter rows" />
         </div>
       )}
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="overflow-hidden rounded-xl border border-border bg-card shadow-card">
         <ScrollX>
         <table className="w-full border-collapse text-[14px] leading-snug">
           <thead>

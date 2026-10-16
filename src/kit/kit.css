@@ -20,8 +20,16 @@
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
+  html {
+    background-color: var(--background);
+    scrollbar-color: var(--input) transparent;
+  }
+  /* Atmosphere: a soft dusk glow at the top of the page. It scrolls with the
+     content (no fixed attachment, no blur) so scrolling stays cheap. */
   body {
     background-color: var(--background);
+    background-image: var(--glow);
+    background-repeat: no-repeat;
     color: var(--foreground);
     font-size: 15px;
     line-height: 1.6;
@@ -30,10 +38,21 @@
     min-height: 100%;
   }
   ::selection {
-    background-color: color-mix(in oklab, var(--primary) 22%, transparent);
+    background-color: color-mix(in oklab, var(--primary) 34%, transparent);
+    color: var(--foreground);
   }
   :focus-visible {
     outline-color: var(--ring);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
   code,
   kbd,
@@ -43,3 +62,12 @@
   }
 }
 
+
+@keyframes art-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}

@@ -10,11 +10,13 @@ type Div = React.HTMLAttributes<HTMLDivElement>;
 // ---- Button ---------------------------------------------------------------------
 
 const buttonVariants = {
-  default: "bg-primary text-primary-foreground shadow-xs hover:bg-primary/90",
-  secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/70",
-  outline: "border border-input bg-card text-foreground shadow-xs hover:bg-muted",
+  // Signature gradient; the hover sheen is an overlay that only fades opacity.
+  default:
+    "relative isolate bg-primary bg-signal font-semibold text-primary-foreground shadow-card after:absolute after:inset-0 after:-z-10 after:rounded-[inherit] after:bg-white/15 after:opacity-0 after:transition-opacity hover:after:opacity-100",
+  secondary: "border border-border bg-secondary text-secondary-foreground hover:border-input hover:bg-input/60",
+  outline: "border border-input bg-card text-foreground shadow-card hover:border-muted-foreground/40 hover:bg-muted",
   ghost: "text-foreground hover:bg-muted",
-  destructive: "bg-negative text-white shadow-xs hover:bg-negative/90",
+  destructive: "bg-negative font-semibold text-background shadow-card hover:bg-negative/90",
   link: "text-primary underline-offset-4 hover:underline px-0 h-auto",
 } as const;
 
@@ -34,7 +36,7 @@ export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 export function buttonClass(variant: keyof typeof buttonVariants = "default", size: keyof typeof buttonSizes = "default") {
   return cn(
     "inline-flex shrink-0 cursor-pointer items-center justify-center font-medium whitespace-nowrap transition-colors select-none",
-    "outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+    "outline-none focus-visible:focus-halo",
     "disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
     buttonSizes[size],
     buttonVariants[variant],
@@ -51,12 +53,12 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
 // ---- Badge ----------------------------------------------------------------------
 
 const badgeTones = {
-  neutral: "bg-muted text-muted-foreground border-transparent",
-  primary: "bg-accent text-accent-foreground border-transparent",
-  positive: "bg-positive/12 text-positive border-transparent",
-  caution: "bg-caution/15 text-caution border-transparent",
-  negative: "bg-negative/12 text-negative border-transparent",
-  outline: "bg-transparent text-foreground border-border",
+  neutral: "bg-muted text-muted-foreground border-border",
+  primary: "bg-accent text-accent-foreground border-primary/25",
+  positive: "bg-positive/10 text-positive border-positive/25",
+  caution: "bg-caution/10 text-caution border-caution/25",
+  negative: "bg-negative/10 text-negative border-negative/30",
+  outline: "bg-transparent text-foreground border-input",
 } as const;
 
 export type BadgeProps = React.HTMLAttributes<HTMLSpanElement> & {
@@ -87,7 +89,7 @@ export function Badge({ tone = "neutral", className, ...props }: BadgeProps) {
 // ---- Card -----------------------------------------------------------------------
 
 export function Card({ className, ...props }: Div) {
-  return <div className={cn("rounded-xl border border-border bg-card text-card-foreground", className)} {...props} />;
+  return <div className={cn("rounded-xl border border-border bg-card text-card-foreground shadow-card", className)} {...props} />;
 }
 export function CardHeader({ className, ...props }: Div) {
   return <div className={cn("flex flex-col gap-1 px-6 pt-5 pb-3", className)} {...props} />;
@@ -108,7 +110,7 @@ export function CardFooter({ className, ...props }: Div) {
 // ---- Form fields ----------------------------------------------------------------
 
 const fieldClass =
-  "w-full min-w-0 rounded-md border border-input bg-card px-3 text-sm text-foreground shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground/80 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60 read-only:cursor-default read-only:border-border read-only:bg-muted/40 read-only:shadow-none read-only:focus-visible:border-border read-only:focus-visible:ring-0";
+  "w-full min-w-0 rounded-md border border-input bg-background/60 px-3 text-sm text-foreground transition-[border-color,box-shadow] outline-none placeholder:text-muted-foreground/80 hover:border-muted-foreground/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60 read-only:cursor-default read-only:border-border read-only:bg-muted/40 read-only:shadow-none read-only:focus-visible:border-border read-only:focus-visible:ring-0";
 
 export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(function Input(
   { className, type = "text", ...props },
@@ -164,8 +166,16 @@ export function Progress({ value, max = 100, label, className }: { value: number
           <BaseProgress.Value className="text-muted-foreground tabular-nums" />
         </div>
       )}
-      <BaseProgress.Track className="h-2 w-full overflow-hidden rounded-full bg-muted">
-        <BaseProgress.Indicator className="h-full rounded-full bg-primary transition-[width] duration-500" />
+      <BaseProgress.Track className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+        {/* Own fill (not Base UI's width-based indicator) so it animates with transform only. */}
+        {value == null ? (
+          <div className="absolute inset-y-0 left-0 w-1/3 animate-[art-indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-signal" />
+        ) : (
+          <div
+            className="absolute inset-0 origin-left rounded-full bg-signal transition-transform duration-500 ease-out"
+            style={{ transform: `scaleX(${Math.min(1, Math.max(0, max ? value / max : 0))})` }}
+          />
+        )}
       </BaseProgress.Track>
     </BaseProgress.Root>
   );

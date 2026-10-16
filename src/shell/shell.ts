@@ -38,8 +38,8 @@ let frameReady = false;
 let initSent = false;
 const pending = new Map<string, SyncClientMessage>();
 
-const dark = matchMedia("(prefers-color-scheme: dark)");
-const theme = () => (dark.matches ? "dark" : "light");
+// Shared Artifacts is dark only; the frame renders dark whatever it is told.
+const theme = () => "dark" as const;
 
 const iframe = document.createElement("iframe");
 iframe.setAttribute(
@@ -68,8 +68,6 @@ setTimeout(() => {
   snapshotReceived = true;
   maybeInit();
 }, 1500);
-
-dark.addEventListener("change", () => post({ t: "theme", theme: theme() }));
 
 let lastErrorAt = 0;
 window.addEventListener("message", (event) => {

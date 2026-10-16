@@ -35,7 +35,7 @@ function ChartInner({ type = "line", data, x, y, height = 280, stacked, legend, 
   const rows = useRows(data);
   const ys = Array.isArray(y) ? y : y.split(/[\s,]+/).filter(Boolean);
   return (
-    <figure className={cn("my-6 rounded-xl border border-border bg-card px-4 pt-4 pb-3", className)}>
+    <figure className={cn("my-6 rounded-xl border border-border bg-card px-4 pt-4 pb-3 shadow-card", className)}>
       {title && <figcaption className="mb-3 px-1 text-sm font-medium">{title}</figcaption>}
       <React.Suspense fallback={<Skeleton style={{ height }} />}>
         <ChartImpl {...({ type, rows, x, y: ys, height, stacked, legend, colors } satisfies ChartImplProps)} />

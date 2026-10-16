@@ -46,7 +46,7 @@ const axis = {
 function TooltipBox({ active, payload, label }: { active?: boolean; payload?: { name?: string; value?: unknown; color?: string; payload?: Row }[]; label?: unknown }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="min-w-32 rounded-lg border border-border bg-popover px-3 py-2 text-[13px] text-popover-foreground shadow-lg shadow-black/5">
+    <div className="min-w-32 rounded-lg border border-input/70 bg-popover px-3 py-2 text-[13px] text-popover-foreground shadow-pop">
       {label != null && label !== "" && <div className="mb-1 font-medium">{String(label)}</div>}
       {payload.map((p, i) => (
         <div key={i} className="flex items-center justify-between gap-4">
@@ -63,15 +63,16 @@ function TooltipBox({ active, payload, label }: { active?: boolean; payload?: { 
 
 export default function ChartImpl({ type, rows, x, y, height, stacked, colors, legend }: ChartImplProps) {
   const c = colors?.length ? colors : palette;
+  const gid = React.useId().replace(/:/g, "");
   const showLegend = legend ?? (y.length > 1 || type === "pie");
   const legendEl = showLegend ? (
     <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 13, color: "var(--muted-foreground)" }} formatter={(v) => humanize(String(v))} />
   ) : null;
   const common = { data: rows, margin: { top: 8, right: 8, bottom: 0, left: 0 } };
-  const grid = <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />;
+  const grid = <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />;
   const xAxis = <XAxis dataKey={x} {...axis} tickMargin={8} minTickGap={16} />;
   const yAxis = <YAxis {...axis} width={44} tickFormatter={(v: number) => numberFmt.format(v)} />;
-  const tooltip = <Tooltip content={<TooltipBox />} cursor={type === "bar" ? { fill: "var(--muted)", opacity: 0.6 } : { stroke: "var(--border)" }} />;
+  const tooltip = <Tooltip content={<TooltipBox />} cursor={type === "bar" ? { fill: "var(--muted)", opacity: 0.7 } : { stroke: "var(--input)" }} />;
 
   let chart: React.ReactElement;
   if (type === "pie") {
@@ -103,6 +104,15 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
   } else if (type === "area") {
     chart = (
       <AreaChart {...common}>
+        {/* Each area fades from its line into the ground. */}
+        <defs>
+          {y.map((k, i) => (
+            <linearGradient key={k} id={`${gid}-${i}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={c[i % c.length]} stopOpacity={0.32} />
+              <stop offset="100%" stopColor={c[i % c.length]} stopOpacity={0.02} />
+            </linearGradient>
+          ))}
+        </defs>
         {grid}
         {xAxis}
         {yAxis}
@@ -114,8 +124,8 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
             dataKey={k}
             type="monotone"
             stroke={c[i % c.length]}
-            fill={c[i % c.length]}
-            fillOpacity={0.14}
+            fill={`url(#${gid}-${i})`}
+            fillOpacity={1}
             strokeWidth={2}
             stackId={stacked ? "s" : undefined}
           />
@@ -131,7 +141,7 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
         {tooltip}
         {legendEl}
         {y.map((k, i) => (
-          <Line key={k} dataKey={k} type="monotone" stroke={c[i % c.length]} strokeWidth={2} dot={rows.length <= 24 ? { r: 2.5 } : false} activeDot={{ r: 4 }} />
+          <Line key={k} dataKey={k} type="monotone" stroke={c[i % c.length]} strokeWidth={2} dot={rows.length <= 24 ? { r: 2.5, strokeWidth: 0, fill: c[i % c.length] } : false} activeDot={{ r: 4.5, stroke: "var(--card)", strokeWidth: 2 }} />
         ))}
       </LineChart>
     );

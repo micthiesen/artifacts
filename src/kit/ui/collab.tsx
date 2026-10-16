@@ -41,7 +41,7 @@ export function Poll({ id, options, multiple = false, question, className }: { i
   }
 
   return (
-    <div className={cn("my-6 rounded-xl border border-border bg-card p-5", className)}>
+    <div className={cn("my-6 rounded-xl border border-border bg-card p-5 shadow-card", className)}>
       {question && <div className="mb-4 font-semibold">{question}</div>}
       <div className="flex flex-col gap-2" role={multiple ? "group" : "radiogroup"}>
         {options.map((o) => {
@@ -57,21 +57,22 @@ export function Poll({ id, options, multiple = false, question, className }: { i
               disabled={!viewer.canWrite}
               onClick={() => vote(o)}
               className={cn(
-                "group relative flex w-full items-center gap-3 overflow-hidden rounded-lg border px-3.5 py-2.5 text-left text-[15px] transition-colors outline-none",
-                "focus-visible:ring-2 focus-visible:ring-ring/40 enabled:cursor-pointer enabled:hover:border-primary/40",
-                chosen ? "border-primary/50" : "border-border",
+                "group relative isolate flex w-full items-center gap-3 overflow-hidden rounded-lg border bg-background/40 px-3.5 py-2.5 text-left text-[15px] transition-colors outline-none",
+                "focus-visible:focus-halo enabled:cursor-pointer enabled:hover:border-primary/45",
+                chosen ? "border-primary/60" : "border-border",
               )}
             >
+              {/* Result bar: scaled with transform so it animates without layout. */}
               <span
-                className={cn("absolute inset-y-0 left-0 transition-[width] duration-500 ease-out", chosen ? "bg-accent" : "bg-muted/80")}
-                style={{ width: `${who.length ? pct : 0}%` }}
+                className={cn("absolute inset-0 -z-10 origin-left transition-transform duration-500 ease-out", chosen ? "bg-signal opacity-25" : "bg-muted")}
+                style={{ transform: `scaleX(${who.length ? pct / 100 : 0})` }}
                 aria-hidden
               />
               <span
                 className={cn(
                   "relative flex size-[18px] shrink-0 items-center justify-center border transition-colors",
                   multiple ? "rounded-[5px]" : "rounded-full",
-                  chosen ? "border-primary bg-primary text-primary-foreground" : "border-input bg-card",
+                  chosen ? "border-transparent bg-primary bg-signal text-primary-foreground" : "border-input bg-card",
                 )}
               >
                 {chosen && <Check className="size-3" strokeWidth={3} />}
@@ -132,7 +133,7 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
   }
 
   return (
-    <div className={cn("my-6 rounded-xl border border-border bg-card", className)}>
+    <div className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
       <ul className="divide-y divide-border/70">
         {all.map(({ slug, text, added }) => {
           const st = map.get(slug);
@@ -146,13 +147,13 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
                 disabled={!viewer.canWrite}
                 onClick={() => toggle(slug, text, added)}
                 className={cn(
-                  "flex size-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/25 enabled:cursor-pointer",
-                  done ? "border-positive bg-positive text-white" : "border-input bg-card enabled:hover:border-primary/60",
+                  "flex size-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-colors outline-none focus-visible:focus-halo enabled:cursor-pointer",
+                  done ? "border-positive bg-positive text-background" : "border-input bg-background/60 enabled:hover:border-primary/60",
                 )}
               >
                 {done && <Check className="size-3.5" strokeWidth={3} />}
               </button>
-              <span className={cn("min-w-0 flex-1 text-[15px] leading-snug transition-colors", done && "text-foreground/80 line-through decoration-foreground/35")}>
+              <span className={cn("min-w-0 flex-1 text-[15px] leading-snug transition-colors", done && "text-muted-foreground line-through decoration-muted-foreground/50")}>
                 {text}
               </span>
               {done && st?.by && (

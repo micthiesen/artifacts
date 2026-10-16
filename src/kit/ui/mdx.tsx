@@ -15,7 +15,8 @@ export const markdownComponents = {
   ),
   h3: ({ className, ...p }: P<"h3">) => <h3 className={cn("mt-8 mb-3 text-[1.125rem] leading-snug font-semibold tracking-[-0.01em]", className)} {...p} />,
   h4: ({ className, ...p }: P<"h4">) => <h4 className={cn("mt-6 mb-2 text-base font-semibold", className)} {...p} />,
-  p: ({ className, ...p }: P<"p">) => <p className={cn("my-4 text-base leading-[1.75] text-pretty", className)} {...p} />,
+  // Body copy sits a touch below full white to cut glare on the dark ground (still >12:1).
+  p: ({ className, ...p }: P<"p">) => <p className={cn("my-4 text-base leading-[1.75] text-pretty text-foreground/[0.9]", className)} {...p} />,
   a: ({ className, href, ...p }: P<"a">) => {
     const external = typeof href === "string" && /^(https?:|mailto:)/.test(href);
     return (
@@ -27,27 +28,29 @@ export const markdownComponents = {
       />
     );
   },
-  strong: ({ className, ...p }: P<"strong">) => <strong className={cn("font-semibold", className)} {...p} />,
-  ul: ({ className, ...p }: P<"ul">) => <ul className={cn("my-4 list-disc pl-6 text-base leading-[1.75] marker:text-muted-foreground/70", className)} {...p} />,
-  ol: ({ className, ...p }: P<"ol">) => <ol className={cn("my-4 list-decimal pl-6 text-base leading-[1.75] marker:text-muted-foreground", className)} {...p} />,
+  strong: ({ className, ...p }: P<"strong">) => <strong className={cn("font-semibold text-foreground", className)} {...p} />,
+  ul: ({ className, ...p }: P<"ul">) => <ul className={cn("my-4 list-disc pl-6 text-base leading-[1.75] text-foreground/[0.9] marker:text-primary/70", className)} {...p} />,
+  ol: ({ className, ...p }: P<"ol">) => (
+    <ol className={cn("my-4 list-decimal pl-6 text-base leading-[1.75] text-foreground/[0.9] marker:font-medium marker:text-muted-foreground", className)} {...p} />
+  ),
   li: ({ className, ...p }: P<"li">) => <li className={cn("my-1.5 pl-1 [&>p]:my-1 [&>ol]:my-1.5 [&>ul]:my-1.5", className)} {...p} />,
   blockquote: ({ className, ...p }: P<"blockquote">) => (
-    <blockquote className={cn("my-6 border-l-[3px] border-border pl-5 text-muted-foreground [&>p]:my-2", className)} {...p} />
+    <blockquote className={cn("my-6 border-l-[3px] border-input pl-5 text-muted-foreground [&>p]:my-2 [&>p]:text-muted-foreground", className)} {...p} />
   ),
   code: ({ className, ...p }: P<"code">) => (
-    <code className={cn("rounded-[5px] bg-muted px-[0.35em] py-[0.15em] font-mono text-[0.86em] break-words", className)} {...p} />
+    <code className={cn("rounded-[5px] border border-border bg-muted px-[0.35em] py-[0.1em] font-mono text-[0.86em] break-words text-foreground", className)} {...p} />
   ),
   pre: ({ className, ...p }: P<"pre">) => (
     <pre
       className={cn(
-        "my-6 overflow-x-auto rounded-lg border border-border bg-muted/60 px-4 py-3.5 font-mono text-[13px] leading-relaxed [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[inherit] [&_code]:break-normal",
+        "my-6 overflow-x-auto rounded-lg border border-border bg-black/25 px-4 py-3.5 font-mono text-[13px] leading-relaxed text-foreground/[0.92] [&_code]:border-0 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[inherit] [&_code]:break-normal",
         className,
       )}
       {...p}
     />
   ),
   table: ({ className, ...p }: P<"table">) => (
-    <div className="my-6 overflow-hidden rounded-xl border border-border bg-card">
+    <div className="my-6 overflow-hidden rounded-xl border border-border bg-card shadow-card">
       <ScrollX>
         <table className={cn("w-full border-collapse text-[14px] leading-snug", className)} {...p} />
       </ScrollX>
@@ -61,7 +64,9 @@ export const markdownComponents = {
   ),
   // On phones, cells keep a readable width and the table scrolls sideways.
   td: ({ className, ...p }: P<"td">) => <td className={cn("px-4 py-2.5 align-top first:pl-5 last:pr-5 max-sm:min-w-36", className)} {...p} />,
-  hr: ({ className, ...p }: P<"hr">) => <hr className={cn("my-10 border-0 border-t border-border", className)} {...p} />,
+  hr: ({ className, ...p }: P<"hr">) => (
+    <hr className={cn("my-10 h-px border-0 bg-[linear-gradient(90deg,transparent,var(--input)_20%,var(--input)_80%,transparent)]", className)} {...p} />
+  ),
   img: ({ className, alt = "", src, ...p }: P<"img">) => (
     <img
       alt={alt}

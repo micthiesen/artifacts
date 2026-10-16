@@ -3,7 +3,7 @@
 An artifact has one entry: `index.mdx` / `index.md` (a readable report) or `app.tsx` (a full-height app, `export default function App()`). Other `*.tsx` files import by relative path; `data/*.json` files load with `useData("x.json")` or a component's `data="x.json"`. Allowed imports: `react`, `@a/ui`, `@a/hooks`, `lucide-react`, `recharts`, relative files. MDX gets every `@a/ui` component and styled markdown with no imports. There is no network: no fetch, no external images or fonts (use `data:` URLs).
 - `useAsset(path)` → URL of a file uploaded with artifact_asset (e.g. `"assets/logo.png"`); MDX images (`![alt](assets/logo.png)`) resolve automatically.
 
-Style with Tailwind classes and theme tokens, which work in light and dark: `bg-background bg-card bg-muted bg-accent bg-primary text-foreground text-muted-foreground text-primary text-primary-foreground border-border text-positive text-caution text-negative bg-chart-1`…`6`, `rounded-lg`, `font-mono`. Avoid raw colors like `bg-white` or `text-gray-500`.
+Style with Tailwind classes and theme tokens (the theme is dark only): `bg-background bg-card bg-muted bg-accent bg-primary text-foreground text-muted-foreground text-primary text-primary-foreground border-border text-positive text-caution text-negative bg-chart-1`…`6`, `bg-signal` (the accent gradient; use sparingly), `rounded-lg`, `font-mono`. Avoid raw colors like `bg-white` or `text-gray-500`.
 
 ## Components (`@a/ui`)
 
@@ -45,7 +45,7 @@ Live and shared (they work without extra code; view-only and anonymous viewers s
 - `useSharedMap<T>(prefix)` returns `{entries: [key, T][], get, set, delete}` over keys `prefix/<key>`. Use it for lists.
 - `useLocal(key, default)` returns `[value, set]`. Private to this viewer and persists across visits. `localStorage` works too.
 - `useViewer()` returns `{email: string|null, role: "owner"|"edit"|"view", canWrite}`.
-- `usePresence()` returns the emails viewing now. `useTheme()` returns `"light"|"dark"`.
+- `usePresence()` returns the emails viewing now. `useTheme()` returns `"dark"` (the kit is dark only).
 - `useData<T>(path)` returns the parsed `data/*.json` contents and throws if the file is missing.
 
 Shared-state rules: store one key per list item (`todo/<id>`), never a whole array under one key, or concurrent edits get lost. Values are JSON, at most 64 KB each. Writes from `view` or anonymous viewers are ignored, so check `canWrite` to disable controls. Forms cannot navigate: handle Enter and clicks yourself, or call `e.preventDefault()` in `onSubmit`.

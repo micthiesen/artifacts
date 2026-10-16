@@ -101,7 +101,7 @@ function showErrorToast(message: string) {
     el.id = "art-error-toast";
     el.setAttribute("role", "alert");
     el.className =
-      "fixed right-4 bottom-4 left-4 z-[100] mx-auto max-w-xl rounded-lg border border-negative/25 bg-card px-4 py-3 text-sm text-foreground shadow-lg sm:left-auto";
+      "fixed right-4 bottom-4 left-4 z-[100] mx-auto max-w-xl rounded-lg border border-negative/35 bg-popover px-4 py-3 text-sm text-foreground shadow-pop sm:left-auto";
     document.body.appendChild(el);
     const close = document.createElement("button");
     close.textContent = "Dismiss";
@@ -148,9 +148,15 @@ function installLinkHandler(send: (m: FrameMessage) => void) {
   );
 }
 
-function applyTheme(theme: store.Theme) {
-  document.documentElement.classList.toggle("dark", theme === "dark");
-  document.documentElement.style.colorScheme = theme;
+/**
+ * The kit is dark only. The shell still sends `theme` (protocol unchanged), but
+ * the frame always renders dark and reports "dark" through useTheme(), so
+ * artifact code that branches on the theme matches what is on screen.
+ */
+const THEME: store.Theme = "dark";
+function applyTheme() {
+  document.documentElement.classList.add("dark");
+  document.documentElement.style.colorScheme = THEME;
 }
 
 function isMarkdown(entry: string) {
@@ -222,8 +228,8 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     if (!msg || typeof msg !== "object" || typeof msg.t !== "string") return;
     switch (msg.t) {
       case "init":
-        store.init(msg);
-        applyTheme(msg.theme);
+        store.init({ ...msg, theme: THEME });
+        applyTheme();
         shims?.seedFromStore();
         resolveInit();
         break;
@@ -234,16 +240,16 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         store.setPresence(msg.viewers);
         break;
       case "theme":
-        store.setTheme(msg.theme);
-        applyTheme(msg.theme);
+        store.setTheme(THEME);
+        applyTheme();
         break;
     }
   });
 
   if (check) {
     // No shell: start from an empty, read-only state.
-    store.init({ viewer: { email: null, role: "view" }, local: {}, shared: {}, presence: [], theme: "light" });
-    applyTheme("light");
+    store.init({ viewer: { email: null, role: "view" }, local: {}, shared: {}, presence: [], theme: THEME });
+    applyTheme();
     resolveInit();
   } else send({ t: "ready" });
   await initialized;

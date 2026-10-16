@@ -2,72 +2,86 @@
  * Shared Artifacts theme. Self-contained (no @import): the kit stylesheet and
  * every artifact's per-version stylesheet include this file verbatim, so a
  * class like `bg-muted text-primary` resolves from these tokens alone.
- * Calm, editorial palette: warm neutrals with one deep indigo accent.
+ *
+ * Dark only. "Midnight ink" surfaces (cool, low-chroma blue-violet neutrals)
+ * with one signature "dusk" gradient, iris -> aqua, used sparingly for the
+ * things that matter: primary actions, focus, selection, progress, the lead.
+ * --primary is the iris end, so single-color uses (text-primary, bg-primary)
+ * stay on-brand. `.dark` is kept as an alias so `dark:` variants still apply.
  */
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
-  :root {
-    color-scheme: light;
-    --background: oklch(0.989 0.003 85);
-    --foreground: oklch(0.235 0.009 60);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.235 0.009 60);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.235 0.009 60);
-    --muted: oklch(0.962 0.005 80);
-    --muted-foreground: oklch(0.505 0.012 65);
-    --secondary: oklch(0.948 0.006 80);
-    --secondary-foreground: oklch(0.27 0.01 60);
-    --primary: oklch(0.465 0.165 272);
-    --primary-foreground: oklch(0.985 0.005 272);
-    --accent: oklch(0.955 0.017 275);
-    --accent-foreground: oklch(0.36 0.13 272);
-    --border: oklch(0.906 0.006 80);
-    --input: oklch(0.875 0.008 80);
-    --ring: oklch(0.6 0.13 272);
-    --positive: oklch(0.53 0.12 155);
-    --caution: oklch(0.64 0.14 65);
-    --negative: oklch(0.55 0.19 27);
-    --chart-1: oklch(0.52 0.16 272);
-    --chart-2: oklch(0.62 0.11 190);
-    --chart-3: oklch(0.72 0.14 70);
-    --chart-4: oklch(0.6 0.16 15);
-    --chart-5: oklch(0.58 0.14 310);
-    --chart-6: oklch(0.6 0.09 140);
-    --radius: 0.65rem;
-  }
-
+  :root,
   .dark {
     color-scheme: dark;
-    --background: oklch(0.185 0.006 60);
-    --foreground: oklch(0.93 0.006 80);
-    --card: oklch(0.215 0.006 60);
-    --card-foreground: oklch(0.93 0.006 80);
-    --popover: oklch(0.235 0.007 60);
-    --popover-foreground: oklch(0.93 0.006 80);
-    --muted: oklch(0.25 0.006 60);
-    --muted-foreground: oklch(0.7 0.01 70);
-    --secondary: oklch(0.275 0.007 60);
-    --secondary-foreground: oklch(0.93 0.006 80);
-    --primary: oklch(0.74 0.12 274);
-    --primary-foreground: oklch(0.2 0.04 274);
-    --accent: oklch(0.29 0.045 274);
-    --accent-foreground: oklch(0.86 0.07 274);
-    --border: oklch(0.3 0.007 60);
-    --input: oklch(0.36 0.008 60);
-    --ring: oklch(0.66 0.12 274);
-    --positive: oklch(0.72 0.13 155);
-    --caution: oklch(0.79 0.13 75);
-    --negative: oklch(0.7 0.17 25);
-    --chart-1: oklch(0.7 0.13 274);
-    --chart-2: oklch(0.74 0.1 190);
-    --chart-3: oklch(0.8 0.13 75);
-    --chart-4: oklch(0.7 0.15 15);
-    --chart-5: oklch(0.7 0.13 310);
-    --chart-6: oklch(0.74 0.09 140);
+    --background: oklch(0.16 0.017 275);
+    --foreground: oklch(0.94 0.008 275);
+    --card: oklch(0.192 0.02 275);
+    --card-foreground: oklch(0.94 0.008 275);
+    --popover: oklch(0.215 0.022 275);
+    --popover-foreground: oklch(0.94 0.008 275);
+    --muted: oklch(0.232 0.02 275);
+    --muted-foreground: oklch(0.73 0.018 275);
+    --secondary: oklch(0.255 0.022 275);
+    --secondary-foreground: oklch(0.94 0.008 275);
+    --primary: oklch(0.74 0.14 285);
+    --primary-foreground: oklch(0.17 0.035 285);
+    --accent: oklch(0.27 0.055 285);
+    --accent-foreground: oklch(0.88 0.07 285);
+    --border: oklch(0.29 0.02 275);
+    --input: oklch(0.37 0.024 275);
+    --ring: oklch(0.76 0.13 285);
+    --positive: oklch(0.79 0.15 158);
+    --caution: oklch(0.84 0.135 80);
+    --negative: oklch(0.72 0.17 22);
+    /* Charts: six hues spread around the wheel with staggered lightness so
+       neighbours stay distinct (also in grayscale / for CVD). */
+    --chart-1: oklch(0.72 0.15 285);
+    --chart-2: oklch(0.82 0.12 200);
+    --chart-3: oklch(0.85 0.14 78);
+    --chart-4: oklch(0.69 0.17 20);
+    --chart-5: oklch(0.77 0.15 150);
+    --chart-6: oklch(0.76 0.14 335);
+    /* Signature gradient: dusk iris -> moonlit aqua. */
+    --signal-from: oklch(0.74 0.14 285);
+    --signal-to: oklch(0.82 0.11 200);
+    --signal: linear-gradient(100deg, var(--signal-from), var(--signal-to));
+    --signal-v: linear-gradient(180deg, var(--signal-from), var(--signal-to));
+    --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.62 0.13 285 / 0.16), oklch(0.62 0.1 220 / 0.05) 55%, transparent 75%);
+    --shadow-card: 0 1px 0 oklch(1 0 0 / 0.035) inset, 0 1px 2px oklch(0 0 0 / 0.35);
+    --shadow-pop: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 12px 32px -8px oklch(0 0 0 / 0.6), 0 2px 6px oklch(0 0 0 / 0.35);
+    --radius: 0.7rem;
   }
+}
+
+/* Gradient helpers (usable by artifacts too: `bg-signal`, `text-signal`). */
+@utility bg-signal {
+  background-image: var(--signal);
+}
+@utility text-signal {
+  background-image: var(--signal);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+@utility bg-signal-v {
+  background-image: var(--signal-v);
+}
+/* Two-tone focus halo: iris ring with a faint aqua bloom. */
+@utility focus-halo {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--background),
+    0 0 0 3.5px var(--signal-from),
+    0 0 0 6px color-mix(in oklab, var(--signal-to) 30%, transparent);
+}
+@utility shadow-card {
+  box-shadow: var(--shadow-card);
+}
+@utility shadow-pop {
+  box-shadow: var(--shadow-pop);
 }
 
 @theme inline {
@@ -97,6 +111,8 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
   --color-chart-6: var(--chart-6);
+  --color-signal-from: var(--signal-from);
+  --color-signal-to: var(--signal-to);
   --radius-sm: calc(var(--radius) - 0.25rem);
   --radius-md: calc(var(--radius) - 0.125rem);
   --radius-lg: var(--radius);

@@ -70,7 +70,8 @@ export function Summary({ children, className }: Children) {
   return (
     <div
       className={cn(
-        "my-8 border-l-[3px] border-primary py-1 pl-5 text-[1.1875rem] leading-[1.6] text-pretty text-foreground [&_p]:my-0 [&_p+p]:mt-3",
+        "relative my-8 rounded-r-lg bg-[linear-gradient(90deg,color-mix(in_oklab,var(--primary)_9%,transparent),transparent_75%)] py-3.5 pr-4 pl-6 text-[1.1875rem] leading-[1.6] text-pretty text-foreground [&_p]:my-0 [&_p+p]:mt-3",
+        "before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:rounded-full before:bg-signal-v",
         className,
       )}
     >
@@ -80,10 +81,10 @@ export function Summary({ children, className }: Children) {
 }
 
 const calloutTones = {
-  info: { icon: Info, box: "bg-accent/60 border-primary/15", icon_: "text-primary" },
-  success: { icon: CircleCheck, box: "bg-positive/8 border-positive/20", icon_: "text-positive" },
-  warning: { icon: TriangleAlert, box: "bg-caution/10 border-caution/25", icon_: "text-caution" },
-  danger: { icon: OctagonAlert, box: "bg-negative/8 border-negative/20", icon_: "text-negative" },
+  info: { icon: Info, box: "bg-accent/45 border-primary/25", icon_: "text-primary" },
+  success: { icon: CircleCheck, box: "bg-positive/[0.07] border-positive/25", icon_: "text-positive" },
+  warning: { icon: TriangleAlert, box: "bg-caution/[0.07] border-caution/25", icon_: "text-caution" },
+  danger: { icon: OctagonAlert, box: "bg-negative/[0.08] border-negative/30", icon_: "text-negative" },
 } as const;
 
 export function Callout({ tone = "info", title, children, className }: Children & { tone?: keyof typeof calloutTones; title?: React.ReactNode }) {
@@ -122,8 +123,8 @@ export function Stat({
   const good = invert ? sign < 0 : sign > 0;
   const deltaText = typeof delta === "number" ? (delta > 0 ? `+${delta}` : String(delta)) : delta;
   return (
-    <div className={cn("rounded-xl border border-border bg-card px-5 py-4", className)}>
-      <div className="text-sm text-muted-foreground">{label}</div>
+    <div className={cn("rounded-xl border border-border bg-card px-5 py-4 shadow-card", className)}>
+      <div className="text-[13px] font-medium tracking-[0.01em] text-muted-foreground">{label}</div>
       <div className="mt-1 flex items-baseline gap-2">
         <span className="text-[1.75rem] leading-tight font-semibold tracking-tight tabular-nums">{value}</span>
         {deltaText != null && deltaText !== "" && (
@@ -162,7 +163,7 @@ export function Steps({ children, className }: Children) {
       {items.map((child, i) => (
         <li key={i} className="relative flex gap-4 pb-6 last:pb-0">
           {i < items.length - 1 && <span className="absolute top-8 bottom-1 left-[13px] w-px bg-border" aria-hidden />}
-          <span className="z-10 flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-card text-[13px] font-semibold text-muted-foreground tabular-nums">
+          <span className="z-10 flex size-7 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-accent text-[13px] font-semibold text-accent-foreground tabular-nums">
             {i + 1}
           </span>
           <div className="min-w-0 flex-1 pt-0.5">{child}</div>
@@ -187,7 +188,7 @@ export function Timeline({ children, className }: Children) {
 export function TimelineItem({ date, title, tone, children }: Children & { date?: React.ReactNode; title?: React.ReactNode; tone?: "default" | "primary" | "positive" | "caution" | "negative" }) {
   const dot: Record<string, string> = {
     default: "bg-muted-foreground/50",
-    primary: "bg-primary",
+    primary: "bg-primary bg-signal",
     positive: "bg-positive",
     caution: "bg-caution",
     negative: "bg-negative",

@@ -33,7 +33,7 @@ export function ErrorPanel({ title = "This part of the artifact failed to render
       {error.stack && (
         <details className="mt-2 text-xs text-muted-foreground">
           <summary className="cursor-pointer select-none">Details</summary>
-          <pre className="mt-2 max-h-60 overflow-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{error.stack}</pre>
+          <pre className="mt-2 max-h-60 overflow-auto rounded-md border border-border bg-black/25 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{error.stack}</pre>
         </details>
       )}
     </Callout>

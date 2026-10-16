@@ -15,7 +15,7 @@ email code, so they need no account.
 - **Imports:** only `react`, `@a/ui`, `@a/hooks`, `lucide-react` and `recharts`, plus relative files. There is no network: `fetch`, external images and external scripts are blocked.
 - **Images and files:** upload them with `artifact_asset` (path `assets/<name>`), then use `![alt](assets/logo.png)` in MDX or `useAsset("assets/logo.png")` in code.
 - **Live data:** `artifact_source` keeps a `data/*.json` file updated from a public HTTPS JSON URL every 15 minutes or more. Nothing is fetched until the user approves the URL's host in the artifact's owner menu; tell them when that's needed.
-- **Styling:** Tailwind classes work. Use the theme tokens (`bg-muted`, `text-muted-foreground`, `border`, `text-primary`, `bg-card`) rather than raw colors, so light and dark mode both work.
+- **Styling:** Tailwind classes work. Use the theme tokens (`bg-muted`, `text-muted-foreground`, `border`, `text-primary`, `bg-card`) rather than raw colors so artifacts match the (dark-only) theme.
 
 ## Storage
 

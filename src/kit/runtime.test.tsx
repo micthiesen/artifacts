@@ -58,7 +58,8 @@ test("handshake: ready, ignores foreign messages, renders after init, bridges st
     await tick();
   });
   expect(document.getElementById("out")?.textContent).toContain("n=2");
-  expect(document.documentElement.classList.contains("dark")).toBe(false);
+  // Dark only: a "light" theme message is accepted but the frame stays dark.
+  expect(document.documentElement.classList.contains("dark")).toBe(true);
 
   window.localStorage.setItem("seen", "again");
   sessionStorage.setItem("s", "1");
