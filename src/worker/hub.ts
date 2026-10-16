@@ -3,7 +3,7 @@
 // plenty for a handful of viewers and keeps every write transactional.
 import { DurableObject } from "cloudflare:workers";
 import { buildArtifact, type Build, type CompileError } from "./compile.ts";
-import { renderCheck, type CheckEnv, type RenderCheck } from "./check.ts";
+import { renderCheck, type CheckEnv, type CheckOutcome, type RenderCheck } from "./check.ts";
 import { domainOf, sharePrincipal } from "./principal.ts";
 import { applyJsonPatch, applyTextEdits, EditError, grepFiles, type JsonPatchOp, type TextEdit } from "./edit.ts";
 import {
@@ -46,13 +46,17 @@ export type HubApi = AsyncMethods<
     ArtifactHub,
     | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create" | "editText" | "writeFiles"
     | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState" | "recordError" | "errors"
-    | "runRenderCheck"
+    | "runRenderCheck" | "screenshot" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts" | "setHostAllowed"
+    | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportAll" | "importAll" | "backupToR2"
   >
 > & { fetch(request: Request): Promise<Response> };
 
 type SocketTag = { id: string; email: string | null; role: Role };
 
 const HISTORY_KEEP = 50;
+const ASSETS_MAX_BYTES = 20 * 1024 * 1024;
+const SOURCE_MAX_BYTES = 1024 * 1024;
+const EXPORT_TABLES = ["artifacts", "files", "history", "builds", "shares", "state", "errors", "checks", "assets", "sources", "allowed_hosts"];
 // Browser Run free plan: one quick action every 10 s.
 const CHECK_SPACING_MS = 10_500;
 const CHECK_INLINE_WAIT_MS = 8_000;
@@ -86,10 +90,20 @@ export class ArtifactHub extends DurableObject {
       CREATE TABLE IF NOT EXISTS checks (
         artifact_id TEXT PRIMARY KEY, version INTEGER NOT NULL, origin TEXT NOT NULL, status TEXT NOT NULL,
         result TEXT, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS assets (
+        artifact_id TEXT NOT NULL, path TEXT NOT NULL, content_type TEXT NOT NULL, data BLOB NOT NULL,
+        bytes INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (artifact_id, path));
+      CREATE TABLE IF NOT EXISTS sources (
+        artifact_id TEXT NOT NULL, path TEXT NOT NULL, url TEXT NOT NULL, every_minutes INTEGER NOT NULL,
+        pick TEXT, last_fetch TEXT, last_status TEXT, last_error TEXT, PRIMARY KEY (artifact_id, path));
+      CREATE TABLE IF NOT EXISTS allowed_hosts (host TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS errors (
         artifact_id TEXT NOT NULL, at TEXT NOT NULL, version INTEGER NOT NULL, viewer TEXT, message TEXT NOT NULL,
         stack TEXT);
     `);
+    // Columns added after the first deploy.
+    const checkCols = this.sql.exec(`PRAGMA table_info(checks)`).toArray().map((c) => c.name);
+    if (!checkCols.includes("screenshot")) this.sql.exec(`ALTER TABLE checks ADD COLUMN screenshot TEXT`);
   }
 
   // ---- reads -------------------------------------------------------------
@@ -285,7 +299,7 @@ export class ArtifactHub extends DurableObject {
   delete(id: string) {
     this.requireArtifact(id);
     this.ctx.storage.transactionSync(() => {
-      for (const t of ["files", "history", "builds", "shares", "state", "errors", "checks"]) {
+      for (const t of ["files", "history", "builds", "shares", "state", "errors", "checks", "assets", "sources"]) {
         this.sql.exec(`DELETE FROM ${t} WHERE artifact_id = ?`, id);
       }
       this.sql.exec(`DELETE FROM artifacts WHERE id = ?`, id);
@@ -375,13 +389,15 @@ export class ArtifactHub extends DurableObject {
    * free within a few seconds; otherwise queues it on an alarm. Reuses a stored
    * result for the same version.
    */
-  async runRenderCheck(id: string, origin: string, force = false): Promise<RenderCheck & { version: number }> {
+  async runRenderCheck(id: string, origin: string, force = false): Promise<CheckOutcome & { version: number }> {
     const version = this.requireArtifact(id).version as number;
-    const stored = this.sql.exec(`SELECT version, status, result FROM checks WHERE artifact_id = ?`, id).toArray()[0];
+    const stored = this.sql.exec(`SELECT version, status, result, screenshot FROM checks WHERE artifact_id = ?`, id).toArray()[0];
     if (!force && stored && stored.version === version && stored.status === "done") {
       const previous = JSON.parse(stored.result as string) as RenderCheck;
       // Only definitive results are reused; a skipped check is retried.
-      if (previous.status === "ok" || previous.status === "errors") return { ...previous, version };
+      if (previous.status === "ok" || previous.status === "errors") {
+        return { check: previous, screenshot: (stored.screenshot as string | null) ?? undefined, version };
+      }
     }
     const now = Date.now();
     const slot = Math.max(now, this.nextCheckAt);
@@ -391,7 +407,14 @@ export class ArtifactHub extends DurableObject {
       const result = await this.runCheck(id, version, origin);
       if (result) return { ...result, version };
     }
-    return { ...this.queueCheck(id, version, origin), version };
+    return { check: this.queueCheck(id, version, origin), version };
+  }
+
+  /** Latest stored screenshot (base64 JPEG) for the current version, if any. */
+  screenshot(id: string): string | null {
+    const version = this.requireArtifact(id).version as number;
+    const row = this.sql.exec(`SELECT version, screenshot FROM checks WHERE artifact_id = ?`, id).toArray()[0];
+    return row && row.version === version ? ((row.screenshot as string | null) ?? null) : null;
   }
 
   async alarm() {
@@ -410,31 +433,32 @@ export class ArtifactHub extends DurableObject {
   }
 
   /** Runs one check and stores it. Returns null when Browser Run rate-limited us. */
-  private async runCheck(id: string, version: number, origin: string): Promise<RenderCheck | null> {
+  private async runCheck(id: string, version: number, origin: string): Promise<CheckOutcome | null> {
     const result = await renderCheck(this.checkEnv, origin, id, version);
-    if (result.status === "rate-limited") {
+    if ("rateLimited" in result) {
       this.nextCheckAt = Date.now() + CHECK_SPACING_MS;
       return null;
     }
     this.sql.exec(
-      `INSERT INTO checks (artifact_id, version, origin, status, result, at) VALUES (?, ?, ?, 'done', ?, ?)
+      `INSERT INTO checks (artifact_id, version, origin, status, result, screenshot, at) VALUES (?, ?, ?, 'done', ?, ?, ?)
        ON CONFLICT (artifact_id) DO UPDATE SET version = excluded.version, origin = excluded.origin,
-         status = 'done', result = excluded.result, at = excluded.at`,
+         status = 'done', result = excluded.result, screenshot = excluded.screenshot, at = excluded.at`,
       id,
       version,
       origin,
-      JSON.stringify(result),
+      JSON.stringify(result.check),
+      result.screenshot ?? null,
       Date.now(),
     );
-    if (result.status === "errors") for (const e of result.errors) this.recordError(id, "render-check", e);
+    if (result.check.status === "errors") for (const e of result.check.errors) this.recordError(id, "render-check", e);
     return result;
   }
 
   private queueCheck(id: string, version: number, origin: string): RenderCheck {
     this.sql.exec(
-      `INSERT INTO checks (artifact_id, version, origin, status, result, at) VALUES (?, ?, ?, 'queued', NULL, ?)
+      `INSERT INTO checks (artifact_id, version, origin, status, result, screenshot, at) VALUES (?, ?, ?, 'queued', NULL, NULL, ?)
        ON CONFLICT (artifact_id) DO UPDATE SET version = excluded.version, origin = excluded.origin,
-         status = 'queued', result = NULL, at = excluded.at`,
+         status = 'queued', result = NULL, screenshot = NULL, at = excluded.at`,
       id,
       version,
       origin,
@@ -446,6 +470,222 @@ export class ArtifactHub extends DurableObject {
       if (existing === null || existing > at) return this.ctx.storage.setAlarm(at);
     });
     return { status: "queued", inSeconds: Math.ceil((at - Date.now()) / 1000) + (queued - 1) * 11 + 5 };
+  }
+
+  // ---- assets (images and other files, stored in SQLite) --------------------
+
+  putAsset(id: string, path: string, contentType: string, data: Uint8Array): { path: string; bytes: number } {
+    this.requireArtifact(id);
+    const total = this.sql
+      .exec(`SELECT COALESCE(SUM(bytes), 0) AS n FROM assets WHERE artifact_id = ? AND path != ?`, id, path)
+      .one().n as number;
+    if (total + data.byteLength > ASSETS_MAX_BYTES) throw new HubError(`assets for this artifact would exceed ${ASSETS_MAX_BYTES / 1e6} MB`);
+    this.sql.exec(
+      `INSERT INTO assets (artifact_id, path, content_type, data, bytes, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (artifact_id, path) DO UPDATE SET content_type = excluded.content_type, data = excluded.data,
+         bytes = excluded.bytes, updated_at = excluded.updated_at`,
+      id,
+      path,
+      contentType,
+      data,
+      data.byteLength,
+      new Date().toISOString(),
+    );
+    this.touch(id);
+    return { path, bytes: data.byteLength };
+  }
+
+  deleteAsset(id: string, path: string): boolean {
+    this.requireArtifact(id);
+    const n = this.sql.exec(`DELETE FROM assets WHERE artifact_id = ? AND path = ? RETURNING path`, id, path).toArray().length;
+    if (n) this.touch(id);
+    return n > 0;
+  }
+
+  assets(id: string): { path: string; contentType: string; bytes: number }[] {
+    return this.sql
+      .exec(`SELECT path, content_type AS contentType, bytes FROM assets WHERE artifact_id = ? ORDER BY path`, id)
+      .toArray() as unknown as { path: string; contentType: string; bytes: number }[];
+  }
+
+  asset(id: string, path: string): { contentType: string; data: ArrayBuffer } | null {
+    const row = this.sql.exec(`SELECT content_type, data FROM assets WHERE artifact_id = ? AND path = ?`, id, path).toArray()[0];
+    return row ? { contentType: row.content_type as string, data: row.data as ArrayBuffer } : null;
+  }
+
+  // ---- live data sources ------------------------------------------------------
+
+  /** Hosts the owner approved for live data sources (managed only from the owner UI). */
+  allowedHosts(): string[] {
+    return this.sql.exec(`SELECT host FROM allowed_hosts ORDER BY host`).toArray().map((r) => r.host as string);
+  }
+
+  setHostAllowed(host: string, allowed: boolean): string[] {
+    const h = host.trim().toLowerCase();
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(h)) throw new HubError(`"${host}" is not a hostname`);
+    if (allowed) this.sql.exec(`INSERT OR IGNORE INTO allowed_hosts (host) VALUES (?)`, h);
+    else this.sql.exec(`DELETE FROM allowed_hosts WHERE host = ?`, h);
+    return this.allowedHosts();
+  }
+
+  sources(id: string): SourceInfo[] {
+    const allowed = new Set(this.allowedHosts());
+    return this.sql
+      .exec(`SELECT * FROM sources WHERE artifact_id = ? ORDER BY path`, id)
+      .toArray()
+      .map((r) => toSource(r, allowed));
+  }
+
+  setSource(id: string, input: { path: string; url: string; everyMinutes: number; pick?: string }): SourceInfo {
+    this.requireArtifact(id);
+    if (!input.path.startsWith("data/") || !input.path.endsWith(".json")) throw new HubError("source path must be data/<name>.json");
+    let url: URL;
+    try {
+      url = new URL(input.url);
+    } catch {
+      throw new HubError(`"${input.url}" is not a URL`);
+    }
+    if (url.protocol !== "https:") throw new HubError("sources must use https");
+    if (url.username || url.password) throw new HubError("sources can't carry credentials");
+    const every = Math.min(Math.max(Math.round(input.everyMinutes), 15), 7 * 24 * 60);
+    this.sql.exec(
+      `INSERT INTO sources (artifact_id, path, url, every_minutes, pick, last_fetch, last_status, last_error)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)
+       ON CONFLICT (artifact_id, path) DO UPDATE SET url = excluded.url, every_minutes = excluded.every_minutes,
+         pick = excluded.pick, last_fetch = NULL, last_status = NULL, last_error = NULL`,
+      id,
+      input.path,
+      url.href,
+      every,
+      input.pick ?? null,
+    );
+    return this.sources(id).find((s) => s.path === input.path)!;
+  }
+
+  removeSource(id: string, path: string): boolean {
+    return this.sql.exec(`DELETE FROM sources WHERE artifact_id = ? AND path = ? RETURNING path`, id, path).toArray().length > 0;
+  }
+
+  /** Fetch every due (or, with `only`, the named) source whose host is approved. */
+  async refreshSources(only?: { id: string; path?: string }): Promise<SourceInfo[]> {
+    const allowed = new Set(this.allowedHosts());
+    const now = Date.now();
+    const rows = this.sql.exec(`SELECT * FROM sources`).toArray().filter((r) => {
+      if (only) return r.artifact_id === only.id && (!only.path || r.path === only.path);
+      const last = r.last_fetch ? Date.parse(r.last_fetch as string) : 0;
+      return now - last >= (r.every_minutes as number) * 60_000 - 60_000;
+    });
+    const results: SourceInfo[] = [];
+    for (const r of rows) {
+      const info = toSource(r, allowed);
+      if (!info.approved) {
+        results.push(info);
+        continue;
+      }
+      let status = "ok";
+      let error: string | null = null;
+      try {
+        const value = await fetchSource(info.url, info.pick);
+        await this.replaceDataFile(info.id, info.path, `${JSON.stringify(value, null, 2)}\n`);
+      } catch (err) {
+        status = "error";
+        error = (err as Error).message.slice(0, 300);
+      }
+      this.sql.exec(
+        `UPDATE sources SET last_fetch = ?, last_status = ?, last_error = ? WHERE artifact_id = ? AND path = ?`,
+        new Date().toISOString(),
+        status,
+        error,
+        info.id,
+        info.path,
+      );
+      results.push({ ...info, lastFetch: new Date().toISOString(), lastStatus: status, lastError: error });
+    }
+    return results;
+  }
+
+  /** Swap one data file's content and rebuild, without a new version or history entry. */
+  private async replaceDataFile(id: string, path: string, content: string) {
+    const files = this.files(id);
+    files[path] = content;
+    const { build, errors } = await buildArtifact(files);
+    if (!build) throw new Error(errors.map((e) => e.message).join("; "));
+    const version = this.requireArtifact(id).version as number;
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO files (artifact_id, path, content) VALUES (?, ?, ?)
+         ON CONFLICT (artifact_id, path) DO UPDATE SET content = excluded.content`,
+        id,
+        path,
+        content,
+      );
+      this.sql.exec(`UPDATE builds SET build = ?, version = ? WHERE artifact_id = ?`, JSON.stringify(build), version, id);
+    });
+    this.touch(id);
+  }
+
+  // ---- owner overview, export and point-in-time restore ----------------------
+
+  /** Sharing summary per artifact for the owner's index. */
+  shareSummaries(): Record<string, { shares: ShareEntry[]; public: boolean }> {
+    const out: Record<string, { shares: ShareEntry[]; public: boolean }> = {};
+    for (const a of this.sql.exec(`SELECT id, public FROM artifacts`)) out[a.id as string] = { shares: [], public: Boolean(a.public) };
+    for (const s of this.sql.exec(`SELECT artifact_id, email, role FROM shares ORDER BY email`)) {
+      out[s.artifact_id as string]?.shares.push({ email: s.email as string, role: s.role as ShareEntry["role"] });
+    }
+    return out;
+  }
+
+  /** Everything, as JSON-safe rows (asset bytes base64). */
+  exportAll(): Record<string, unknown[]> {
+    const out: Record<string, unknown[]> = {};
+    for (const t of EXPORT_TABLES) {
+      out[t] = this.sql.exec(`SELECT * FROM ${t}`).toArray().map((r) => {
+        const row: Record<string, unknown> = { ...r };
+        if (t === "assets" && r.data) row.data = toBase64(new Uint8Array(r.data as ArrayBuffer));
+        if (t === "checks") row.screenshot = null;
+        return row;
+      });
+    }
+    return out;
+  }
+
+  /** Writes today's export to the BACKUPS bucket (if bound) and keeps the newest 30. */
+  async backupToR2(): Promise<string | null> {
+    const bucket = (this.env as { BACKUPS?: R2Bucket }).BACKUPS;
+    if (!bucket) return null;
+    const key = `exports/${new Date().toISOString().slice(0, 10)}.json`;
+    await bucket.put(key, JSON.stringify({ exportedAt: new Date().toISOString(), tables: this.exportAll() }), {
+      httpMetadata: { contentType: "application/json" },
+    });
+    const listed = await bucket.list({ prefix: "exports/" });
+    const old = listed.objects.map((o) => o.key).sort().slice(0, -30);
+    if (old.length) await bucket.delete(old);
+    return key;
+  }
+
+  /** Replace everything with an export's tables, in one transaction. */
+  importAll(tables: Record<string, Record<string, unknown>[]>): Record<string, number> {
+    const counts: Record<string, number> = {};
+    this.ctx.storage.transactionSync(() => {
+      for (const t of EXPORT_TABLES) this.sql.exec(`DELETE FROM ${t}`);
+      for (const t of EXPORT_TABLES) {
+        const rows = tables[t] ?? [];
+        for (const row of rows) {
+          const cols = Object.keys(row);
+          if (!cols.every((c) => /^[a-z_]+$/.test(c))) throw new HubError(`bad column in ${t}`);
+          const values = cols.map((c) => (t === "assets" && c === "data" ? fromBase64(String(row[c])) : (row[c] as SqlStorageValue)));
+          this.sql.exec(`INSERT INTO ${t} (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, ...values);
+        }
+        counts[t] = rows.length;
+      }
+    });
+    for (const ws of this.ctx.getWebSockets()) ws.close(4003, "data restored");
+    return counts;
+  }
+
+  private touch(id: string) {
+    this.sql.exec(`UPDATE artifacts SET updated_at = ? WHERE id = ?`, new Date().toISOString(), id);
   }
 
   // ---- sync sockets --------------------------------------------------------
@@ -606,4 +846,69 @@ function newId(): string {
   const alphabet = "abcdefghijkmnpqrstuvwxyz23456789";
   const bytes = crypto.getRandomValues(new Uint8Array(12));
   return `a${[...bytes].map((b) => alphabet[b % alphabet.length]).join("")}`;
+}
+
+export type SourceInfo = {
+  id: string;
+  path: string;
+  url: string;
+  host: string;
+  everyMinutes: number;
+  pick: string | null;
+  approved: boolean;
+  lastFetch: string | null;
+  lastStatus: string | null;
+  lastError: string | null;
+};
+
+function toSource(r: Record<string, SqlStorageValue>, allowed: Set<string>): SourceInfo {
+  const host = new URL(r.url as string).hostname.toLowerCase();
+  return {
+    id: r.artifact_id as string,
+    path: r.path as string,
+    url: r.url as string,
+    host,
+    everyMinutes: r.every_minutes as number,
+    pick: (r.pick as string | null) ?? null,
+    approved: allowed.has(host),
+    lastFetch: (r.last_fetch as string | null) ?? null,
+    lastStatus: (r.last_status as string | null) ?? null,
+    lastError: (r.last_error as string | null) ?? null,
+  };
+}
+
+/** GET a JSON document (no credentials, size- and time-limited) and optionally pick a dot path. */
+async function fetchSource(url: string, pick: string | null): Promise<JsonValue> {
+  const res = await fetch(url, {
+    headers: { Accept: "application/json", "User-Agent": "Shared-Artifacts/1 (+https://github.com/micthiesen/artifacts)" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  if (text.length > SOURCE_MAX_BYTES) throw new Error(`response is over ${SOURCE_MAX_BYTES / 1024} KB`);
+  let value: JsonValue;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("response is not JSON");
+  }
+  if (pick) {
+    for (const key of pick.split(".").filter(Boolean)) {
+      if (value && typeof value === "object" && key in (value as Record<string, JsonValue>)) {
+        value = (value as Record<string, JsonValue>)[key];
+      } else throw new Error(`pick "${pick}": no "${key}"`);
+    }
+  }
+  return value;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+function fromBase64(s: string): Uint8Array {
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 }

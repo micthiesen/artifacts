@@ -1,7 +1,8 @@
 // Render check: Cloudflare Browser Run loads the artifact's frame top-level in
-// headless Chrome (check mode), and we read back whether it rendered and which
-// errors it hit. Runs after every successful write so agents see runtime
-// errors in the tool result instead of in a viewer's browser.
+// headless Chrome (check mode). One snapshot call returns the page HTML, from
+// which we read the runtime's result, and a screenshot for the agent. Runs after
+// writes so agents see runtime errors and layout in the tool result instead of in
+// a viewer's browser.
 import { signToken } from "./session.ts";
 
 export type RenderCheck =
@@ -10,71 +11,89 @@ export type RenderCheck =
   | { status: "skipped"; reason: string }
   | { status: "queued"; inSeconds: number };
 
+/** A check plus the JPEG screenshot (base64) when Browser Run returned one. */
+export type CheckOutcome = { check: RenderCheck; screenshot?: string };
+
 type BrowserRunBinding = {
-  quickAction(action: "scrape", options: Record<string, unknown>): Promise<Response>;
+  quickAction(action: "snapshot", options: Record<string, unknown>): Promise<Response>;
 };
 
 export type CheckEnv = { BROWSER?: BrowserRunBinding; SESSION_SECRET: string };
 
+export const SCREENSHOT_VIEWPORT = { width: 1024, height: 768 };
+
 /** One Browser Run call. Free plan: at most one every 10 s (the hub schedules). */
-export async function renderCheck(env: CheckEnv, origin: string, id: string, version: number): Promise<RenderCheck | { status: "rate-limited" }> {
-  if (!env.BROWSER) return { status: "skipped", reason: "no browser binding" };
+export async function renderCheck(
+  env: CheckEnv,
+  origin: string,
+  id: string,
+  version: number,
+): Promise<CheckOutcome | { rateLimited: true }> {
+  if (!env.BROWSER) return { check: { status: "skipped", reason: "no browser binding" } };
   const token = await signToken(env.SESSION_SECRET, "frame", 120, { id, c: true });
   const url = `${origin}/frame/${id}?v=${version}&check=1&t=${encodeURIComponent(token)}`;
   const started = Date.now();
   let res: Response;
   try {
-    res = await env.BROWSER.quickAction("scrape", {
+    res = await env.BROWSER.quickAction("snapshot", {
       url,
-      elements: [{ selector: "#art-check" }, { selector: "body" }],
+      formats: ["content", "screenshot"],
+      screenshotOptions: { type: "jpeg", quality: 60 },
       waitForSelector: { selector: "#art-check", timeout: 15000 },
-      // Browser Run's scrape doesn't reliably honour waitForSelector, and the
-      // result element appears ~600 ms after first render, so also wait for the
-      // network to settle and then a fixed delay.
+      // Browser Run doesn't reliably honour waitForSelector, and the result
+      // element appears ~600 ms after first render, so also wait for the network
+      // to settle and then a fixed delay.
       gotoOptions: { waitUntil: "networkidle0", timeout: 20000 },
       waitForTimeout: 1500,
-      viewport: { width: 1280, height: 900 },
+      viewport: SCREENSHOT_VIEWPORT,
       cacheTTL: 0,
     });
   } catch (err) {
-    return { status: "skipped", reason: `browser unavailable: ${(err as Error).message}` };
+    return { check: { status: "skipped", reason: `browser unavailable: ${(err as Error).message}` } };
   }
   const ms = Date.now() - started;
   const body = (await res.json().catch(() => null)) as
-    | { success: true; result: { results: { html: string; text: string }[] }[] }
+    | { success: true; result: { content?: string; screenshot?: string } }
     | { success: false; errors?: { message?: string }[] }
     | null;
-  if (res.status === 429) return { status: "rate-limited" };
+  if (res.status === 429) return { rateLimited: true };
   if (!res.ok || !body || !body.success) {
     const reason = (body && !body.success && body.errors?.[0]?.message) || `HTTP ${res.status}`;
-    if (/rate limit/i.test(reason)) return { status: "rate-limited" };
+    if (/rate limit/i.test(reason)) return { rateLimited: true };
     if (/waiting for selector|timeout/i.test(reason)) {
-      return { status: "errors", ms, errors: ["The artifact did not finish rendering within 15 s (blank page, a hung promise, or an infinite loop?)."] };
+      return {
+        check: {
+          status: "errors",
+          ms,
+          errors: ["The artifact did not finish rendering within 15 s (blank page, a hung promise, or an infinite loop?)."],
+        },
+      };
     }
-    return { status: "skipped", reason: `browser check failed: ${reason}` };
+    return { check: { status: "skipped", reason: `browser check failed: ${reason}` } };
   }
-  const el = body.result?.[0]?.results?.[0];
+  const screenshot = body.result.screenshot;
+  const html = body.result.content ?? "";
+  const raw = /<pre id="art-check"[^>]*>([\s\S]*?)<\/pre>/.exec(html)?.[1];
   let parsed: { status?: string; errors?: string[]; textLength?: number } | null = null;
-  for (const raw of [el?.text, el?.html ? decodeEntities(el.html) : undefined]) {
-    try {
-      if (raw) {
-        parsed = JSON.parse(raw);
-        break;
-      }
-    } catch {
-      // try the next form
-    }
+  try {
+    parsed = raw ? JSON.parse(decodeEntities(raw)) : null;
+  } catch {
+    parsed = null;
   }
   if (!parsed) {
-    const page = body.result?.[1]?.results?.[0];
-    const shown = (page?.text || page?.html || "").replace(/\s+/g, " ").trim().slice(0, 300);
-    return { status: "skipped", reason: `no render result; the page showed: ${shown || "(nothing)"}` };
+    const shown = html
+      .replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/g, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 300);
+    return { check: { status: "skipped", reason: `no render result; the page showed: ${shown || "(nothing)"}` }, screenshot };
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors.map(String) : [];
   if (parsed.status === "error" || errors.length) {
-    return { status: "errors", ms, errors: errors.length ? errors : ["The artifact failed to render."] };
+    return { check: { status: "errors", ms, errors: errors.length ? errors : ["The artifact failed to render."] }, screenshot };
   }
-  return { status: "ok", ms, textLength: Number(parsed.textLength ?? 0) };
+  return { check: { status: "ok", ms, textLength: Number(parsed.textLength ?? 0) }, screenshot };
 }
 
 function decodeEntities(s: string): string {

@@ -9,6 +9,7 @@ import type {
   SyncClientMessage,
   SyncServerMessage,
 } from "../shared/protocol.ts";
+import { initOwnerMenu } from "./owner-menu.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
 const localKey = `art:${boot.artifactId}:local:${boot.viewer.email ?? "anon"}`;
@@ -17,6 +18,8 @@ const canWrite = boot.viewer.role !== "view" && boot.viewer.email !== null;
 
 const statusEl = document.getElementById("status")!;
 const presenceEl = document.getElementById("presence")!;
+
+if (boot.viewer.role === "owner") initOwnerMenu(boot);
 
 function readJson<T>(key: string, fallback: T): T {
   try {

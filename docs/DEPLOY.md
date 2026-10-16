@@ -39,6 +39,13 @@ artifact, without Access. It's valid for 7 days by default (30 at most), and it
 only grants what that email already has. Rotating `LOGIN_SECRET` invalidates
 every outstanding link.
 
+## Backups
+
+- **Nightly offsite copy (optional):** with `R2_BACKUPS=1` in `.env` and R2 edit permission on the deploy token, Alchemy creates a bucket, and the 10:00 UTC cron writes `exports/<date>.json` to it, keeping 30 days.
+
+- **Off-Cloudflare copy:** `bun scripts/export.ts <origin>` writes `exports/artifacts-<time>.json` (gitignored).
+- **Restoring:** `bun scripts/import.ts <origin> exports/<file>.json` replaces all data with that export, in one transaction. Export the current state first if you might want it back.
+
 ## After deploying
 
 New Worker code can take up to a minute to reach every edge location. Wait

@@ -48,6 +48,16 @@ CSS.
   - Browser Run's scrape doesn't reliably honour `waitForSelector`, so the check also waits for network idle plus 1.5 s.
 - **Rate limit:** the free plan allows one Browser Run call every 10 s. The hub reserves slots, waits inline when the next slot is under 8 s away, and otherwise queues the check on a Durable Object alarm. Results are stored per version and failures go to `artifact_errors`.
 
+## Assets, live data and the owner menu
+
+- **Assets:** `artifact_asset` stores files (≤1.5 MB, ≤20 MB per artifact) in the hub's SQLite. Frames get `/asset/<id>/<path>?t=<frame token>` URLs in their boot data, and the frame CSP allows only that path for images and media. Assets are served with a `sandbox` CSP so an SVG opened directly can't run script.
+- **Live data:** `artifact_source` maps a `data/*.json` file to an HTTPS JSON URL with an interval (15 min to 7 days) and an optional dot-path `pick`. A 15-minute Worker cron calls the hub, which fetches due sources (no credentials, 10 s timeout, 1 MB cap) and swaps the file and build in place without a new version or render check. Only hosts the owner approved in the owner menu (`allowed_hosts`) are fetched. Agents can't approve hosts, because the MCP has no tool for it.
+- **Owner menu:** `/api/a/<id>` gives the owner an overview, and `POST /api/a/<id>/<tool>` runs a whitelisted subset of the MCP tools (share, link, rename, revert, delete, source, check), so the UI and agents share one validated code path.
+
+## Backups
+
+`GET /admin/export` (bearer MCP token) returns every table as JSON (`bun scripts/export.ts` saves it locally), and `POST /admin/import` loads one back, replacing everything in one transaction (`bun scripts/import.ts`). With an R2 bucket bound, the 10:00 UTC cron also writes a dated copy there and keeps 30. A point-in-time restore endpoint was tried and removed: on 2026-10-16, Durable Object bookmark restores on a test stage didn't land at the requested times, especially after an earlier restore.
+
 ## Presigned links
 
 `artifact_link` and `artifact_share` return `/s/<code>` links. Each code is an HMAC token (`LOGIN_SECRET`) naming an email and an artifact, valid for 7 days by default and 30 at most. Opening a link re-checks that the email is the owner or on the share list, sets a normal session cookie and redirects to the artifact. Email sign-in through Access is the fallback once a link expires.

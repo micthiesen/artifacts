@@ -42,14 +42,21 @@ export default Alchemy.Stack(
       void auth;
     }
 
+    // Nightly offsite backups need R2 permission on the deploy token; opt in with R2_BACKUPS=1.
+    const r2Backups = (yield* Config.String("R2_BACKUPS").pipe(Config.withDefault(""))) === "1";
+    const backups: Record<string, Cloudflare.R2.Bucket> = r2Backups ? { BACKUPS: yield* Cloudflare.R2.Bucket("Backups") } : {};
+
     const worker = yield* Cloudflare.Worker("Artifacts", {
       name,
       main: "./build/worker/index.js",
       bundle: false,
       compatibility: { date: "2026-10-01" },
       assets: "./dist/kit",
+      // Live data sources refresh on this schedule (each source has its own interval).
+      crons: ["*/15 * * * *"],
       env: {
         HUB: Cloudflare.DurableObject("ArtifactHub"),
+        ...backups,
         SESSION_SECRET: yield* Config.Redacted("SESSION_SECRET"),
         LOGIN_SECRET: yield* Config.Redacted("LOGIN_SECRET"),
         MCP_TOKEN: yield* Config.Redacted("MCP_TOKEN"),

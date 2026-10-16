@@ -1,6 +1,6 @@
 // Stateless MCP server (Streamable HTTP, JSON responses only). Every tool acts
 // as the owner; the bearer token is the only credential.
-import type { ArtifactHub, HubApi } from "./hub.ts";
+import type { ArtifactHub, HubApi, SourceInfo } from "./hub.ts";
 import { domainOf, isValidPrincipal, sharePrincipal } from "./principal.ts";
 import { describeCheck, type RenderCheck } from "./check.ts";
 import { signToken } from "./session.ts";
@@ -28,7 +28,7 @@ type Tool = {
   run: (args: Json, ctx: Ctx) => Promise<ToolResult>;
 };
 
-type ToolResult = { text: string; structured?: unknown; isError?: boolean };
+type ToolResult = { text: string; structured?: unknown; isError?: boolean; images?: string[] };
 
 const id = { type: "string", description: "Artifact id, e.g. from artifact_list or artifact_create." };
 const baseVersion = {
@@ -59,6 +59,17 @@ const shareList = {
 
 const url = (origin: string, artifactId: string) => `${origin}/a/${artifactId}`;
 
+const ASSET_MAX_BYTES = 1.5 * 1024 * 1024;
+
+const TYPES: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+  avif: "image/avif", ico: "image/x-icon", mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg", pdf: "application/pdf",
+  csv: "text/csv", txt: "text/plain",
+};
+function guessType(path: string): string {
+  return TYPES[path.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
+}
+
 const LINK_DEFAULT_DAYS = 7;
 const LINK_MAX_DAYS = 30;
 
@@ -73,7 +84,7 @@ async function signInLink(ctx: Ctx, artifactId: string, email: string, days = LI
   return `${ctx.origin}/s/${code}`;
 }
 
-async function writeResult(r: Awaited<ReturnType<ArtifactHub["create"]>>, ctx: Ctx): Promise<ToolResult> {
+async function writeResult(r: Awaited<ReturnType<ArtifactHub["create"]>>, ctx: Ctx, withScreenshot = false): Promise<ToolResult> {
   const { origin } = ctx;
   if (!r.ok) {
     const lines = r.errors.map((e) => `- ${e.path ? `${e.path}${"line" in e && e.line ? `:${e.line}` : ""}: ` : ""}${e.message}`);
@@ -83,17 +94,21 @@ async function writeResult(r: Awaited<ReturnType<ArtifactHub["create"]>>, ctx: C
       structured: r,
     };
   }
-  const check = await checkAndRecord(ctx, r.id, r.version);
+  const { check, screenshot } = await checkAndRecord(ctx, r.id);
   const out = { ...r, url: url(origin, r.id), renderCheck: check };
+  const shot = withScreenshot && screenshot;
   return {
-    text: `Saved ${r.id} v${r.version}: ${out.url}\nFiles: ${r.files.join(", ")}\n${describeCheck(check)}`,
+    text: `Saved ${r.id} v${r.version}: ${out.url}\nFiles: ${r.files.join(", ")}\n${describeCheck(check)}${
+      shot ? "\nScreenshot of the first screen (1024×768) attached." : screenshot ? "\nartifact_check returns a screenshot." : ""
+    }`,
     structured: out,
+    images: shot ? [screenshot] : undefined,
   };
 }
 
-async function checkAndRecord(ctx: Ctx, id: string, _version: number, force = false): Promise<RenderCheck> {
-  const { version: _v, ...check } = await ctx.hub.runRenderCheck(id, ctx.origin, force);
-  return check as RenderCheck;
+async function checkAndRecord(ctx: Ctx, id: string, force = false): Promise<{ check: RenderCheck; screenshot?: string }> {
+  const { check, screenshot } = await ctx.hub.runRenderCheck(id, ctx.origin, force);
+  return { check, screenshot };
 }
 
 export const TOOLS: Tool[] = [
@@ -154,7 +169,7 @@ export const TOOLS: Tool[] = [
       if (r.ok && (Array.isArray(args.share) || typeof args.public === "boolean")) {
         await hub.share(r.id, { add: (args.share as never) ?? [], public: args.public as boolean | undefined });
       }
-      return writeResult(r, ctx);
+      return writeResult(r, ctx, true);
     },
   },
   {
@@ -179,8 +194,13 @@ export const TOOLS: Tool[] = [
       const meta = await hub.meta(artifactId);
       if (!meta) return { isError: true, text: `No artifact ${artifactId}; see artifact_list.` };
       if (typeof args.path !== "string") {
-        const info = { ...meta, url: url(origin, artifactId) };
-        const files = meta.files.map((f) => `  ${f.path} (${f.bytes} bytes)`).join("\n");
+        const [assets, sources] = await Promise.all([hub.assets(artifactId), hub.sources(artifactId)]);
+        const info = { ...meta, url: url(origin, artifactId), assets, sources };
+        const files = [
+          ...meta.files.map((f) => `  ${f.path} (${f.bytes} bytes)`),
+          ...assets.map((a) => `  ${a.path} (${a.bytes} bytes, ${a.contentType})`),
+          ...sources.map((s) => `  source: ${s.path} ← ${s.url}${s.approved ? "" : ` (host ${s.host} not approved yet)`}`),
+        ].join("\n");
         const shares = meta.shares.length ? meta.shares.map((s) => `${s.email} (${s.role})`).join(", ") : "nobody";
         return {
           text: `${meta.title} — ${info.url}\nversion ${meta.version}, public ${meta.public}, shared with ${shares}\nfiles:\n${files}`,
@@ -401,6 +421,94 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "artifact_asset",
+    title: "Shared Artifacts: images and files",
+    description:
+      'Shared Artifacts: upload (base64) or delete an image or other file used by an artifact, e.g. path "assets/logo.png". Reference it in MDX as ![alt](assets/logo.png) or in code with useAsset("assets/logo.png"). External image URLs are blocked, so upload images instead. Max 1.5 MB each, 20 MB per artifact.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        id,
+        path: { type: "string", description: 'Must start with "assets/".' },
+        base64: { type: "string", description: "File bytes, base64-encoded. Omit with delete: true." },
+        contentType: { type: "string", description: "e.g. image/png. Default: guessed from the extension." },
+        delete: { type: "boolean" },
+      },
+      required: ["id", "path"],
+      additionalProperties: false,
+    },
+    run: async (args, ctx) => {
+      const artifactId = String(args.id);
+      const path = String(args.path);
+      if (!/^assets\/[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(path) || path.includes("..")) {
+        return { isError: true, text: 'path must look like "assets/logo.png"' };
+      }
+      if (args.delete === true) {
+        const removed = await ctx.hub.deleteAsset(artifactId, path);
+        return { text: removed ? `Deleted ${path}.` : `No asset ${path}.`, isError: !removed };
+      }
+      if (typeof args.base64 !== "string") return { isError: true, text: "base64 is required to upload" };
+      let bytes: Uint8Array;
+      try {
+        bytes = Uint8Array.from(atob(args.base64.replace(/\s+/g, "")), (c) => c.charCodeAt(0));
+      } catch {
+        return { isError: true, text: "base64 is not valid" };
+      }
+      if (bytes.byteLength > ASSET_MAX_BYTES) return { isError: true, text: `asset is ${bytes.byteLength} bytes; the limit is ${ASSET_MAX_BYTES}` };
+      const contentType = typeof args.contentType === "string" ? args.contentType : guessType(path);
+      const r = await ctx.hub.putAsset(artifactId, path, contentType, bytes);
+      return { text: `Stored ${r.path} (${r.bytes} bytes, ${contentType}). Reload viewers to see it.`, structured: r };
+    },
+  },
+  {
+    name: "artifact_source",
+    title: "Shared Artifacts: live data source",
+    description:
+      'Shared Artifacts: keep a data/*.json file updated from a public HTTPS JSON URL on a schedule (every 15 min to 7 days). Optional pick extracts a dot path such as "data.items". The URL\'s host must be approved by the user in the artifact\'s owner menu before anything is fetched; if it is not, tell the user to approve it. Also lists, removes or refreshes sources.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        id,
+        path: { type: "string", description: 'Target data file, e.g. "data/prices.json". Omit to list sources.' },
+        url: { type: "string" },
+        everyMinutes: { type: "integer", minimum: 15, maximum: 10080, description: "Default 60." },
+        pick: { type: "string" },
+        remove: { type: "boolean" },
+        refresh: { type: "boolean", description: "Fetch now." },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    run: async (args, ctx) => {
+      const artifactId = String(args.id);
+      const path = typeof args.path === "string" ? args.path : undefined;
+      const fmt = (s: SourceInfo) =>
+        `${s.path} ← ${s.url} every ${s.everyMinutes} min${s.pick ? ` (pick ${s.pick})` : ""}: ${
+          s.approved ? (s.lastStatus ? `${s.lastStatus}${s.lastError ? ` (${s.lastError})` : ""} at ${s.lastFetch}` : "not fetched yet") : `waiting for the user to approve ${s.host} in the owner menu`
+        }`;
+      if (path && args.remove === true) {
+        const removed = await ctx.hub.removeSource(artifactId, path);
+        return { text: removed ? `Removed the source for ${path}. The file keeps its last data.` : `No source for ${path}.`, isError: !removed };
+      }
+      if (path && typeof args.url === "string") {
+        await ctx.hub.setSource(artifactId, {
+          path,
+          url: args.url,
+          everyMinutes: typeof args.everyMinutes === "number" ? args.everyMinutes : 60,
+          pick: typeof args.pick === "string" ? args.pick : undefined,
+        });
+        const [s] = await ctx.hub.refreshSources({ id: artifactId, path });
+        return { text: fmt(s), structured: s, isError: s.lastStatus === "error" };
+      }
+      if (path && args.refresh === true) {
+        const [s] = await ctx.hub.refreshSources({ id: artifactId, path });
+        return s ? { text: fmt(s), structured: s, isError: s.lastStatus === "error" } : { isError: true, text: `No source for ${path}.` };
+      }
+      const list = await ctx.hub.sources(artifactId);
+      return { text: list.length ? list.map(fmt).join("\n") : "No sources.", structured: { sources: list } };
+    },
+  },
+  {
     name: "artifact_state",
     title: "Shared Artifacts: shared state",
     description:
@@ -466,15 +574,25 @@ export const TOOLS: Tool[] = [
     name: "artifact_check",
     title: "Shared Artifacts: render check",
     description:
-      "Shared Artifacts: render the current version in a headless browser and report runtime errors. Writes already run this automatically; use it to re-check or after a skipped check.",
-    inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
+      "Shared Artifacts: render the current version in a headless browser, report runtime errors, and return a screenshot of the first screen. Writes already run the check; use this to see the page, re-check, or collect a queued result.",
+    inputSchema: {
+      type: "object",
+      properties: { id, screenshot: { type: "boolean", description: "Include the screenshot (default true)." } },
+      required: ["id"],
+      additionalProperties: false,
+    },
     annotations: { readOnlyHint: true },
     run: async (args, ctx) => {
       const meta = await ctx.hub.meta(String(args.id));
       if (!meta) return { isError: true, text: `No artifact ${args.id}; see artifact_list.` };
-      const check = await checkAndRecord(ctx, meta.id, meta.version);
-      // A stored "done" result for this version is returned as is.
-      return { text: `v${meta.version}: ${describeCheck(check)}`, structured: { version: meta.version, renderCheck: check }, isError: check.status === "errors" };
+      const { check, screenshot } = await checkAndRecord(ctx, meta.id);
+      const shot = args.screenshot !== false && screenshot;
+      return {
+        text: `v${meta.version}: ${describeCheck(check)}${shot ? "\nScreenshot of the first screen (1024×768) attached." : ""}`,
+        structured: { version: meta.version, renderCheck: check },
+        isError: check.status === "errors",
+        images: shot ? [screenshot] : undefined,
+      };
     },
   },
   {
@@ -491,6 +609,28 @@ export const TOOLS: Tool[] = [
 ];
 
 const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
+
+/** Tools the owner menu may call directly (same validation as agents get). */
+const OWNER_UI_TOOLS = new Set([
+  "artifact_share",
+  "artifact_link",
+  "artifact_update",
+  "artifact_revert",
+  "artifact_delete",
+  "artifact_source",
+  "artifact_check",
+]);
+
+export async function runOwnerTool(name: string, args: Json, ctx: Ctx): Promise<ToolResult> {
+  const tool = TOOL_MAP.get(name);
+  if (!tool || !OWNER_UI_TOOLS.has(name)) return { isError: true, text: `unknown action ${name}` };
+  try {
+    const r = await tool.run(args, ctx);
+    return { ...r, images: undefined };
+  } catch (err) {
+    return { isError: true, text: (err as Error).message };
+  }
+}
 
 type RpcRequest = { jsonrpc: "2.0"; id?: string | number | null; method: string; params?: Json };
 
@@ -540,7 +680,10 @@ async function handleMessage(msg: RpcRequest, ctx: Ctx): Promise<Json | null> {
       try {
         const r = await tool.run((msg.params?.arguments as Json) ?? {}, ctx);
         return reply({
-          content: [{ type: "text", text: r.text }],
+          content: [
+            { type: "text", text: r.text },
+            ...(r.images ?? []).map((data) => ({ type: "image", data, mimeType: "image/jpeg" })),
+          ],
           ...(r.structured !== undefined ? { structuredContent: r.structured } : {}),
           isError: r.isError ?? false,
         });

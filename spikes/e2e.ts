@@ -162,6 +162,54 @@ check("shared email allowed", (await fetch(`${origin}/a/${id}`, { headers: { Coo
 await call("artifact_share", { id, remove: ["stranger@example.com"] });
 check("removed email refused immediately", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: `__Host-art_session=${stranger}` } })).status === 403);
 
+// Screenshot, noindex, robots.
+check("create attached a screenshot", (created.content ?? []).some((c: any) => c.type === "image" && c.data?.length > 1000), created.content?.map((c: any) => c.type));
+check("pages are noindex", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: cookie } })).headers.get("X-Robots-Tag")?.includes("noindex") === true);
+check("robots.txt disallows all", (await (await fetch(`${origin}/robots.txt`)).text()).includes("Disallow: /"));
+
+// Assets.
+const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const up = await call("artifact_asset", { id, path: "assets/dot.png", base64: png });
+check("asset uploaded", !up.isError, up.content);
+const shellWithAsset = await (await fetch(`${origin}/a/${id}`, { headers: { Cookie: cookie } })).text();
+const frameUrl2 = JSON.parse(/<script type="application\/json" id="shell-boot">(.*?)<\/script>/s.exec(shellWithAsset)![1]).frameUrl;
+const frameHtml2 = await (await fetch(`${origin}${frameUrl2}`)).text();
+const assetPath = /"assets\/dot\.png":"([^"]+)"/.exec(frameHtml2)?.[1]?.replace(/\\u0026/g, "&");
+check("frame lists asset URL", typeof assetPath === "string", frameHtml2.slice(0, 200));
+const assetRes = await fetch(`${origin}${assetPath}`);
+check("asset served with token", assetRes.status === 200 && assetRes.headers.get("Content-Type") === "image/png", assetRes.status);
+check("asset needs token", (await fetch(`${origin}/asset/${id}/assets/dot.png`)).status === 403);
+const badAsset = await call("artifact_asset", { id, path: "../etc/passwd", base64: png });
+check("bad asset path rejected", badAsset.isError === true, badAsset.content);
+
+// Live data source with host approval through the owner API.
+const src = await call("artifact_source", { id, path: "data/live.json", url: "https://registry.npmjs.org/react/latest", everyMinutes: 60, pick: "name" });
+check("source waits for host approval", /approve registry\.npmjs\.org/.test(src.content[0].text), src.content);
+const ownerPost = (p: string, body: unknown) =>
+  fetch(`${origin}${p}`, { method: "POST", headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+check("owner API refuses cross-origin", (await fetch(`${origin}/api/hosts`, { method: "POST", headers: { Cookie: cookie, Origin: "https://evil.example", "Content-Type": "application/json" }, body: "{}" })).status === 403);
+const approve = await ownerPost("/api/hosts", { host: "registry.npmjs.org", allowed: true });
+check("owner approves host", approve.status === 200, await approve.text());
+const live = await call("artifact_read", { id, path: "data/live.json" });
+check("source fetched after approval", live.content?.[0]?.text?.includes('"react"'), live.content);
+await ownerPost("/api/hosts", { host: "registry.npmjs.org", allowed: false });
+await call("artifact_source", { id, path: "data/live.json", remove: true });
+
+// Owner API overview and actions.
+const overview = await (await fetch(`${origin}/api/a/${id}`, { headers: { Cookie: cookie } })).json() as any;
+check("owner overview", overview.meta?.id === id && Array.isArray(overview.history) && Array.isArray(overview.assets), Object.keys(overview));
+const viaUi = await (await ownerPost(`/api/a/${id}/artifact_update`, { description: "updated from the owner menu" })).json() as any;
+check("owner action runs tool", viaUi.ok === true, viaUi);
+const stranger2 = `__Host-art_session=${await signToken(process.env.SESSION_SECRET!, "session", 600, { e: "stranger@example.com" })}`;
+check("owner API refuses non-owner", (await fetch(`${origin}/api/a/${id}`, { headers: { Cookie: stranger2 } })).status === 403);
+check("owner tools are whitelisted", (await ownerPost(`/api/a/${id}/artifact_write_files`, { files: {} })).status === 400);
+
+// Admin export.
+const exp = await fetch(`${origin}/admin/export`, { headers: { Authorization: `Bearer ${MCP_TOKEN}` } });
+const expJson = await exp.json() as any;
+check("admin export", exp.status === 200 && expJson.tables?.artifacts?.some((a: any) => a.id === id), exp.status);
+check("admin needs token", (await fetch(`${origin}/admin/export`)).status === 401);
+
 // Domain shares.
 const asEmail = async (e: string) => `__Host-art_session=${await signToken(process.env.SESSION_SECRET!, "session", 600, { e })}`;
 await call("artifact_share", { id, add: [{ email: "@example.org", role: "view" }] });

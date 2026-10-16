@@ -105,6 +105,15 @@ export function useData<T = JsonValue>(path: string): T {
   return store.getData(path) as T;
 }
 
+/**
+ * URL of a file uploaded with artifact_asset, e.g. useAsset("assets/logo.png").
+ * External URLs are blocked in artifacts, so images must be uploaded.
+ */
+export function useAsset(path: string): string {
+  useSyncExternalStore(store.subscribe, store.getBoot);
+  return store.assetUrl(path);
+}
+
 /** True when the current viewer may write shared state. */
 export function canWrite(): boolean {
   return store.canWrite();

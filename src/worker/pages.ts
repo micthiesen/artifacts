@@ -66,7 +66,23 @@ function relativeTime(iso: string): string {
   return iso.slice(0, 10);
 }
 
-export function indexPage(viewer: { email: string | null }, artifacts: (ArtifactMeta & { role: Role })[], loginConfigured: boolean): Response {
+type ShareSummary = { shares: { email: string; role: string }[]; public: boolean };
+
+function sharingLine(s: ShareSummary | undefined): string {
+  if (!s) return "";
+  const parts = s.shares.map((x) => `${escapeHtml(x.email)}${x.role === "edit" ? " (edit)" : ""}`);
+  if (s.public) parts.unshift("public link");
+  if (!parts.length) return `<span class="sharing">Only you</span>`;
+  const shown = parts.slice(0, 4).join(", ");
+  return `<span class="sharing">Shared with ${shown}${parts.length > 4 ? ` +${parts.length - 4} more` : ""}</span>`;
+}
+
+export function indexPage(
+  viewer: { email: string | null },
+  artifacts: (ArtifactMeta & { role: Role })[],
+  loginConfigured: boolean,
+  summaries?: Record<string, ShareSummary>,
+): Response {
   const account = viewer.email
     ? `<form class="account" method="post" action="/logout"><span class="muted email">${escapeHtml(viewer.email)}</span><button class="link">Sign out</button></form>`
     : loginConfigured
@@ -86,9 +102,9 @@ export function indexPage(viewer: { email: string | null }, artifacts: (Artifact
       .map(
         (a) => `<li><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}</span>${
           a.description ? `<span class="desc">${escapeHtml(a.description)}</span>` : ""
-        }<span class="meta">${relativeTime(a.updatedAt)} · v${a.version}${a.public ? " · public" : ""}${
-          a.role === "owner" ? "" : ` · ${a.role}`
-        } · <code>${a.id}</code></span></a></li>`,
+        }${summaries ? sharingLine(summaries[a.id]) : ""}<span class="meta">${relativeTime(a.updatedAt)} · v${a.version}${
+          a.public && !summaries ? " · public" : ""
+        }${a.role === "owner" ? "" : ` · ${a.role}`} · <code>${a.id}</code></span></a></li>`,
       )
       .join("")}</ul>`;
   }
@@ -108,7 +124,7 @@ export function shellPage(boot: ShellBoot): Response {
   return page(
     boot.title,
     `<div class="shell">
-<header class="bar"><a class="home" href="/" title="All artifacts" aria-label="All artifacts">◆</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span><span id="status" class="status"></span><span id="presence" class="presence"></span></header>
+<header class="bar"><a class="home" href="/" title="All artifacts" aria-label="All artifacts">◆</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span><span id="status" class="status"></span><span id="owner-menu" class="owner-menu"></span><span id="presence" class="presence"></span></header>
 <div id="frame-host" class="frame-host"></div>
 </div>
 <script type="application/json" id="shell-boot">${scriptJson(boot)}</script>
@@ -127,8 +143,8 @@ export function frameCsp(origin: string, sandbox = true): string {
     `script-src 'unsafe-inline' data: ${kit}`,
     `style-src 'unsafe-inline' ${kit}`,
     `font-src ${kit} data:`,
-    "img-src data: blob:",
-    "media-src data: blob:",
+    `img-src data: blob: ${origin}/asset/`,
+    `media-src data: blob: ${origin}/asset/`,
     "connect-src 'none'",
     "frame-src 'none'",
     "worker-src 'none'",
@@ -138,7 +154,7 @@ export function frameCsp(origin: string, sandbox = true): string {
   ].join("; ");
 }
 
-export function frameDocument(origin: string, meta: ArtifactMeta, build: Build, check = false): Response {
+export function frameDocument(origin: string, meta: ArtifactMeta, build: Build, check = false, assets: Record<string, string> = {}): Response {
   const boot: FrameBoot = {
     artifactId: meta.id,
     version: meta.version,
@@ -146,6 +162,7 @@ export function frameDocument(origin: string, meta: ArtifactMeta, build: Build, 
     data: build.data,
     title: meta.title,
     ...(check ? { check: true } : {}),
+    ...(Object.keys(assets).length ? { assets } : {}),
   };
   const html = `<!doctype html>
 <html lang="en">

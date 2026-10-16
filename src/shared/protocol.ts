@@ -65,6 +65,8 @@ export type FrameBoot = {
    * `<pre id="art-check">{status, errors, textLength}</pre>` once the first render settles.
    */
   check?: boolean;
+  /** Uploaded files by path ("assets/logo.png") -> short-lived URL. */
+  assets?: Record<string, string>;
 };
 
 export const SHARED_VALUE_MAX_BYTES = 64 * 1024;

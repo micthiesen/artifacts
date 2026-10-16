@@ -69,6 +69,13 @@ export function setBoot(b: FrameBoot) {
 }
 export const getBoot = () => boot;
 
+/** URL for an uploaded asset ("assets/logo.png" or "logo.png"), or the input unchanged. */
+export function assetUrl(path: string): string {
+  const assets = boot?.assets ?? {};
+  const clean = path.replace(/^\.?\//, "");
+  return assets[clean] ?? assets[`assets/${clean}`] ?? path;
+}
+
 export function init(msg: {
   viewer: Viewer;
   local: Record<string, JsonValue>;

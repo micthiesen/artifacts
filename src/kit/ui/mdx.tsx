@@ -1,5 +1,6 @@
 // Markdown element overrides so MDX reads like a well-set article with no imports.
 import { ScrollX } from "./scroll-x.tsx";
+import { assetUrl } from "../store.ts";
 import * as React from "react";
 import { cn } from "./utils.ts";
 
@@ -61,5 +62,12 @@ export const markdownComponents = {
   // On phones, cells keep a readable width and the table scrolls sideways.
   td: ({ className, ...p }: P<"td">) => <td className={cn("px-4 py-2.5 align-top first:pl-5 last:pr-5 max-sm:min-w-36", className)} {...p} />,
   hr: ({ className, ...p }: P<"hr">) => <hr className={cn("my-10 border-0 border-t border-border", className)} {...p} />,
-  img: ({ className, alt = "", ...p }: P<"img">) => <img alt={alt} className={cn("my-6 max-w-full rounded-lg border border-border", className)} {...p} />,
+  img: ({ className, alt = "", src, ...p }: P<"img">) => (
+    <img
+      alt={alt}
+      src={typeof src === "string" ? assetUrl(src) : src}
+      className={cn("my-6 max-w-full rounded-lg border border-border", className)}
+      {...p}
+    />
+  ),
 };
