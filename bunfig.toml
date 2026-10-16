@@ -1,0 +1,2 @@
+[test]
+preload = ["./spikes/text-loader.ts"]

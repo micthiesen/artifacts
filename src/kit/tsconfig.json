@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["bun"],
+    "lib": ["es2023", "dom", "dom.iterable"]
+  },
+  "include": ["./**/*.ts", "./**/*.tsx", "../shared", "../../types.d.ts"]
+}

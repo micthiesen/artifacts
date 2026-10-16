@@ -1,0 +1,8 @@
+[
+  { "month": "Jan", "pushes": 420, "reviews": 120 },
+  { "month": "Feb", "pushes": 510, "reviews": 160 },
+  { "month": "Mar", "pushes": 480, "reviews": 190 },
+  { "month": "Apr", "pushes": 620, "reviews": 210 },
+  { "month": "May", "pushes": 700, "reviews": 260 },
+  { "month": "Jun", "pushes": 760, "reviews": 300 }
+]

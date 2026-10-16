@@ -1,0 +1,25 @@
+:root { color-scheme: light dark; --bg: #faf9f7; --fg: #1c1b19; --muted: #6b675f; --border: #e7e4de; --accent: #3b4fd8; font-family: "Inter Variable", ui-sans-serif, system-ui, sans-serif; }
+@media (prefers-color-scheme: dark) { :root { --bg: #161513; --fg: #eeece8; --muted: #a29d93; --border: #2c2a26; --accent: #8c9bff; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
+a { color: var(--accent); text-decoration: none; }
+.muted { color: var(--muted); }
+.button { display: inline-block; padding: .5rem .9rem; border-radius: .6rem; background: var(--accent); color: white; font-weight: 500; border: 0; cursor: pointer; }
+button.link { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
+.shell { display: flex; flex-direction: column; height: 100%; }
+.bar { display: flex; align-items: center; gap: .75rem; padding: 0 1rem; height: 2.75rem; border-bottom: 1px solid var(--border); flex: none; font-size: .9rem; }
+.bar .home { color: var(--muted); font-size: .8rem; }
+.bar .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar .presence { margin-left: auto; display: flex; gap: .25rem; }
+.bar .status { color: var(--muted); font-size: .8rem; }
+.avatar { width: 1.5rem; height: 1.5rem; border-radius: 999px; background: var(--border); display: grid; place-items: center; font-size: .7rem; font-weight: 600; }
+.frame-host { flex: 1; min-height: 0; }
+.frame-host iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
+.index, .message { max-width: 44rem; margin: 0 auto; padding: 3rem 1.25rem; }
+.index header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 2rem; }
+h1 { font-size: 1.5rem; margin: 0 0 .5rem; letter-spacing: -.01em; }
+.list { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--border); }
+.list li a { display: grid; gap: .15rem; padding: .9rem 0; border-bottom: 1px solid var(--border); color: inherit; }
+.list .title { font-weight: 600; }
+.list .desc { color: var(--muted); }
+.list .meta { color: var(--muted); font-size: .8rem; }

@@ -1,0 +1,7 @@
+[
+  { "name": "Forgejo", "price": 0, "selfHost": true, "ci": "Actions (compatible)", "stars": 9800, "site": "https://forgejo.org" },
+  { "name": "GitLab", "price": 29, "selfHost": true, "ci": "GitLab CI", "stars": 24100, "site": "https://about.gitlab.com" },
+  { "name": "Gitea", "price": 0, "selfHost": true, "ci": "Actions", "stars": 46500, "site": "https://about.gitea.com" },
+  { "name": "GitHub", "price": 4, "selfHost": false, "ci": "Actions", "stars": null, "site": "https://github.com" },
+  { "name": "Sourcehut", "price": 2, "selfHost": true, "ci": "builds.sr.ht", "stars": 1200, "site": "https://sourcehut.org" }
+]

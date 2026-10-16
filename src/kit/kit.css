@@ -1,0 +1,44 @@
+/* Kit stylesheet source. Built by scripts/build-kit.ts into /kit/v1/kit.css. */
+@import "tailwindcss" source(none);
+@source "./";
+@source not "./CATALOG.md";
+@source not "./**/*.test.ts";
+@import "./theme.css";
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body {
+    height: 100%;
+  }
+  html {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  #root {
+    min-height: 100%;
+  }
+  ::selection {
+    background-color: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+  :focus-visible {
+    outline-color: var(--ring);
+  }
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--font-mono);
+  }
+}

@@ -1,0 +1,80 @@
+# Choosing a Git forge
+
+<Summary>**Forgejo** is the pick for self-hosting: free, light on Boris, and Actions-compatible. Choose **GitLab** only if built-in CI dashboards matter more than upkeep.</Summary>
+
+<Stats>
+  <Stat label="Candidates" value="5" hint="2 shortlisted" />
+  <Stat label="Monthly cost" value="$0" delta="-$48" hint="vs. GitHub Team" invert />
+  <Stat label="Pushes / month" value="760" delta="+8.6%" />
+  <Stat label="Migration" value="~2 days" />
+</Stats>
+
+## Shortlist
+
+Prices are per user per month. Click a header to sort; the table formats numbers, booleans and links automatically.
+
+<Table data="repos.json" columns="name price selfHost ci stars site" sort="-stars" search />
+
+## Activity
+
+<Chart type="area" data="usage.json" x="month" y="pushes reviews" title="Pushes and reviews per month" />
+
+<Callout tone="warning" title="Runner capacity">
+Forgejo Actions runs on our own hardware. Budget one more runner before moving the monorepo.
+</Callout>
+
+## Why not the others
+
+- **Gitea** is close, but the governance split makes Forgejo the safer long-term bet.
+- **Sourcehut** is lovely and minimal; the email-based review flow is a hard sell for the team.
+- *GitHub* stays as a public mirror only.
+
+> Pick boring infrastructure, then make it pleasant.
+
+Run a quick check with `forgejo doctor check --all`, or see the [Forgejo docs](https://forgejo.org/docs/latest/).
+
+```bash
+docker compose up -d forgejo runner
+```
+
+---
+
+## Plan
+
+<Steps>
+  <Step title="Trial on Boris">Stand up Forgejo with one runner and migrate two small repos.</Step>
+  <Step title="Mirror the monorepo">Keep GitHub as a push mirror for a week.</Step>
+  <Step title="Cut over">Switch remotes and archive the old org.</Step>
+</Steps>
+
+<Tabs defaultValue="pros">
+  <TabsList>
+    <TabsTrigger value="pros">Pros</TabsTrigger>
+    <TabsTrigger value="cons">Cons</TabsTrigger>
+  </TabsList>
+  <TabsContent value="pros">Free, small footprint, Actions-compatible workflows.</TabsContent>
+  <TabsContent value="cons">We own upgrades and backups.</TabsContent>
+</Tabs>
+
+<Accordion>
+  <AccordionItem value="backup">
+    <AccordionTrigger>How are backups handled?</AccordionTrigger>
+    <AccordionContent>Kopia snapshots the data volume nightly; restores were tested in March.</AccordionContent>
+  </AccordionItem>
+  <AccordionItem value="sso">
+    <AccordionTrigger>Does it support SSO?</AccordionTrigger>
+    <AccordionContent>Yes, via OpenID Connect.</AccordionContent>
+  </AccordionItem>
+</Accordion>
+
+## Decide
+
+<Poll id="pick" question="Which forge should we adopt?" options={["Forgejo", "GitLab", "Gitea"]} />
+
+<Checklist id="next" items={["Trial Forgejo on Boris", "Price GitLab Premium", "Write the migration runbook"]} allowAdd />
+
+### Notes
+
+<Notes id="meeting" placeholder="Meeting notes, decisions, open questions…" />
+
+<Comments />

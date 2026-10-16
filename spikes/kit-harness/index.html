@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kit harness</title>
+<style>
+  :root { color-scheme: light dark; font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  body { margin: 0; display: grid; grid-template-rows: auto 1fr 180px; height: 100vh; background: Canvas; color: CanvasText; }
+  header { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
+  header label { display: inline-flex; gap: 6px; align-items: center; }
+  main { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+  main.single { grid-template-columns: 1fr; }
+  main.single section:nth-child(2) { display: none; }
+  section { display: grid; grid-template-rows: auto 1fr; min-height: 0; border-right: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
+  section h2 { margin: 0; padding: 4px 10px; font-size: 12px; font-weight: 600; opacity: .75; }
+  iframe { width: 100%; height: 100%; border: 0; }
+  #log { overflow: auto; margin: 0; padding: 6px 12px; font: 11px/1.5 ui-monospace, monospace; border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent); white-space: pre-wrap; }
+  #log .error { color: #d33; } #log .in { opacity: .7; }
+  button, select { font: inherit; }
+</style>
+</head>
+<body>
+<header>
+  <strong>Kit harness</strong>
+  <label>Sample <select id="sample"></select></label>
+  <label>Theme <select id="theme"><option>light</option><option>dark</option></select></label>
+  <label>Viewer B <select id="roleB"><option value="edit">edit</option><option value="view">view</option><option value="anon">anonymous</option><option value="owner">owner</option></select></label>
+  <label><input type="checkbox" id="single"> single frame</label>
+  <button id="reset">Reset shared state</button>
+  <button id="clearlog">Clear log</button>
+  <span id="status" style="opacity:.7"></span>
+</header>
+<main id="frames">
+  <section><h2 id="labelA"></h2><iframe id="frameA" sandbox="allow-scripts"></iframe></section>
+  <section><h2 id="labelB"></h2><iframe id="frameB" sandbox="allow-scripts"></iframe></section>
+</main>
+<pre id="log"></pre>
+<script type="module">
+// Simulates the shell: owns shared state and per-viewer storage, relays writes
+// between two frames (two viewers), enforces roles like the hub, and logs traffic.
+const $ = (id) => document.getElementById(id);
+const log = (cls, text) => { const d = document.createElement("div"); d.className = cls; d.textContent = `${new Date().toLocaleTimeString()} ${text}`; $("log").append(d); $("log").scrollTop = 1e9; };
+const samples = await (await fetch("/harness/samples.json")).json();
+for (const s of samples) $("sample").append(new Option(`${s.name} (${s.entry})`, s.name));
+const q = new URLSearchParams(location.search);
+$("sample").value = q.get("sample") ?? samples[0].name;
+$("theme").value = q.get("theme") ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+$("roleB").value = q.get("roleB") ?? "edit";
+$("single").checked = q.get("single") === "1";
+
+const sk = () => `harness-shared:${$("sample").value}`;
+let shared = {};
+const viewers = () => ({
+  A: { email: "ada.lovelace@example.com", role: "owner" },
+  B: $("roleB").value === "anon" ? { email: null, role: "view" } : { email: "grace.hopper@example.com", role: $("roleB").value },
+});
+const frames = { A: $("frameA"), B: $("frameB") };
+const which = (src) => Object.keys(frames).find((k) => frames[k].contentWindow === src);
+const presence = () => Object.values(viewers()).map((v) => v.email).filter(Boolean);
+const localKey = (k) => `harness-local:${$("sample").value}:${k}`;
+const send = (k, msg) => { frames[k].contentWindow?.postMessage(msg, "*"); log("in", `-> ${k} ${JSON.stringify(msg).slice(0, 300)}`); };
+const broadcast = (msg) => { for (const k of Object.keys(frames)) send(k, msg); };
+
+function load() {
+  shared = JSON.parse(localStorage.getItem(sk()) ?? "{}");
+  const v = viewers();
+  for (const k of Object.keys(frames)) {
+    $(`label${k}`).textContent = `Viewer ${k}: ${v[k].email ?? "anonymous"} (${v[k].role})`;
+    frames[k].src = `/frame/${$("sample").value}.html?viewer=${k}&n=${Date.now()}`;
+  }
+  $("frames").classList.toggle("single", $("single").checked);
+  const u = new URL(location.href);
+  u.search = new URLSearchParams({ sample: $("sample").value, theme: $("theme").value, roleB: $("roleB").value, single: $("single").checked ? "1" : "0" });
+  history.replaceState(null, "", u);
+}
+
+window.addEventListener("message", (ev) => {
+  const k = which(ev.source);
+  if (!k) return;
+  const m = ev.data;
+  log(m.t === "error" ? "error" : "", `<- ${k} ${JSON.stringify(m).slice(0, 400)}`);
+  const v = viewers()[k];
+  if (m.t === "ready") {
+    send(k, { t: "init", viewer: v, local: JSON.parse(localStorage.getItem(localKey(k)) ?? "{}"), shared, presence: presence(), theme: $("theme").value });
+  } else if (m.t === "shared:set") {
+    if (v.email === null || v.role === "view") {
+      log("error", `rejected write from ${k} (${v.role}); reverting`);
+      send(k, { t: "shared", changes: { [m.key]: shared[m.key] ?? null } });
+      return;
+    }
+    if (m.value === null || m.value === undefined) delete shared[m.key]; else shared[m.key] = m.value;
+    localStorage.setItem(sk(), JSON.stringify(shared));
+    broadcast({ t: "shared", changes: { [m.key]: m.value ?? null } });
+  } else if (m.t === "local:set") {
+    const local = JSON.parse(localStorage.getItem(localKey(k)) ?? "{}");
+    if (m.value === undefined || m.value === null) delete local[m.key]; else local[m.key] = m.value;
+    localStorage.setItem(localKey(k), JSON.stringify(local));
+  } else if (m.t === "open") {
+    window.open(m.url, "_blank", "noopener");
+  }
+});
+
+$("sample").onchange = load;
+$("roleB").onchange = load;
+$("single").onchange = load;
+$("theme").onchange = () => {
+  broadcast({ t: "theme", theme: $("theme").value });
+  const u = new URL(location.href); u.searchParams.set("theme", $("theme").value); history.replaceState(null, "", u);
+};
+$("reset").onclick = () => { const changes = Object.fromEntries(Object.keys(shared).map((k) => [k, null])); shared = {}; localStorage.removeItem(sk()); broadcast({ t: "shared", changes }); };
+$("clearlog").onclick = () => ($("log").textContent = "");
+load();
+$("status").textContent = "A is owner; B is configurable. Writes relay between frames like the hub.";
+</script>
+</body>
+</html>

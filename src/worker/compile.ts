@@ -1,0 +1,261 @@
+// Compiles artifact source files to browser ES modules on write, so agents get
+// errors in the tool result and viewers never transpile.
+import { transform } from "sucrase";
+import { init as initLexer, parse as parseModule } from "es-module-lexer/js";
+import { compile as compileMdx } from "@mdx-js/mdx";
+import remarkGfm from "remark-gfm";
+import { compile as compileTailwind } from "tailwindcss";
+import preflightCss from "tailwindcss/preflight.css";
+import themeCss from "tailwindcss/theme.css";
+import utilitiesCss from "tailwindcss/utilities.css";
+import kitThemeCss from "../kit/theme.css";
+import type { JsonValue } from "../shared/protocol.ts";
+
+export const ALLOWED_IMPORTS = new Set([
+  "react",
+  "react/jsx-runtime",
+  "@a/ui",
+  "@a/hooks",
+  "lucide-react",
+  "recharts",
+]);
+
+export type CompileError = { path: string; message: string; line?: number };
+export type CompiledModule = { path: string; code: string; classes: string[] };
+
+
+export async function compileFile(
+  path: string,
+  source: string,
+  files: Set<string>,
+): Promise<{ module?: CompiledModule; errors: CompileError[] }> {
+  let code: string;
+  try {
+    if (path.endsWith(".mdx") || path.endsWith(".md")) {
+      const out = await compileMdx(stripFrontmatter(source), {
+        jsxImportSource: "react",
+        format: path.endsWith(".md") ? "md" : "mdx",
+        providerImportSource: "@a/ui",
+        remarkPlugins: [remarkGfm],
+      });
+      code = String(out.value);
+    } else if (/\.(tsx|ts|jsx|js)$/.test(path)) {
+      code = transform(source, {
+        transforms: ["typescript", "jsx"],
+        jsxRuntime: "automatic",
+        production: true,
+        // Keep unused imports so a bad specifier is still reported.
+        keepUnusedImports: true,
+        filePath: path,
+      }).code;
+    } else {
+      return { errors: [] };
+    }
+  } catch (err) {
+    const e = err as { message?: string; place?: { line?: number; start?: { line?: number } } };
+    const message = e.message ?? String(err);
+    const fromMessage = /\((\d+):\d+\)/.exec(message)?.[1];
+    const line = fromMessage ? Number(fromMessage) : (e.place?.line ?? e.place?.start?.line);
+    return { errors: [{ path, message, line }] };
+  }
+
+  const errors: CompileError[] = [];
+  let specs: string[];
+  try {
+    specs = await importSpecifiers(code);
+  } catch (err) {
+    return { errors: [{ path, message: `could not parse compiled module: ${(err as Error).message}` }] };
+  }
+  for (const spec of specs) {
+    if (spec.startsWith("./") || spec.startsWith("../")) {
+      if (!resolveImport(path, spec, files)) {
+        errors.push({ path, message: `import "${spec}": no such file in this artifact` });
+      }
+    } else if (!ALLOWED_IMPORTS.has(spec)) {
+      errors.push({
+        path,
+        message: `import "${spec}" is not available. Allowed: ${[...ALLOWED_IMPORTS].join(", ")} and relative files`,
+      });
+    }
+  }
+  return { module: { path, code, classes: extractCandidates(source) }, errors };
+}
+
+const SOURCE_EXTENSIONS = ["", ".tsx", ".ts", ".jsx", ".js", ".mdx", ".md"];
+
+export function resolveImport(from: string, spec: string, files: Set<string>): string | null {
+  const base = resolveRelative(from, spec);
+  for (const ext of SOURCE_EXTENSIONS) if (files.has(base + ext)) return base + ext;
+  return null;
+}
+
+type LexedImport = { spec: string | undefined; s: number; e: number };
+
+// es-module-lexer 2.x names fields specifier/start/end; 1.x used n/s/e.
+function lexImports(code: string): LexedImport[] {
+  const [imports] = parseModule(code) as unknown as [Record<string, unknown>[]];
+  return imports.map((i) => ({
+    spec: (i.specifier ?? i.n) as string | undefined,
+    s: (i.start ?? i.s) as number,
+    e: (i.end ?? i.e) as number,
+  }));
+}
+
+/** Static and string-literal dynamic import specifiers of a JS module. */
+export async function importSpecifiers(code: string): Promise<string[]> {
+  await initLexer;
+  return lexImports(code).map((i) => i.spec).filter((n): n is string => typeof n === "string");
+}
+
+export function resolveRelative(from: string, spec: string): string {
+  const parts = from.split("/").slice(0, -1);
+  for (const seg of spec.split("/")) {
+    if (seg === "..") parts.pop();
+    else if (seg !== ".") parts.push(seg);
+  }
+  return parts.join("/");
+}
+
+// Tailwind ignores invalid candidates, so a generous token split is enough and
+// avoids the native oxide scanner, which cannot run in a Worker.
+export function extractCandidates(source: string): string[] {
+  const out = new Set<string>();
+  for (const tok of source.split(/[\s"'`{}()<>;,]+/)) {
+    if (tok.length > 0 && tok.length < 120 && /^[!@\w-][\w:/.%#\[\]()=&>+*,-]*$/.test(tok)) out.add(tok);
+  }
+  return [...out];
+}
+
+const STYLESHEETS: Record<string, string> = {
+  "tailwindcss/preflight.css": preflightCss,
+  "tailwindcss/theme.css": themeCss,
+  "tailwindcss/utilities.css": utilitiesCss,
+};
+
+export async function compileCss(entryCss: string, candidates: Iterable<string>): Promise<string> {
+  const compiler = await compileTailwind(entryCss, {
+    base: "/",
+    loadStylesheet: async (id: string) => {
+      const key = id.startsWith("tailwindcss/") ? id : `tailwindcss/${id.replace(/^\.\//, "")}`;
+      const content = STYLESHEETS[key];
+      if (content === undefined) throw new Error(`stylesheet ${id} not available`);
+      return { path: key, base: "/", content };
+    },
+  });
+  return compiler.build([...candidates]);
+}
+
+export function stripFrontmatter(source: string): string {
+  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(source);
+  // Keep line numbers stable for error messages.
+  return m ? "\n".repeat(m[0].split("\n").length - 1) + source.slice(m[0].length) : source;
+}
+
+export const ENTRY_FILES = ["index.mdx", "index.md", "app.tsx"];
+export const MAX_FILE_BYTES = 512 * 1024;
+export const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
+
+export type Build = {
+  entry: string;
+  /** Import-map entries for this artifact's modules, as data: URLs. */
+  imports: Record<string, string>;
+  css: string;
+  data: Record<string, JsonValue>;
+};
+
+const ART_PREFIX = "@art/";
+
+export function validatePath(path: string): string | null {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(path) || path.includes("..") || path.includes("//") || path.endsWith("/")) {
+    return `invalid path "${path}": use relative paths like "app.tsx", "components/chart.tsx" or "data/rows.json"`;
+  }
+  if (path.startsWith("data/")) return path.endsWith(".json") ? null : `"${path}": files under data/ must be .json`;
+  if (!/\.(tsx|ts|jsx|js|mdx|md)$/.test(path)) {
+    return `"${path}": unsupported file type. Use .mdx/.md/.tsx/.ts/.jsx/.js for code and data/*.json for data`;
+  }
+  return null;
+}
+
+/** Compile a whole artifact. Returns errors instead of a build if anything fails. */
+export async function buildArtifact(files: Record<string, string>): Promise<{ build?: Build; errors: CompileError[] }> {
+  const errors: CompileError[] = [];
+  const paths = Object.keys(files);
+  const pathSet = new Set(paths);
+  let total = 0;
+  for (const path of paths) {
+    const bad = validatePath(path);
+    if (bad) errors.push({ path, message: bad });
+    const size = new TextEncoder().encode(files[path]).length;
+    total += size;
+    if (size > MAX_FILE_BYTES) errors.push({ path, message: `file is ${size} bytes; the limit is ${MAX_FILE_BYTES}` });
+  }
+  if (total > MAX_ARTIFACT_BYTES) errors.push({ path: "", message: `artifact is ${total} bytes; the limit is ${MAX_ARTIFACT_BYTES}` });
+  const entries = ENTRY_FILES.filter((e) => pathSet.has(e));
+  if (entries.length !== 1) {
+    errors.push({
+      path: "",
+      message: entries.length === 0
+        ? `no entry file: add exactly one of ${ENTRY_FILES.join(", ")}`
+        : `several entry files (${entries.join(", ")}): keep exactly one`,
+    });
+  }
+  if (errors.length) return { errors };
+
+  const imports: Record<string, string> = {};
+  const data: Record<string, JsonValue> = {};
+  const candidates = new Set<string>();
+  for (const path of paths) {
+    if (path.startsWith("data/")) {
+      try {
+        data[path] = JSON.parse(files[path]);
+      } catch (err) {
+        errors.push({ path, message: `invalid JSON: ${(err as Error).message}` });
+      }
+      continue;
+    }
+    const result = await compileFile(path, files[path], pathSet);
+    errors.push(...result.errors);
+    if (!result.module) continue;
+    for (const c of result.module.classes) candidates.add(c);
+    const code = await rewriteRelativeImports(path, result.module.code, pathSet);
+    imports[ART_PREFIX + path] = `data:text/javascript;base64,${toBase64(code)}`;
+  }
+  if (errors.length) return { errors };
+
+  let css: string;
+  try {
+    css = await compileCss(ARTIFACT_CSS_ENTRY, candidates);
+  } catch (err) {
+    return { errors: [{ path: "", message: `stylesheet: ${(err as Error).message}` }] };
+  }
+  return { build: { entry: ART_PREFIX + entries[0], imports, css, data }, errors: [] };
+}
+
+const ARTIFACT_CSS_ENTRY = `@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+${kitThemeCss}`;
+
+async function rewriteRelativeImports(from: string, code: string, files: Set<string>): Promise<string> {
+  await initLexer;
+  let out = "";
+  let last = 0;
+  for (const imp of lexImports(code)) {
+    if (!imp.spec || !(imp.spec.startsWith("./") || imp.spec.startsWith("../"))) continue;
+    const target = resolveImport(from, imp.spec, files);
+    if (!target) continue;
+    // s..e spans the specifier without quotes for static imports; dynamic
+    // imports with a string literal include the quotes.
+    const raw = code.slice(imp.s, imp.e);
+    const quoted = raw.startsWith('"') || raw.startsWith("'");
+    out += code.slice(last, imp.s) + (quoted ? JSON.stringify(ART_PREFIX + target) : ART_PREFIX + target);
+    last = imp.e;
+  }
+  return out + code.slice(last);
+}
+
+function toBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
