@@ -43,13 +43,3 @@
   }
 }
 
-/* Horizontal scroll cue: edge shadows appear only while there is more content
-   to scroll to (backgrounds attached to the content cover them at the ends). */
-@utility scroll-cue-x {
-  background:
-    linear-gradient(to right, var(--card) 40%, transparent) left / 2.5rem 100% no-repeat local,
-    linear-gradient(to left, var(--card) 40%, transparent) right / 2.5rem 100% no-repeat local,
-    linear-gradient(to right, color-mix(in oklch, var(--foreground) 12%, transparent), transparent) left / 0.75rem 100% no-repeat scroll,
-    linear-gradient(to left, color-mix(in oklch, var(--foreground) 12%, transparent), transparent) right / 0.75rem 100% no-repeat scroll,
-    var(--card);
-}

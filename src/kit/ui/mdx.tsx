@@ -1,4 +1,5 @@
 // Markdown element overrides so MDX reads like a well-set article with no imports.
+import { ScrollX } from "./scroll-x.tsx";
 import * as React from "react";
 import { cn } from "./utils.ts";
 
@@ -45,8 +46,10 @@ export const markdownComponents = {
     />
   ),
   table: ({ className, ...p }: P<"table">) => (
-    <div className="my-6 scroll-cue-x overflow-x-auto rounded-xl border border-border bg-card">
-      <table className={cn("w-full border-collapse text-[14px] leading-snug", className)} {...p} />
+    <div className="my-6 overflow-hidden rounded-xl border border-border bg-card">
+      <ScrollX>
+        <table className={cn("w-full border-collapse text-[14px] leading-snug", className)} {...p} />
+      </ScrollX>
     </div>
   ),
   thead: ({ className, ...p }: P<"thead">) => <thead className={cn("border-b border-border bg-muted/50", className)} {...p} />,

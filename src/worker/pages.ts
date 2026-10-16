@@ -78,7 +78,7 @@ export function indexPage(viewer: { email: string | null }, artifacts: (Artifact
       loginConfigured
         ? "Sign in with your email to see artifacts shared with you."
         : "Open the link you were sent to view an artifact."
-    }</p><p class="fine"><a href="/owner">Owner sign-in</a></p></section>`;
+    }</p></section>`;
   } else if (!artifacts.length) {
     body = `<section class="empty"><h1>Nothing here yet</h1><p class="muted">Artifacts shared with ${escapeHtml(viewer.email)} will show up here.</p></section>`;
   } else {
@@ -101,15 +101,6 @@ export function messagePage(title: string, message: string, status: number, acti
     title,
     `${topBar()}<main class="content"><section class="empty"><h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p><p><a class="button" href="${escapeHtml(act.href)}">${escapeHtml(act.label)}</a></p></section></main>`,
     { status },
-  );
-}
-
-export function ownerLoginPage(): Response {
-  return page(
-    "Owner sign-in",
-    `${topBar()}<main class="content"><section class="empty"><h1>Owner sign-in</h1><p id="owner-status" class="muted">Signing in…</p>
-<form id="owner-form" class="key-form" hidden><input type="text" name="username" value="owner" autocomplete="username" hidden><label for="owner-key">Owner key</label><div class="row"><input id="owner-key" class="input" type="password" autocomplete="current-password" required><button class="button" type="submit">Sign in</button></div></form></section></main>
-<script type="module" src="${asset("/static/owner.js")}"></script>`,
   );
 }
 

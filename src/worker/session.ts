@@ -1,7 +1,7 @@
 // HMAC-signed tokens: viewer sessions, frame URLs and login hand-off codes.
 // Format: base64url(JSON payload) + "." + base64url(HMAC-SHA256).
 
-export type TokenKind = "session" | "frame" | "login";
+export type TokenKind = "session" | "frame" | "login" | "link";
 
 type Payload = { k: TokenKind; exp: number } & Record<string, unknown>;
 
@@ -80,8 +80,6 @@ export function readCookie(request: Request, name: string): string | null {
   }
   return null;
 }
-
-export const OWNER_SESSION_TTL = 365 * 24 * 3600;
 
 export function sessionCookie(token: string, ttl = SESSION_TTL): string {
   return `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${ttl}`;

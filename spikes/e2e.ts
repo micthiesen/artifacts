@@ -162,14 +162,24 @@ check("shared email allowed", (await fetch(`${origin}/a/${id}`, { headers: { Coo
 await call("artifact_share", { id, remove: ["stranger@example.com"] });
 check("removed email refused immediately", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: `__Host-art_session=${stranger}` } })).status === 403);
 
-// Owner sign-in link.
-const badOwner = await fetch(`${origin}/owner`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify({ key: "wrong" }) });
-check("owner login rejects wrong key", badOwner.status === 403);
-const ownerRes = await fetch(`${origin}/owner`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify({ key: process.env.OWNER_LOGIN_KEY }) });
-const setCookie = ownerRes.headers.get("Set-Cookie") ?? "";
-check("owner login sets a one-year session", ownerRes.status === 204 && /Max-Age=31536000/.test(setCookie), [ownerRes.status, setCookie.slice(0, 40)]);
-const ownerCookie = setCookie.split(";")[0];
-check("owner session opens private artifact", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: ownerCookie } })).status === 200);
+// Presigned sign-in links.
+const ownerLink = await call("artifact_link", { id });
+const linkUrl = ownerLink.structuredContent?.link as string;
+check("owner link issued", typeof linkUrl === "string" && linkUrl.includes("/s/"), ownerLink.content);
+const opened = await fetch(linkUrl, { redirect: "manual" });
+const linkCookie = (opened.headers.get("Set-Cookie") ?? "").split(";")[0];
+check("owner link signs in and redirects", opened.status === 303 && opened.headers.get("Location") === `/a/${id}` && linkCookie.startsWith("__Host-art_session="), opened.status);
+check("owner link session opens private artifact", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: linkCookie } })).status === 200);
+const noAccess = await call("artifact_link", { id, email: "nobody@example.com" });
+check("link refused for unshared email", noAccess.isError === true, noAccess.content);
+const shared = await call("artifact_share", { id, add: [{ email: "guest@example.com", role: "view" }] });
+const guestLink = shared.structuredContent?.links?.["guest@example.com"] as string;
+check("share returns a link per added person", typeof guestLink === "string", shared.structuredContent);
+await call("artifact_share", { id, remove: ["guest@example.com"] });
+const revoked = await fetch(guestLink, { redirect: "manual" });
+check("link stops working after unshare", revoked.status === 403, revoked.status);
+const tampered = await fetch(linkUrl.replace(/.$/, (c) => (c === "A" ? "B" : "A")), { redirect: "manual" });
+check("tampered link rejected", tampered.status === 400, tampered.status);
 
 if (process.env.KEEP !== "1") {
   const del = await call("artifact_delete", { id });

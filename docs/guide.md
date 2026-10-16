@@ -33,4 +33,4 @@ email code, so they need no account.
 ## Sharing
 
 - **People:** `artifact_share` adds people by email with role `view` or `edit`, removes people, or sets `public: true` for a read-only link anyone can open.
-- **Links:** give the user the URL that the create or share call returned.
+- **Links:** to hand the user an artifact, give them an `artifact_link` URL (it defaults to the owner and opens with no login). `artifact_share` returns a sign-in link for each person it adds. Each link signs in as one email, so a link goes only to its own person.

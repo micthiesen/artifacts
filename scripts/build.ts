@@ -15,7 +15,6 @@ const common = {
 
 await mkdir("dist/kit/static", { recursive: true });
 await build({ ...common, entryPoints: ["src/shell/shell.ts"], outfile: "dist/kit/static/shell.js", platform: "browser" });
-await build({ ...common, entryPoints: ["src/shell/owner.ts"], outfile: "dist/kit/static/owner.js", platform: "browser" });
 await cp("src/shell/shell.css", "dist/kit/static/shell.css");
 
 // Static files keep stable names, and edge caches hold them, so the Worker

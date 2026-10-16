@@ -1,11 +1,10 @@
 // Shared Artifacts Worker: viewer pages, sessions, frame documents, sync and MCP.
 import { handleMcp } from "./mcp.ts";
-import { frameDocument, indexPage, messagePage, ownerLoginPage, shellPage } from "./pages.ts";
+import { frameDocument, indexPage, messagePage, shellPage } from "./pages.ts";
 import {
   clearSessionCookie,
   readCookie,
   SESSION_COOKIE,
-  OWNER_SESSION_TTL,
   SESSION_TTL,
   sessionCookie,
   signToken,
@@ -22,8 +21,6 @@ export type Env = {
   SESSION_SECRET: string;
   LOGIN_SECRET: string;
   MCP_TOKEN: string;
-  /** Secret for the owner sign-in link (/owner#<key>), which skips Access. */
-  OWNER_LOGIN_KEY?: string;
   /** Comma-separated owner emails. */
   OWNER_EMAILS: string;
   /** Base URL of the Access-protected auth Worker; empty until sign-in is configured. */
@@ -62,10 +59,8 @@ export default {
       return indexPage(viewer, artifacts, Boolean(env.AUTH_URL));
     }
     if (path === "/login") return login(url, env);
-    if (path === "/owner") {
-      if (request.method === "GET") return ownerLoginPage();
-      if (request.method === "POST") return ownerLogin(request, url, env);
-    }
+    const signin = /^\/s\/([A-Za-z0-9_.-]+)$/.exec(path);
+    if (signin) return presignedSignIn(signin[1], url, env, hub);
     if (path === "/auth/callback") return authCallback(url, env);
     if (path === "/logout" && request.method === "POST") {
       if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
@@ -166,16 +161,24 @@ async function authCallback(url: URL, env: Env): Promise<Response> {
   });
 }
 
-async function ownerLogin(request: Request, url: URL, env: Env): Promise<Response> {
-  if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
-  const body = (await request.json().catch(() => null)) as { key?: unknown } | null;
-  const key = typeof body?.key === "string" ? body.key : "";
-  const owner = [...ownerEmails(env)][0];
-  if (!env.OWNER_LOGIN_KEY || !owner || !timingSafeEqual(key, env.OWNER_LOGIN_KEY)) {
-    return new Response("invalid key", { status: 403 });
+/**
+ * Presigned sign-in link (from artifact_link / artifact_share): signs this
+ * browser in as the link's email and opens the artifact. The link only grants
+ * what that email already has, so unsharing still cuts it off.
+ */
+async function presignedSignIn(code: string, url: URL, env: Env, hub: HubApi): Promise<Response> {
+  const claims = await verifyToken<{ e: string; a: string }>(env.LOGIN_SECRET, "link", code);
+  if (!claims) {
+    return messagePage("Link expired", "This link has expired or is invalid. Ask for a new one.", 400);
   }
-  const session = await signToken(env.SESSION_SECRET, "session", OWNER_SESSION_TTL, { e: owner });
-  return new Response(null, { status: 204, headers: { "Set-Cookie": sessionCookie(session, OWNER_SESSION_TTL) } });
+  const email = claims.e.toLowerCase();
+  const role = await hub.roleFor(claims.a, email, ownerEmails(env).has(email));
+  if (!role) return messagePage("Not available", `${email} doesn't have access to this artifact anymore.`, 403);
+  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email });
+  return new Response(null, {
+    status: 303,
+    headers: { Location: `/a/${claims.a}`, "Set-Cookie": sessionCookie(session), "Referrer-Policy": "no-referrer" },
+  });
 }
 
 function safeNext(next: string | null): string {

@@ -48,9 +48,9 @@ CSS.
   - Browser Run's scrape doesn't reliably honour `waitForSelector`, so the check also waits for network idle plus 1.5 s.
 - **Rate limit:** the free plan allows one Browser Run call every 10 s. The hub reserves slots, waits inline when the next slot is under 8 s away, and otherwise queues the check on a Durable Object alarm. Results are stored per version and failures go to `artifact_errors`.
 
-## Owner sign-in
+## Presigned links
 
-`/owner#<OWNER_LOGIN_KEY>` gives the owner a one-year session without Access. The key stays in the URL fragment and is posted same-origin.
+`artifact_link` and `artifact_share` return `/s/<code>` links. Each code is an HMAC token (`LOGIN_SECRET`) naming an email and an artifact, valid for 7 days by default and 30 at most. Opening a link re-checks that the email is the owner or on the share list, sets a normal session cookie and redirects to the artifact. Email sign-in through Access is the fallback once a link expires.
 
 ## Shared state
 

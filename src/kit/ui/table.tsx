@@ -1,4 +1,5 @@
 // Data table with sortable headers, search, and value-aware formatting.
+import { ScrollX } from "./scroll-x.tsx";
 import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Minus, Search } from "./icons.ts";
 import * as React from "react";
 import { useSyncExternalStore } from "react";
@@ -172,7 +173,8 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter…" className="pl-9" aria-label="Filter rows" />
         </div>
       )}
-      <div className="scroll-cue-x overflow-x-auto rounded-xl border border-border bg-card">
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <ScrollX>
         <table className="w-full border-collapse text-[14px] leading-snug">
           <thead>
             <tr className="border-b border-border bg-muted/50">
@@ -235,6 +237,7 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
             )}
           </tbody>
         </table>
+      </ScrollX>
       </div>
       {limit && shown.length > limit && (
         <button type="button" onClick={() => setExpanded((e) => !e)} className="mt-2 cursor-pointer text-sm font-medium text-primary hover:underline">

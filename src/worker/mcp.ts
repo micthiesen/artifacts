@@ -2,6 +2,7 @@
 // as the owner; the bearer token is the only credential.
 import type { ArtifactHub, HubApi } from "./hub.ts";
 import { describeCheck, type RenderCheck } from "./check.ts";
+import { signToken } from "./session.ts";
 import type { Env } from "./index.ts";
 import guideIntro from "../../docs/guide.md";
 import catalog from "../kit/CATALOG.md";
@@ -11,7 +12,7 @@ const SERVER_TITLE = "Shared Artifacts";
 const SERVER_VERSION = "0.1.0";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS = `Shared Artifacts publishes small interactive pages (reports, dashboards, polls, checklists, mini apps) that verified people can open in a browser, with per-viewer browser storage and live shared state. Use these artifact_* tools, not Executor's built-in create-artifact, whenever you make an artifact. Call artifact_guide once before writing your first artifact in a session. Change existing artifacts with artifact_edit, artifact_patch_data or artifact_write_files; never recreate one to change it. Every write reports a render check; fix a failed one (or wait for a queued one with artifact_check) before giving the user the link.`;
+const INSTRUCTIONS = `Shared Artifacts publishes small interactive pages (reports, dashboards, polls, checklists, mini apps) that verified people can open in a browser, with per-viewer browser storage and live shared state. Use these artifact_* tools, not Executor's built-in create-artifact, whenever you make an artifact. Call artifact_guide once before writing your first artifact in a session. Change existing artifacts with artifact_edit, artifact_patch_data or artifact_write_files; never recreate one to change it. Every write reports a render check; fix a failed one (or wait for a queued one with artifact_check) before giving the user a link. Hand the user an artifact_link URL (it opens with no login).`;
 
 type Hub = HubApi;
 type Ctx = { hub: Hub; origin: string; env: Env };
@@ -53,6 +54,20 @@ const shareList = {
 };
 
 const url = (origin: string, artifactId: string) => `${origin}/a/${artifactId}`;
+
+const LINK_DEFAULT_DAYS = 7;
+const LINK_MAX_DAYS = 30;
+
+function ownerList(env: Env): string[] {
+  return (env.OWNER_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+}
+
+/** Presigned sign-in link: opens the artifact as `email`, within that email's access. */
+async function signInLink(ctx: Ctx, artifactId: string, email: string, days = LINK_DEFAULT_DAYS): Promise<string> {
+  const ttl = Math.round(Math.min(Math.max(days, 1 / 24), LINK_MAX_DAYS) * 86400);
+  const code = await signToken(ctx.env.LOGIN_SECRET, "link", ttl, { e: email.toLowerCase(), a: artifactId });
+  return `${ctx.origin}/s/${code}`;
+}
 
 async function writeResult(r: Awaited<ReturnType<ArtifactHub["create"]>>, ctx: Ctx): Promise<ToolResult> {
   const { origin } = ctx;
@@ -322,7 +337,8 @@ export const TOOLS: Tool[] = [
       required: ["id"],
       additionalProperties: false,
     },
-    run: async (args, { hub, origin }) => {
+    run: async (args, ctx) => {
+      const { hub, origin } = ctx;
       const meta = await hub.share(String(args.id), {
         add: args.add as never,
         remove: args.remove as string[] | undefined,
@@ -330,10 +346,46 @@ export const TOOLS: Tool[] = [
       });
       if (!meta) return { isError: true, text: `No artifact ${args.id}` };
       const shares = meta.shares.length ? meta.shares.map((s) => `${s.email} (${s.role})`).join(", ") : "nobody";
+      const added = ((args.add as { email: string }[] | undefined) ?? []).map((a) => a.email.trim().toLowerCase());
+      const links: Record<string, string> = {};
+      for (const email of added) links[email] = await signInLink(ctx, meta.id, email);
+      const linkText = added.length
+        ? `\nSign-in links (valid ${LINK_DEFAULT_DAYS} days; each signs in as that person, so send it only to them):\n${added.map((e) => `- ${e}: ${links[e]}`).join("\n")}`
+        : "";
       return {
-        text: `${url(origin, meta.id)}\nShared with: ${shares}. Public link: ${meta.public ? "on" : "off"}.`,
-        structured: { url: url(origin, meta.id), shares: meta.shares, public: meta.public },
+        text: `${url(origin, meta.id)}\nShared with: ${shares}. Public link: ${meta.public ? "on" : "off"}.${linkText}`,
+        structured: { url: url(origin, meta.id), shares: meta.shares, public: meta.public, links },
       };
+    },
+  },
+  {
+    name: "artifact_link",
+    title: "Shared Artifacts: sign-in link",
+    description:
+      "Shared Artifacts: make a presigned link that opens an artifact already signed in as one email, with no login step. Defaults to the owner (the user), so use it when handing the user a link. The email must be the owner or already shared via artifact_share. Valid 7 days by default (max 30); unsharing still revokes it. Anyone holding the link acts as that email, so give each link only to its person.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id,
+        email: { type: "string", description: "Who the link signs in as. Default: the owner." },
+        days: { type: "number", minimum: 0.05, maximum: 30, description: "Validity in days. Default 7." },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    run: async (args, ctx) => {
+      const artifactId = String(args.id);
+      const owners = ownerList(ctx.env);
+      const email = (typeof args.email === "string" && args.email.trim() ? args.email : owners[0] ?? "").trim().toLowerCase();
+      if (!email) return { isError: true, text: "No owner email is configured; pass email." };
+      const meta = await ctx.hub.meta(artifactId);
+      if (!meta) return { isError: true, text: `No artifact ${artifactId}; see artifact_list.` };
+      if (!owners.includes(email) && !meta.shares.some((s) => s.email === email)) {
+        return { isError: true, text: `${email} has no access to ${artifactId}. Share it first with artifact_share.` };
+      }
+      const days = typeof args.days === "number" ? args.days : LINK_DEFAULT_DAYS;
+      const link = await signInLink(ctx, artifactId, email, days);
+      return { text: `Sign-in link for ${email} (valid ${days} days):\n${link}`, structured: { email, link, days } };
     },
   },
   {

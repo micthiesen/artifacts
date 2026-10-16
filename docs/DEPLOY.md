@@ -13,7 +13,7 @@ Create `.env` (gitignored) in the repo root:
 |---|---|
 | `WORKERS_SUBDOMAIN` | The account's `workers.dev` subdomain |
 | `OWNER_EMAILS` | Comma-separated emails with owner access to every artifact |
-| `SESSION_SECRET`, `LOGIN_SECRET`, `MCP_TOKEN`, `OWNER_LOGIN_KEY` | Random strings, e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'` |
+| `SESSION_SECRET`, `LOGIN_SECRET`, `MCP_TOKEN` | Random strings, e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'` |
 | `ACCESS_TEAM_DOMAIN` | Optional: `https://<team>.cloudflareaccess.com`. Enables viewer sign-in |
 | `ACCESS_AUD` | Required with `ACCESS_TEAM_DOMAIN`: the AUD tag of the auth Worker's Access application |
 
@@ -31,12 +31,13 @@ still work through MCP.
    that passes the PIN). Per-artifact sharing is enforced by the main Worker.
 4. Copy the application's AUD tag into `ACCESS_AUD` and deploy again.
 
-## Owner sign-in without Access
+## Presigned links
 
-Open `https://<worker>.<subdomain>.workers.dev/owner#<OWNER_LOGIN_KEY>` once per
-browser. It signs that browser in as the first `OWNER_EMAILS` entry for a year.
-The key stays in the URL fragment, so it never reaches server logs. Rotate it
-by changing `OWNER_LOGIN_KEY` and redeploying.
+Agents call `artifact_link` (or read the links `artifact_share` returns) to get
+`/s/<code>` URLs. Each one signs a browser in as one email and opens one
+artifact, without Access. It's valid for 7 days by default (30 at most), and it
+only grants what that email already has. Rotating `LOGIN_SECRET` invalidates
+every outstanding link.
 
 ## After deploying
 
