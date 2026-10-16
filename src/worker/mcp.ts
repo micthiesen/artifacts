@@ -1,6 +1,7 @@
 // Stateless MCP server (Streamable HTTP, JSON responses only). Every tool acts
 // as the owner; the bearer token is the only credential.
 import type { ArtifactHub, HubApi } from "./hub.ts";
+import { domainOf, isValidPrincipal, sharePrincipal } from "./principal.ts";
 import { describeCheck, type RenderCheck } from "./check.ts";
 import { signToken } from "./session.ts";
 import type { Env } from "./index.ts";
@@ -45,7 +46,10 @@ const shareList = {
   items: {
     type: "object",
     properties: {
-      email: { type: "string" },
+      email: {
+        type: "string",
+        description: 'A person ("sam@example.com"), or "@example.com" for everyone with a verified email at that domain.',
+      },
       role: { type: "string", enum: ["view", "edit"], description: "edit may change shared state; view is read-only." },
     },
     required: ["email", "role"],
@@ -325,13 +329,13 @@ export const TOOLS: Tool[] = [
     name: "artifact_share",
     title: "Shared Artifacts: share",
     description:
-      "Shared Artifacts: share an artifact with people by email (they sign in with a one-time email code), change their role, remove them, or toggle a public read-only link. Removal takes effect immediately. Returns the current sharing.",
+      "Shared Artifacts: share an artifact with people by email, or with everyone at a domain (\"@example.com\"), change roles, remove entries, or toggle a public read-only link. A person's own entry overrides their domain's role. Removal takes effect immediately. Returns the current sharing and a sign-in link for each person added (domains get none; make one per person with artifact_link).",
     inputSchema: {
       type: "object",
       properties: {
         id,
         add: { ...shareList, description: "Add people or change their role." },
-        remove: { type: "array", items: { type: "string" }, description: "Emails to remove." },
+        remove: { type: "array", items: { type: "string" }, description: 'Emails or "@domain" entries to remove.' },
         public: { type: "boolean", description: "true: anyone with the link can view read-only. false: only shared people." },
       },
       required: ["id"],
@@ -339,6 +343,11 @@ export const TOOLS: Tool[] = [
     },
     run: async (args, ctx) => {
       const { hub, origin } = ctx;
+      for (const entry of [...((args.add as { email: string }[] | undefined) ?? []).map((a) => a.email), ...((args.remove as string[] | undefined) ?? [])]) {
+        if (!isValidPrincipal(sharePrincipal(entry))) {
+          return { isError: true, text: `"${entry}" is not an email address or @domain.` };
+        }
+      }
       const meta = await hub.share(String(args.id), {
         add: args.add as never,
         remove: args.remove as string[] | undefined,
@@ -346,7 +355,10 @@ export const TOOLS: Tool[] = [
       });
       if (!meta) return { isError: true, text: `No artifact ${args.id}` };
       const shares = meta.shares.length ? meta.shares.map((s) => `${s.email} (${s.role})`).join(", ") : "nobody";
-      const added = ((args.add as { email: string }[] | undefined) ?? []).map((a) => a.email.trim().toLowerCase());
+      // Links go to people; a domain share has no single person to sign in as.
+      const added = ((args.add as { email: string }[] | undefined) ?? [])
+        .map((a) => sharePrincipal(a.email))
+        .filter((p) => !p.startsWith("@"));
       const links: Record<string, string> = {};
       for (const email of added) links[email] = await signInLink(ctx, meta.id, email);
       const linkText = added.length
@@ -362,7 +374,7 @@ export const TOOLS: Tool[] = [
     name: "artifact_link",
     title: "Shared Artifacts: sign-in link",
     description:
-      "Shared Artifacts: make a presigned link that opens an artifact already signed in as one email, with no login step. Defaults to the owner (the user), so use it when handing the user a link. The email must be the owner or already shared via artifact_share. Valid 7 days by default (max 30); unsharing still revokes it. Anyone holding the link acts as that email, so give each link only to its person.",
+      "Shared Artifacts: make a presigned link that opens an artifact already signed in as one email, with no login step. Defaults to the owner (the user), so use it when handing the user a link. The email must be the owner, shared directly, or at a shared @domain. Valid 7 days by default (max 30); unsharing still revokes it. Anyone holding the link acts as that email, so give each link only to its person.",
     inputSchema: {
       type: "object",
       properties: {
@@ -380,7 +392,7 @@ export const TOOLS: Tool[] = [
       if (!email) return { isError: true, text: "No owner email is configured; pass email." };
       const meta = await ctx.hub.meta(artifactId);
       if (!meta) return { isError: true, text: `No artifact ${artifactId}; see artifact_list.` };
-      if (!owners.includes(email) && !meta.shares.some((s) => s.email === email)) {
+      if (!owners.includes(email) && !meta.shares.some((s) => s.email === email || s.email === domainOf(email))) {
         return { isError: true, text: `${email} has no access to ${artifactId}. Share it first with artifact_share.` };
       }
       const days = typeof args.days === "number" ? args.days : LINK_DEFAULT_DAYS;

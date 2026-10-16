@@ -162,6 +162,19 @@ check("shared email allowed", (await fetch(`${origin}/a/${id}`, { headers: { Coo
 await call("artifact_share", { id, remove: ["stranger@example.com"] });
 check("removed email refused immediately", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: `__Host-art_session=${stranger}` } })).status === 403);
 
+// Domain shares.
+const asEmail = async (e: string) => `__Host-art_session=${await signToken(process.env.SESSION_SECRET!, "session", 600, { e })}`;
+await call("artifact_share", { id, add: [{ email: "@example.org", role: "view" }] });
+check("domain member can open", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.org") } })).status === 200);
+check("other domain refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.net") } })).status === 403);
+check("subdomain lookalike refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("x@evil-example.org") } })).status === 403);
+const domainLink = await call("artifact_link", { id, email: "pat@example.org" });
+check("link allowed for domain member", !domainLink.isError, domainLink.content);
+const badDomain = await call("artifact_share", { id, add: [{ email: "@localhost", role: "view" }] });
+check("invalid domain rejected", badDomain.isError === true, badDomain.content);
+await call("artifact_share", { id, remove: ["@example.org"] });
+check("domain removal revokes", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.org") } })).status === 403);
+
 // Presigned sign-in links.
 const ownerLink = await call("artifact_link", { id });
 const linkUrl = ownerLink.structuredContent?.link as string;
@@ -178,7 +191,10 @@ check("share returns a link per added person", typeof guestLink === "string", sh
 await call("artifact_share", { id, remove: ["guest@example.com"] });
 const revoked = await fetch(guestLink, { redirect: "manual" });
 check("link stops working after unshare", revoked.status === 403, revoked.status);
-const tampered = await fetch(linkUrl.replace(/.$/, (c) => (c === "A" ? "B" : "A")), { redirect: "manual" });
+// Flip a character inside the payload (the signature's last base64 char has spare bits).
+const cut = linkUrl.indexOf("/s/") + 10;
+const tamperedUrl = linkUrl.slice(0, cut) + (linkUrl[cut] === "A" ? "B" : "A") + linkUrl.slice(cut + 1);
+const tampered = await fetch(tamperedUrl, { redirect: "manual" });
 check("tampered link rejected", tampered.status === 400, tampered.status);
 
 if (process.env.KEEP !== "1") {

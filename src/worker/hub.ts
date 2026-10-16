@@ -4,6 +4,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { buildArtifact, type Build, type CompileError } from "./compile.ts";
 import { renderCheck, type CheckEnv, type RenderCheck } from "./check.ts";
+import { domainOf, sharePrincipal } from "./principal.ts";
 import { applyJsonPatch, applyTextEdits, EditError, grepFiles, type JsonPatchOp, type TextEdit } from "./edit.ts";
 import {
   SHARED_STATE_MAX_BYTES,
@@ -24,7 +25,10 @@ export type ArtifactMeta = {
   updatedAt: string;
 };
 
+/** `email` is a full address, or "@domain" for everyone at that domain. */
 export type ShareEntry = { email: string; role: Exclude<Role, "owner"> };
+
+
 
 export type WriteResult =
   | { ok: true; id: string; version: number; files: string[] }
@@ -91,16 +95,28 @@ export class ArtifactHub extends DurableObject {
   // ---- reads -------------------------------------------------------------
 
   list(viewer: { email: string | null; owner: boolean }): (ArtifactMeta & { role: Role })[] {
-    const rows = viewer.owner
-      ? this.sql.exec(`SELECT *, 'owner' AS role FROM artifacts ORDER BY updated_at DESC`).toArray()
-      : this.sql
-          .exec(
-            `SELECT a.*, s.role AS role FROM artifacts a JOIN shares s ON s.artifact_id = a.id
-             WHERE s.email = ? ORDER BY a.updated_at DESC`,
-            viewer.email ?? "",
-          )
-          .toArray();
-    return rows.map((r) => ({ ...toMeta(r), role: r.role as Role }));
+    if (viewer.owner) {
+      return this.sql
+        .exec(`SELECT *, 'owner' AS role FROM artifacts ORDER BY updated_at DESC`)
+        .toArray()
+        .map((r) => ({ ...toMeta(r), role: "owner" as Role }));
+    }
+    const email = viewer.email ?? "";
+    const rows = this.sql
+      .exec(
+        `SELECT a.*, s.role AS role, s.email AS principal FROM artifacts a JOIN shares s ON s.artifact_id = a.id
+         WHERE s.email = ? OR s.email = ? ORDER BY a.updated_at DESC`,
+        email,
+        domainOf(email),
+      )
+      .toArray();
+    // An exact-email share overrides a domain share for the same artifact.
+    const byId = new Map<string, Record<string, SqlStorageValue>>();
+    for (const r of rows) {
+      const prev = byId.get(r.id as string);
+      if (!prev || r.principal === email) byId.set(r.id as string, r);
+    }
+    return [...byId.values()].map((r) => ({ ...toMeta(r), role: r.role as Role }));
   }
 
   meta(id: string): (ArtifactMeta & { shares: ShareEntry[]; files: { path: string; bytes: number }[] }) | null {
@@ -121,8 +137,10 @@ export class ArtifactHub extends DurableObject {
     if (!row) return null;
     if (owner) return "owner";
     if (email) {
-      const share = this.sql.exec(`SELECT role FROM shares WHERE artifact_id = ? AND email = ?`, id, email).toArray()[0];
-      if (share) return share.role as Role;
+      const exact = this.sql.exec(`SELECT role FROM shares WHERE artifact_id = ? AND email = ?`, id, email).toArray()[0];
+      if (exact) return exact.role as Role;
+      const domain = this.sql.exec(`SELECT role FROM shares WHERE artifact_id = ? AND email = ?`, id, domainOf(email)).toArray()[0];
+      if (domain) return domain.role as Role;
     }
     return row.public ? "view" : null;
   }
@@ -245,23 +263,21 @@ export class ArtifactHub extends DurableObject {
           `INSERT INTO shares (artifact_id, email, role) VALUES (?, ?, ?)
            ON CONFLICT (artifact_id, email) DO UPDATE SET role = excluded.role`,
           id,
-          s.email.trim().toLowerCase(),
+          sharePrincipal(s.email),
           s.role,
         );
       }
       for (const email of input.remove ?? []) {
-        this.sql.exec(`DELETE FROM shares WHERE artifact_id = ? AND email = ?`, id, email.trim().toLowerCase());
+        this.sql.exec(`DELETE FROM shares WHERE artifact_id = ? AND email = ?`, id, sharePrincipal(email));
       }
       if (input.public !== undefined) this.sql.exec(`UPDATE artifacts SET public = ? WHERE id = ?`, input.public ? 1 : 0, id);
     });
     // Drop live sockets that lost access; they reconnect and are re-checked.
-    const removed = new Set((input.remove ?? []).map((e) => e.trim().toLowerCase()));
+    const touched = new Set([...(input.remove ?? []), ...(input.add ?? []).map((s) => s.email)].map(sharePrincipal));
     for (const ws of this.ctx.getWebSockets(id)) {
       const tag = ws.deserializeAttachment() as SocketTag;
-      const changedRole = (input.add ?? []).some((s) => s.email.toLowerCase() === tag.email);
-      if ((tag.email && removed.has(tag.email)) || changedRole || (input.public === false && !tag.email)) {
-        ws.close(4003, "access changed");
-      }
+      const affected = tag.email !== null && (touched.has(tag.email) || touched.has(domainOf(tag.email)));
+      if (affected || (input.public === false && !tag.email)) ws.close(4003, "access changed");
     }
     return this.meta(id);
   }
