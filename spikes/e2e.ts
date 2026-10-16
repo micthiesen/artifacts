@@ -44,6 +44,29 @@ check("create", !created.isError, created);
 console.log(`  create took ${created.ms} ms`);
 const id = created.structuredContent?.id as string;
 
+async function settled(r: any) {
+  let check = r.structuredContent?.renderCheck;
+  for (let i = 0; i < 8 && check?.status === "queued"; i++) {
+    await Bun.sleep(6000);
+    check = (await call("artifact_check", { id })).structuredContent?.renderCheck;
+  }
+  return check;
+}
+const createdCheck = await settled(created);
+check("create ran a passing render check", createdCheck?.status === "ok", createdCheck);
+const unknown = await call("artifact_write_files", { id, files: { "index.mdx": "# Hi\n\n<Pol id=\"x\" />\n" } });
+check("unknown MDX component rejected", unknown.isError === true && /Did you mean Poll/.test(unknown.content[0].text), unknown.content);
+const crash = await call("artifact_write_files", {
+  id,
+  files: { "index.mdx": null, "app.tsx": 'export default function App() { const x: any = null; return <div>{x.boom}</div>; }' },
+});
+const crashCheck = await settled(crash);
+check("runtime crash reported by render check", crashCheck?.status === "errors" && /boom/.test(JSON.stringify(crashCheck)), crashCheck);
+const errs = await call("artifact_errors", { id });
+check("render-check errors recorded", /boom/.test(errs.content[0].text), errs.content);
+const restore = await call("artifact_revert", { id, version: 1 });
+const restoreCheck = await settled(restore);
+check("revert restores a rendering version", restoreCheck?.status === "ok", restoreCheck);
 const bad = await call("artifact_write_files", { id, files: { "extra.tsx": 'import _ from "lodash";\nexport default 1;' } });
 check("bad import rejected atomically", bad.isError === true && /lodash/.test(bad.content[0].text), bad);
 const syntax = await call("artifact_edit", { id, path: "index.mdx", edits: [{ oldText: "# E2E report", newText: "# E2E report <Broken" }] });
@@ -51,16 +74,16 @@ check("syntax error rejected with location", syntax.isError === true && /index\.
 
 const grep = await call("artifact_grep", { id, pattern: "Summary" });
 check("grep", /index\.mdx:6/.test(grep.content[0].text), grep.content);
-const edit = await call("artifact_edit", { id, path: "index.mdx", edits: [{ oldText: "Forgejo wins.", newText: "Forgejo wins for self-hosting." }], baseVersion: 1 });
-check("edit", edit.structuredContent?.version === 2, edit);
-const stale = await call("artifact_edit", { id, path: "index.mdx", edits: [{ oldText: "E2E", newText: "x", replaceAll: true }], baseVersion: 1 });
+const edit = await call("artifact_edit", { id, path: "index.mdx", edits: [{ oldText: "Forgejo wins.", newText: "Forgejo wins for self-hosting." }], baseVersion: 3 });
+check("edit", edit.structuredContent?.version === 4, edit);
+const stale = await call("artifact_edit", { id, path: "index.mdx", edits: [{ oldText: "E2E", newText: "x", replaceAll: true }], baseVersion: 3 });
 check("stale baseVersion rejected", stale.isError === true && /stale/.test(stale.content[0].text), stale.content);
 const patch = await call("artifact_patch_data", { id, path: "data/repos.json", ops: [{ op: "replace", path: "/1/price", value: "$19" }] });
-check("patch data", patch.structuredContent?.version === 3, patch);
+check("patch data", patch.structuredContent?.version === 5, patch);
 const read = await call("artifact_read", { id, path: "data/repos.json" });
 check("read reflects patch", read.content[0].text.includes("$19"), read.content);
 const hist = await call("artifact_history", { id });
-check("history", hist.structuredContent?.versions?.length === 3, hist.structuredContent);
+check("history", hist.structuredContent?.versions?.length === 5, hist.structuredContent);
 
 // Viewer side, unauthenticated.
 const anon = await fetch(`${origin}/a/${id}`, { redirect: "manual" });
@@ -138,6 +161,15 @@ await call("artifact_share", { id, add: [{ email: "stranger@example.com", role: 
 check("shared email allowed", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: `__Host-art_session=${stranger}` } })).status === 200);
 await call("artifact_share", { id, remove: ["stranger@example.com"] });
 check("removed email refused immediately", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: `__Host-art_session=${stranger}` } })).status === 403);
+
+// Owner sign-in link.
+const badOwner = await fetch(`${origin}/owner`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify({ key: "wrong" }) });
+check("owner login rejects wrong key", badOwner.status === 403);
+const ownerRes = await fetch(`${origin}/owner`, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify({ key: process.env.OWNER_LOGIN_KEY }) });
+const setCookie = ownerRes.headers.get("Set-Cookie") ?? "";
+check("owner login sets a one-year session", ownerRes.status === 204 && /Max-Age=31536000/.test(setCookie), [ownerRes.status, setCookie.slice(0, 40)]);
+const ownerCookie = setCookie.split(";")[0];
+check("owner session opens private artifact", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: ownerCookie } })).status === 200);
 
 if (process.env.KEEP !== "1") {
   const del = await call("artifact_delete", { id });

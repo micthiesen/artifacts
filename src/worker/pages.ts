@@ -5,15 +5,19 @@ import type { ArtifactMeta } from "./hub.ts";
 import type { FrameBoot, Role, ShellBoot } from "../shared/protocol.ts";
 
 const KIT = "/kit/v1";
+declare const __ASSET_VERSION__: string;
+const ASSET_VERSION = typeof __ASSET_VERSION__ === "string" ? __ASSET_VERSION__ : "dev";
+const kit = (file: string) => `${KIT}/${file}?v=${ASSET_VERSION}`;
+const asset = (path: string) => `${path}?v=${ASSET_VERSION}`;
 
 export const KIT_IMPORTS: Record<string, string> = {
-  react: `${KIT}/react.js`,
-  "react/jsx-runtime": `${KIT}/jsx-runtime.js`,
-  "react-dom/client": `${KIT}/react-dom-client.js`,
-  "@a/ui": `${KIT}/ui.js`,
-  "@a/hooks": `${KIT}/hooks.js`,
-  "lucide-react": `${KIT}/lucide.js`,
-  recharts: `${KIT}/recharts.js`,
+  react: kit("react.js"),
+  "react/jsx-runtime": kit("jsx-runtime.js"),
+  "react-dom/client": kit("react-dom-client.js"),
+  "@a/ui": kit("ui.js"),
+  "@a/hooks": kit("hooks.js"),
+  "lucide-react": kit("lucide.js"),
+  recharts: kit("recharts.js"),
 };
 
 export function escapeHtml(s: string): string {
@@ -36,7 +40,7 @@ function page(title: string, body: string, init: ResponseInit = {}): Response {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="/static/shell.css">
+<link rel="stylesheet" href="${asset("/static/shell.css")}">
 </head>
 <body>${body}</body>
 </html>`;
@@ -80,6 +84,15 @@ export function messagePage(title: string, message: string, status: number, acti
   );
 }
 
+export function ownerLoginPage(): Response {
+  return page(
+    "Owner sign-in",
+    `<main class="message"><h1>Owner sign-in</h1><p id="owner-status" class="muted">Signing in…</p>
+<form id="owner-form" hidden><input id="owner-key" type="password" autocomplete="current-password" placeholder="Owner key" aria-label="Owner key"> <button class="button" type="submit">Sign in</button></form></main>
+<script type="module" src="${asset("/static/owner.js")}"></script>`,
+  );
+}
+
 export function shellPage(boot: ShellBoot): Response {
   return page(
     boot.title,
@@ -88,14 +101,17 @@ export function shellPage(boot: ShellBoot): Response {
 <div id="frame-host" class="frame-host"></div>
 </div>
 <script type="application/json" id="shell-boot">${scriptJson(boot)}</script>
-<script type="module" src="/static/shell.js"></script>`,
+<script type="module" src="${asset("/static/shell.js")}"></script>`,
   );
 }
 
-export function frameCsp(origin: string): string {
+export function frameCsp(origin: string, sandbox = true): string {
   const kit = `${origin}${KIT}/`;
   return [
-    "sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads",
+    // The render checker opens frames top-level with no cookies; Browser Run
+    // doesn't run module scripts from an opaque origin, so check mode is the
+    // one case served unsandboxed. Network access stays blocked either way.
+    ...(sandbox ? ["sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"] : []),
     "default-src 'none'",
     `script-src 'unsafe-inline' data: ${kit}`,
     `style-src 'unsafe-inline' ${kit}`,
@@ -111,25 +127,32 @@ export function frameCsp(origin: string): string {
   ].join("; ");
 }
 
-export function frameDocument(origin: string, meta: ArtifactMeta, build: Build): Response {
-  const boot: FrameBoot = { artifactId: meta.id, version: meta.version, entry: build.entry, data: build.data, title: meta.title };
+export function frameDocument(origin: string, meta: ArtifactMeta, build: Build, check = false): Response {
+  const boot: FrameBoot = {
+    artifactId: meta.id,
+    version: meta.version,
+    entry: build.entry,
+    data: build.data,
+    title: meta.title,
+    ...(check ? { check: true } : {}),
+  };
   const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="${KIT}/kit.css">
+<link rel="stylesheet" href="${kit("kit.css")}">
 <style>${build.css.replace(/<\/style/gi, "<\\/style")}</style>
 <script type="importmap">${scriptJson({ imports: { ...KIT_IMPORTS, ...build.imports } })}</script>
 <script type="application/json" id="art-boot">${scriptJson(boot)}</script>
-<script type="module">import { boot } from "${KIT}/runtime.js"; boot();</script>
+<script type="module" src="${kit("boot.js")}"></script>
 </head>
 <body><div id="root"></div></body>
 </html>`;
   return new Response(html, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": frameCsp(origin),
+      "Content-Security-Policy": frameCsp(origin, !check),
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": "private, no-store",

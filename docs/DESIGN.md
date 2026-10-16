@@ -39,6 +39,19 @@ and points the bare kit specifiers at `/kit/v1/*.js`. Tailwind classes used in
 artifact source are compiled into a per-version stylesheet on top of the kit
 CSS.
 
+## Write-time checks
+
+- **Static, at compile time:** every write is checked before saving. Syntax errors, imports outside the allowlist, named imports a module doesn't export (from the generated `src/worker/kit-exports.json`, which covers lucide icons too), and MDX components the kit doesn't provide all reject the write, with "did you mean" suggestions.
+- **Render check, after saving:**
+  - Cloudflare Browser Run loads the frame top-level in check mode. The runtime boots without a shell and writes `<pre id="art-check">{status, errors, textLength}</pre>`, which the Worker scrapes.
+  - Check-mode frames are the only frames served without the CSP `sandbox` directive: Browser Run doesn't execute module scripts from an opaque origin. They still have `connect-src 'none'`, need a 2-minute token, and the checker's browser has no cookies.
+  - Browser Run's scrape doesn't reliably honour `waitForSelector`, so the check also waits for network idle plus 1.5 s.
+- **Rate limit:** the free plan allows one Browser Run call every 10 s. The hub reserves slots, waits inline when the next slot is under 8 s away, and otherwise queues the check on a Durable Object alarm. Results are stored per version and failures go to `artifact_errors`.
+
+## Owner sign-in
+
+`/owner#<OWNER_LOGIN_KEY>` gives the owner a one-year session without Access. The key stays in the URL fragment and is posted same-origin.
+
 ## Shared state
 
 Shared state is a key-value map per artifact. The last write per key wins, in

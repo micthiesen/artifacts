@@ -81,8 +81,10 @@ export function readCookie(request: Request, name: string): string | null {
   return null;
 }
 
-export function sessionCookie(token: string): string {
-  return `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL}`;
+export const OWNER_SESSION_TTL = 365 * 24 * 3600;
+
+export function sessionCookie(token: string, ttl = SESSION_TTL): string {
+  return `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${ttl}`;
 }
 
 export function clearSessionCookie(): string {

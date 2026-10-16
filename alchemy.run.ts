@@ -53,6 +53,8 @@ export default Alchemy.Stack(
         SESSION_SECRET: yield* Config.Redacted("SESSION_SECRET"),
         LOGIN_SECRET: yield* Config.Redacted("LOGIN_SECRET"),
         MCP_TOKEN: yield* Config.Redacted("MCP_TOKEN"),
+        OWNER_LOGIN_KEY: yield* Config.Redacted("OWNER_LOGIN_KEY"),
+        BROWSER: Cloudflare.Browser(),
         OWNER_EMAILS: yield* Config.String("OWNER_EMAILS"),
         AUTH_URL: authUrl,
       },

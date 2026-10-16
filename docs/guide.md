@@ -26,7 +26,8 @@ email code, so they need no account.
 - **Find before reading:** use `artifact_grep` or a ranged `artifact_read` to locate text, then `artifact_edit` with an `oldText` that matches exactly once.
 - **Data changes:** use `artifact_patch_data` (JSON Patch) instead of rewriting the file.
 - **New files or rewrites:** use `artifact_write_files`. Pass `null` to delete a file.
-- **Validation:** every write is validated and compiled. On any error nothing is saved and the errors come back; fix them and retry.
+- **Validation:** every write is compiled and checked for unknown components and import names. On any error nothing is saved and the errors come back; fix them and retry.
+- **Render check:** after a successful write, the artifact is rendered in a headless browser and the result is part of the tool response. If it reports "Render check FAILED", the version is saved but broken for viewers: fix it with `artifact_edit` right away. `artifact_check` re-runs the check.
 - **Version checks and undo:** pass `baseVersion` to guard against concurrent edits. Use `artifact_history` and `artifact_revert` to undo.
 
 ## Sharing

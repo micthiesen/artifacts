@@ -3,6 +3,7 @@
 // plenty for a handful of viewers and keeps every write transactional.
 import { DurableObject } from "cloudflare:workers";
 import { buildArtifact, type Build, type CompileError } from "./compile.ts";
+import { renderCheck, type CheckEnv, type RenderCheck } from "./check.ts";
 import { applyJsonPatch, applyTextEdits, EditError, grepFiles, type JsonPatchOp, type TextEdit } from "./edit.ts";
 import {
   SHARED_STATE_MAX_BYTES,
@@ -41,19 +42,26 @@ export type HubApi = AsyncMethods<
     ArtifactHub,
     | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create" | "editText" | "writeFiles"
     | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState" | "recordError" | "errors"
+    | "runRenderCheck"
   >
 > & { fetch(request: Request): Promise<Response> };
 
 type SocketTag = { id: string; email: string | null; role: Role };
 
 const HISTORY_KEEP = 50;
+// Browser Run free plan: one quick action every 10 s.
+const CHECK_SPACING_MS = 10_500;
+const CHECK_INLINE_WAIT_MS = 8_000;
 const ERRORS_KEEP = 30;
 
 export class ArtifactHub extends DurableObject {
   private sql: SqlStorage;
+  private checkEnv: CheckEnv;
+  private nextCheckAt = 0;
 
-  constructor(ctx: DurableObjectState, env: never) {
-    super(ctx, env);
+  constructor(ctx: DurableObjectState, env: CheckEnv) {
+    super(ctx, env as never);
+    this.checkEnv = env;
     this.sql = ctx.storage.sql;
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS artifacts (
@@ -71,6 +79,9 @@ export class ArtifactHub extends DurableObject {
       CREATE TABLE IF NOT EXISTS state (
         artifact_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, seq INTEGER NOT NULL, by TEXT,
         PRIMARY KEY (artifact_id, key));
+      CREATE TABLE IF NOT EXISTS checks (
+        artifact_id TEXT PRIMARY KEY, version INTEGER NOT NULL, origin TEXT NOT NULL, status TEXT NOT NULL,
+        result TEXT, at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS errors (
         artifact_id TEXT NOT NULL, at TEXT NOT NULL, version INTEGER NOT NULL, viewer TEXT, message TEXT NOT NULL,
         stack TEXT);
@@ -258,7 +269,7 @@ export class ArtifactHub extends DurableObject {
   delete(id: string) {
     this.requireArtifact(id);
     this.ctx.storage.transactionSync(() => {
-      for (const t of ["files", "history", "builds", "shares", "state", "errors"]) {
+      for (const t of ["files", "history", "builds", "shares", "state", "errors", "checks"]) {
         this.sql.exec(`DELETE FROM ${t} WHERE artifact_id = ?`, id);
       }
       this.sql.exec(`DELETE FROM artifacts WHERE id = ?`, id);
@@ -339,6 +350,86 @@ export class ArtifactHub extends DurableObject {
     return this.sql
       .exec(`SELECT at, version, viewer, message, stack FROM errors WHERE artifact_id = ? ORDER BY at DESC`, id)
       .toArray();
+  }
+
+  // ---- render checks -------------------------------------------------------
+
+  /**
+   * Render-check the current version. Runs inline when a Browser Run slot is
+   * free within a few seconds; otherwise queues it on an alarm. Reuses a stored
+   * result for the same version.
+   */
+  async runRenderCheck(id: string, origin: string, force = false): Promise<RenderCheck & { version: number }> {
+    const version = this.requireArtifact(id).version as number;
+    const stored = this.sql.exec(`SELECT version, status, result FROM checks WHERE artifact_id = ?`, id).toArray()[0];
+    if (!force && stored && stored.version === version && stored.status === "done") {
+      const previous = JSON.parse(stored.result as string) as RenderCheck;
+      // Only definitive results are reused; a skipped check is retried.
+      if (previous.status === "ok" || previous.status === "errors") return { ...previous, version };
+    }
+    const now = Date.now();
+    const slot = Math.max(now, this.nextCheckAt);
+    if (slot - now <= CHECK_INLINE_WAIT_MS) {
+      this.nextCheckAt = slot + CHECK_SPACING_MS;
+      if (slot > now) await new Promise((r) => setTimeout(r, slot - now));
+      const result = await this.runCheck(id, version, origin);
+      if (result) return { ...result, version };
+    }
+    return { ...this.queueCheck(id, version, origin), version };
+  }
+
+  async alarm() {
+    const next = this.sql.exec(`SELECT artifact_id, origin FROM checks WHERE status = 'queued' ORDER BY at LIMIT 1`).toArray()[0];
+    if (!next) return;
+    const id = next.artifact_id as string;
+    const row = this.sql.exec(`SELECT version FROM artifacts WHERE id = ?`, id).toArray()[0];
+    if (!row) {
+      this.sql.exec(`DELETE FROM checks WHERE artifact_id = ?`, id);
+    } else {
+      this.nextCheckAt = Date.now() + CHECK_SPACING_MS;
+      await this.runCheck(id, row.version as number, next.origin as string);
+    }
+    const remaining = this.sql.exec(`SELECT COUNT(*) AS n FROM checks WHERE status = 'queued'`).one().n as number;
+    if (remaining > 0) await this.ctx.storage.setAlarm(Math.max(Date.now() + CHECK_SPACING_MS, this.nextCheckAt));
+  }
+
+  /** Runs one check and stores it. Returns null when Browser Run rate-limited us. */
+  private async runCheck(id: string, version: number, origin: string): Promise<RenderCheck | null> {
+    const result = await renderCheck(this.checkEnv, origin, id, version);
+    if (result.status === "rate-limited") {
+      this.nextCheckAt = Date.now() + CHECK_SPACING_MS;
+      return null;
+    }
+    this.sql.exec(
+      `INSERT INTO checks (artifact_id, version, origin, status, result, at) VALUES (?, ?, ?, 'done', ?, ?)
+       ON CONFLICT (artifact_id) DO UPDATE SET version = excluded.version, origin = excluded.origin,
+         status = 'done', result = excluded.result, at = excluded.at`,
+      id,
+      version,
+      origin,
+      JSON.stringify(result),
+      Date.now(),
+    );
+    if (result.status === "errors") for (const e of result.errors) this.recordError(id, "render-check", e);
+    return result;
+  }
+
+  private queueCheck(id: string, version: number, origin: string): RenderCheck {
+    this.sql.exec(
+      `INSERT INTO checks (artifact_id, version, origin, status, result, at) VALUES (?, ?, ?, 'queued', NULL, ?)
+       ON CONFLICT (artifact_id) DO UPDATE SET version = excluded.version, origin = excluded.origin,
+         status = 'queued', result = NULL, at = excluded.at`,
+      id,
+      version,
+      origin,
+      Date.now(),
+    );
+    const queued = this.sql.exec(`SELECT COUNT(*) AS n FROM checks WHERE status = 'queued'`).one().n as number;
+    const at = Math.max(Date.now() + CHECK_SPACING_MS, this.nextCheckAt);
+    void this.ctx.storage.getAlarm().then((existing) => {
+      if (existing === null || existing > at) return this.ctx.storage.setAlarm(at);
+    });
+    return { status: "queued", inSeconds: Math.ceil((at - Date.now()) / 1000) + (queued - 1) * 11 + 5 };
   }
 
   // ---- sync sockets --------------------------------------------------------

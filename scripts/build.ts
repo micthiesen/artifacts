@@ -1,7 +1,8 @@
-// Builds the Worker bundles and the shell client. The kit is built separately
+// Builds the shell client and the Worker bundles. The kit is built separately
 // (scripts/build-kit.ts) into dist/kit, which is also the Worker's asset directory.
 import { build } from "esbuild";
-import { cp, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { cp, mkdir, readdir, readFile } from "node:fs/promises";
 
 const common = {
   bundle: true,
@@ -12,6 +13,20 @@ const common = {
   logLevel: "warning" as const,
 };
 
+await mkdir("dist/kit/static", { recursive: true });
+await build({ ...common, entryPoints: ["src/shell/shell.ts"], outfile: "dist/kit/static/shell.js", platform: "browser" });
+await build({ ...common, entryPoints: ["src/shell/owner.ts"], outfile: "dist/kit/static/owner.js", platform: "browser" });
+await cp("src/shell/shell.css", "dist/kit/static/shell.css");
+
+// Static files keep stable names, and edge caches hold them, so the Worker
+// references them with ?v=<hash of all assets>.
+const hash = createHash("sha256");
+for (const name of (await readdir("dist/kit", { recursive: true })).sort()) {
+  const data = await readFile(`dist/kit/${name}`).catch(() => null);
+  if (data) hash.update(name).update(data);
+}
+const assetVersion = hash.digest("hex").slice(0, 12);
+
 await build({
   ...common,
   entryPoints: ["src/worker/index.ts"],
@@ -21,7 +36,7 @@ await build({
   conditions: ["worker", "browser"],
   external: ["cloudflare:workers"],
   loader: { ".css": "text", ".md": "text" },
-  metafile: true,
+  define: { __ASSET_VERSION__: JSON.stringify(assetVersion) },
 });
 await build({
   ...common,
@@ -29,7 +44,4 @@ await build({
   outfile: "build/auth/index.js",
   platform: "neutral",
 });
-await mkdir("dist/kit/static", { recursive: true });
-await build({ ...common, entryPoints: ["src/shell/shell.ts"], outfile: "dist/kit/static/shell.js", platform: "browser" });
-await cp("src/shell/shell.css", "dist/kit/static/shell.css");
-console.log("built build/worker, build/auth, dist/kit/static");
+console.log(`built build/worker (assets ${assetVersion}), build/auth, dist/kit/static`);

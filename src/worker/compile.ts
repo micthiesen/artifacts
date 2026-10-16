@@ -10,6 +10,7 @@ import themeCss from "tailwindcss/theme.css";
 import utilitiesCss from "tailwindcss/utilities.css";
 import kitThemeCss from "../kit/theme.css";
 import type { JsonValue } from "../shared/protocol.ts";
+import kitExports from "./kit-exports.json";
 
 export const ALLOWED_IMPORTS = new Set([
   "react",
@@ -78,7 +79,67 @@ export async function compileFile(
       });
     }
   }
+  errors.push(...checkNames(path, code));
   return { module: { path, code, classes: extractCandidates(source) }, errors };
+}
+
+const MODULE_EXPORTS: Record<string, Set<string>> = Object.fromEntries(
+  Object.entries(kitExports.modules).map(([m, names]) => [m, new Set(names)]),
+);
+const MDX_COMPONENTS = new Set(kitExports.mdxComponents);
+
+/** Reject named imports a module doesn't export and MDX components the kit lacks. */
+function checkNames(path: string, code: string): CompileError[] {
+  const errors: CompileError[] = [];
+  for (const imp of lexImports(code)) {
+    const exported = imp.spec ? MODULE_EXPORTS[imp.spec] : undefined;
+    if (!exported || imp.ss < 0 || imp.se <= imp.ss) continue;
+    const statement = code.slice(imp.ss, imp.se);
+    const named = /\{([^}]*)\}/.exec(statement)?.[1];
+    if (!named) continue;
+    for (const part of named.split(",")) {
+      const name = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]?.trim();
+      if (!name || exported.has(name)) continue;
+      errors.push({ path, message: `"${name}" is not exported by ${imp.spec}.${suggest(name, exported)}` });
+    }
+  }
+  if (path.endsWith(".mdx") || path.endsWith(".md")) {
+    for (const m of code.matchAll(/_missingMdxReference\("([^"]+)"/g)) {
+      const name = m[1].split(".")[0];
+      if (!/^[A-Z]/.test(name) || MDX_COMPONENTS.has(name) || declaredInModule(code, name)) continue;
+      errors.push({ path, message: `<${name}> is not a kit component.${suggest(name, MDX_COMPONENTS)} See artifact_guide for the list.` });
+    }
+  }
+  return errors;
+}
+
+function declaredInModule(code: string, name: string): boolean {
+  return new RegExp(`(?:import|export)\\s[^;]*\\b${name}\\b|(?:const|let|function)\\s+${name}\\b`).test(code);
+}
+
+function suggest(name: string, options: Set<string>): string {
+  let best: string | null = null;
+  let bestScore = Infinity;
+  const lower = name.toLowerCase();
+  for (const o of options) {
+    const d = distance(lower, o.toLowerCase());
+    if (d < bestScore) [best, bestScore] = [o, d];
+  }
+  return best && bestScore <= Math.max(2, Math.floor(name.length / 3)) ? ` Did you mean ${best}?` : "";
+}
+
+function distance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 3) return 99;
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]++;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+  }
+  return row[b.length];
 }
 
 const SOURCE_EXTENSIONS = ["", ".tsx", ".ts", ".jsx", ".js", ".mdx", ".md"];
@@ -89,7 +150,7 @@ export function resolveImport(from: string, spec: string, files: Set<string>): s
   return null;
 }
 
-type LexedImport = { spec: string | undefined; s: number; e: number };
+type LexedImport = { spec: string | undefined; s: number; e: number; ss: number; se: number };
 
 // es-module-lexer 2.x names fields specifier/start/end; 1.x used n/s/e.
 function lexImports(code: string): LexedImport[] {
@@ -98,6 +159,8 @@ function lexImports(code: string): LexedImport[] {
     spec: (i.specifier ?? i.n) as string | undefined,
     s: (i.start ?? i.s) as number,
     e: (i.end ?? i.e) as number,
+    ss: (i.importStart ?? i.ss) as number,
+    se: (i.importEnd ?? i.se) as number,
   }));
 }
 

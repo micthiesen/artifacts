@@ -43,3 +43,14 @@ test("MDX supports GFM tables and frontmatter is stripped", async () => {
   expect(r.module!.code).toContain("table");
   expect(r.module!.code).not.toContain("title: X");
 });
+
+test("unknown kit names are rejected with suggestions", async () => {
+  const tsx = await compileFile("app.tsx", 'import { Buton, Card } from "@a/ui";\nimport { useShared } from "@a/hooks";\nexport default () => <Card><Buton /></Card>;', new Set());
+  expect(tsx.errors.map((e) => e.message)).toEqual(['"Buton" is not exported by @a/ui. Did you mean Button?']);
+  const mdx = await compileFile("index.mdx", "# Hi\n\n<Pol id=\"x\" options={[\"a\"]} />\n\n<Poll id=\"y\" options={[\"a\"]} />\n", new Set());
+  expect(mdx.errors.map((e) => e.message)).toEqual(["<Pol> is not a kit component. Did you mean Poll? See artifact_guide for the list."]);
+  const local = await compileFile("index.mdx", "export const Hello = () => <b>hi</b>;\n\n<Hello />\n", new Set());
+  expect(local.errors).toEqual([]);
+  const icons = await compileFile("app.tsx", 'import { Check, NotAnIcon } from "lucide-react";\nexport default () => <Check />;', new Set());
+  expect(icons.errors.length).toBe(1);
+});

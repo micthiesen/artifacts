@@ -179,8 +179,14 @@ function renderFatal(el: HTMLElement, err: Error) {
 export async function boot(options: BootOptions = {}): Promise<void> {
   if (booted) return;
   booted = true;
+  const check = readCheckFlag();
   const parent = options.parent ?? window.parent;
-  const send = (m: FrameMessage) => parent.postMessage(m, "*");
+  const checkErrors: string[] = [];
+  (window as { __artErrors?: string[] }).__artErrors = checkErrors;
+  const send = (m: FrameMessage) => {
+    if (!check) return parent.postMessage(m, "*");
+    if (m.t === "error") checkErrors.push(m.message);
+  };
   store.setTransport(send);
   installErrorHandlers(send);
   installLinkHandler(send);
@@ -234,7 +240,12 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     }
   });
 
-  send({ t: "ready" });
+  if (check) {
+    // No shell: start from an empty, read-only state.
+    store.init({ viewer: { email: null, role: "view" }, local: {}, shared: {}, presence: [], theme: "light" });
+    applyTheme("light");
+    resolveInit();
+  } else send({ t: "ready" });
   await initialized;
 
   let mod: { default?: React.ComponentType };
@@ -246,6 +257,7 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     const e = err instanceof Error ? err : new Error(String(err));
     send({ t: "error", message: `Failed to load ${bootData.entry}: ${e.message}`, stack: e.stack });
     renderFatal(rootEl, e);
+    if (check) emitCheck("error", checkErrors, rootEl);
     return;
   }
   const Entry = mod.default;
@@ -253,6 +265,7 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     const e = new Error(`${bootData.entry} has no default export. app.tsx must \`export default function App() {…}\`.`);
     send({ t: "error", message: e.message });
     renderFatal(rootEl, e);
+    if (check) emitCheck("error", checkErrors, rootEl);
     return;
   }
   root ??= createRoot(rootEl, {
@@ -262,4 +275,27 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     },
   });
   root.render(<Frame Entry={Entry} markdown={markdown} />);
+  if (check) {
+    // Let effects and lazy chunks (charts) settle before declaring success.
+    setTimeout(() => emitCheck(checkErrors.length ? "error" : "rendered", checkErrors, rootEl), 600);
+  }
+}
+
+/** Publishes the render-check result as `<pre id="art-check">` JSON for the headless reader. */
+function emitCheck(status: "rendered" | "error", errors: string[], rootEl: HTMLElement) {
+  if (document.getElementById("art-check")) return;
+  const el = document.createElement("pre");
+  el.id = "art-check";
+  // Kept inside the viewport (1px, transparent): the scraper skips off-screen elements.
+  el.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:1px;margin:0;overflow:hidden;opacity:0;pointer-events:none";
+  el.textContent = JSON.stringify({ status, errors, textLength: rootEl.textContent?.trim().length ?? 0 });
+  document.body.appendChild(el);
+}
+
+function readCheckFlag(): boolean {
+  try {
+    return readBoot().check === true;
+  } catch {
+    return false;
+  }
 }

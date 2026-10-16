@@ -1,6 +1,8 @@
 // Stateless MCP server (Streamable HTTP, JSON responses only). Every tool acts
 // as the owner; the bearer token is the only credential.
 import type { ArtifactHub, HubApi } from "./hub.ts";
+import { describeCheck, type RenderCheck } from "./check.ts";
+import type { Env } from "./index.ts";
 import guideIntro from "../../docs/guide.md";
 import catalog from "../kit/CATALOG.md";
 
@@ -12,6 +14,7 @@ const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 const INSTRUCTIONS = `Shared Artifacts publishes small interactive pages (reports, dashboards, polls, checklists, mini apps) that verified people can open in a browser, with per-viewer browser storage and live shared state. Use these artifact_* tools, not Executor's built-in create-artifact, whenever you make an artifact. Call artifact_guide once before writing your first artifact in a session. Change existing artifacts with artifact_edit, artifact_patch_data or artifact_write_files; never recreate one to change it.`;
 
 type Hub = HubApi;
+type Ctx = { hub: Hub; origin: string; env: Env };
 type Json = Record<string, unknown>;
 
 type Tool = {
@@ -20,7 +23,7 @@ type Tool = {
   description: string;
   inputSchema: Json;
   annotations?: Json;
-  run: (args: Json, ctx: { hub: Hub; origin: string }) => Promise<ToolResult>;
+  run: (args: Json, ctx: Ctx) => Promise<ToolResult>;
 };
 
 type ToolResult = { text: string; structured?: unknown; isError?: boolean };
@@ -51,7 +54,8 @@ const shareList = {
 
 const url = (origin: string, artifactId: string) => `${origin}/a/${artifactId}`;
 
-function writeResult(r: Awaited<ReturnType<ArtifactHub["create"]>>, origin: string): ToolResult {
+async function writeResult(r: Awaited<ReturnType<ArtifactHub["create"]>>, ctx: Ctx): Promise<ToolResult> {
+  const { origin } = ctx;
   if (!r.ok) {
     const lines = r.errors.map((e) => `- ${e.path ? `${e.path}${"line" in e && e.line ? `:${e.line}` : ""}: ` : ""}${e.message}`);
     return {
@@ -60,11 +64,17 @@ function writeResult(r: Awaited<ReturnType<ArtifactHub["create"]>>, origin: stri
       structured: r,
     };
   }
-  const out = { ...r, url: url(origin, r.id) };
+  const check = await checkAndRecord(ctx, r.id, r.version);
+  const out = { ...r, url: url(origin, r.id), renderCheck: check };
   return {
-    text: `Saved ${r.id} v${r.version}: ${out.url}\nFiles: ${r.files.join(", ")}\nRuntime errors from viewers appear in artifact_errors.`,
+    text: `Saved ${r.id} v${r.version}: ${out.url}\nFiles: ${r.files.join(", ")}\n${describeCheck(check)}`,
     structured: out,
   };
+}
+
+async function checkAndRecord(ctx: Ctx, id: string, _version: number, force = false): Promise<RenderCheck> {
+  const { version: _v, ...check } = await ctx.hub.runRenderCheck(id, ctx.origin, force);
+  return check as RenderCheck;
 }
 
 export const TOOLS: Tool[] = [
@@ -115,7 +125,8 @@ export const TOOLS: Tool[] = [
       required: ["title", "files"],
       additionalProperties: false,
     },
-    run: async (args, { hub, origin }) => {
+    run: async (args, ctx) => {
+      const { hub } = ctx;
       const r = await hub.create({
         title: String(args.title),
         description: typeof args.description === "string" ? args.description : "",
@@ -124,7 +135,7 @@ export const TOOLS: Tool[] = [
       if (r.ok && (Array.isArray(args.share) || typeof args.public === "boolean")) {
         await hub.share(r.id, { add: (args.share as never) ?? [], public: args.public as boolean | undefined });
       }
-      return writeResult(r, origin);
+      return writeResult(r, ctx);
     },
   },
   {
@@ -215,10 +226,10 @@ export const TOOLS: Tool[] = [
       required: ["id", "path", "edits"],
       additionalProperties: false,
     },
-    run: async (args, { hub, origin }) =>
+    run: async (args, ctx) =>
       writeResult(
-        await hub.editText(String(args.id), String(args.path), args.edits as never, args.baseVersion as number | undefined),
-        origin,
+        await ctx.hub.editText(String(args.id), String(args.path), args.edits as never, args.baseVersion as number | undefined),
+        ctx,
       ),
   },
   {
@@ -250,10 +261,10 @@ export const TOOLS: Tool[] = [
       required: ["id", "path", "ops"],
       additionalProperties: false,
     },
-    run: async (args, { hub, origin }) =>
+    run: async (args, ctx) =>
       writeResult(
-        await hub.patchData(String(args.id), String(args.path), args.ops as never, args.baseVersion as number | undefined),
-        origin,
+        await ctx.hub.patchData(String(args.id), String(args.path), args.ops as never, args.baseVersion as number | undefined),
+        ctx,
       ),
   },
   {
@@ -271,10 +282,10 @@ export const TOOLS: Tool[] = [
       required: ["id", "files"],
       additionalProperties: false,
     },
-    run: async (args, { hub, origin }) =>
+    run: async (args, ctx) =>
       writeResult(
-        await hub.writeFiles(String(args.id), args.files as Record<string, string | null>, args.baseVersion as number | undefined),
-        origin,
+        await ctx.hub.writeFiles(String(args.id), args.files as Record<string, string | null>, args.baseVersion as number | undefined),
+        ctx,
       ),
   },
   {
@@ -385,7 +396,22 @@ export const TOOLS: Tool[] = [
       required: ["id", "version"],
       additionalProperties: false,
     },
-    run: async (args, { hub, origin }) => writeResult(await hub.revert(String(args.id), Number(args.version)), origin),
+    run: async (args, ctx) => writeResult(await ctx.hub.revert(String(args.id), Number(args.version)), ctx),
+  },
+  {
+    name: "artifact_check",
+    title: "Shared Artifacts: render check",
+    description:
+      "Shared Artifacts: render the current version in a headless browser and report runtime errors. Writes already run this automatically; use it to re-check or after a skipped check.",
+    inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    run: async (args, ctx) => {
+      const meta = await ctx.hub.meta(String(args.id));
+      if (!meta) return { isError: true, text: `No artifact ${args.id}; see artifact_list.` };
+      const check = await checkAndRecord(ctx, meta.id, meta.version);
+      // A stored "done" result for this version is returned as is.
+      return { text: `v${meta.version}: ${describeCheck(check)}`, structured: { version: meta.version, renderCheck: check }, isError: check.status === "errors" };
+    },
   },
   {
     name: "artifact_delete",
@@ -404,7 +430,7 @@ const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
 
 type RpcRequest = { jsonrpc: "2.0"; id?: string | number | null; method: string; params?: Json };
 
-export async function handleMcp(request: Request, hub: Hub, origin: string): Promise<Response> {
+export async function handleMcp(request: Request, hub: Hub, origin: string, env: Env): Promise<Response> {
   if (request.method !== "POST") {
     return new Response("Use POST for MCP requests.", { status: 405, headers: { Allow: "POST" } });
   }
@@ -415,7 +441,7 @@ export async function handleMcp(request: Request, hub: Hub, origin: string): Pro
     return rpcResponse({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
   }
   const batch = Array.isArray(body) ? body : [body];
-  const responses = (await Promise.all(batch.map((msg) => handleMessage(msg, hub, origin)))).filter(Boolean);
+  const responses = (await Promise.all(batch.map((msg) => handleMessage(msg, { hub, origin, env })))).filter(Boolean);
   if (responses.length === 0) return new Response(null, { status: 202 });
   return rpcResponse(Array.isArray(body) ? responses : responses[0]);
 }
@@ -424,7 +450,7 @@ function rpcResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
 }
 
-async function handleMessage(msg: RpcRequest, hub: Hub, origin: string): Promise<Json | null> {
+async function handleMessage(msg: RpcRequest, ctx: Ctx): Promise<Json | null> {
   const isNotification = msg.id === undefined;
   const reply = (result: unknown) => (isNotification ? null : { jsonrpc: "2.0", id: msg.id, result });
   const fail = (code: number, message: string) => (isNotification ? null : { jsonrpc: "2.0", id: msg.id, error: { code, message } });
@@ -448,7 +474,7 @@ async function handleMessage(msg: RpcRequest, hub: Hub, origin: string): Promise
       const tool = TOOL_MAP.get(String(msg.params?.name));
       if (!tool) return fail(-32602, `Unknown tool ${msg.params?.name}`);
       try {
-        const r = await tool.run((msg.params?.arguments as Json) ?? {}, { hub, origin });
+        const r = await tool.run((msg.params?.arguments as Json) ?? {}, ctx);
         return reply({
           content: [{ type: "text", text: r.text }],
           ...(r.structured !== undefined ? { structuredContent: r.structured } : {}),

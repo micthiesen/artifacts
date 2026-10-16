@@ -1,10 +1,11 @@
 // Shared Artifacts Worker: viewer pages, sessions, frame documents, sync and MCP.
 import { handleMcp } from "./mcp.ts";
-import { frameDocument, indexPage, messagePage, shellPage } from "./pages.ts";
+import { frameDocument, indexPage, messagePage, ownerLoginPage, shellPage } from "./pages.ts";
 import {
   clearSessionCookie,
   readCookie,
   SESSION_COOKIE,
+  OWNER_SESSION_TTL,
   SESSION_TTL,
   sessionCookie,
   signToken,
@@ -21,10 +22,14 @@ export type Env = {
   SESSION_SECRET: string;
   LOGIN_SECRET: string;
   MCP_TOKEN: string;
+  /** Secret for the owner sign-in link (/owner#<key>), which skips Access. */
+  OWNER_LOGIN_KEY?: string;
   /** Comma-separated owner emails. */
   OWNER_EMAILS: string;
   /** Base URL of the Access-protected auth Worker; empty until sign-in is configured. */
   AUTH_URL?: string;
+  /** Cloudflare Browser Run, used for render checks after writes. */
+  BROWSER?: { quickAction(action: "scrape", options: Record<string, unknown>): Promise<Response> };
 };
 
 const FRAME_TTL = 10 * 60;
@@ -46,7 +51,7 @@ export default {
           headers: { "Content-Type": "application/json" },
         });
       }
-      return handleMcp(request, hub, url.origin);
+      return handleMcp(request, hub, url.origin, env);
     }
     if (path === "/healthz") return new Response("ok");
 
@@ -57,6 +62,10 @@ export default {
       return indexPage(viewer, artifacts, Boolean(env.AUTH_URL));
     }
     if (path === "/login") return login(url, env);
+    if (path === "/owner") {
+      if (request.method === "GET") return ownerLoginPage();
+      if (request.method === "POST") return ownerLogin(request, url, env);
+    }
     if (path === "/auth/callback") return authCallback(url, env);
     if (path === "/logout" && request.method === "POST") {
       if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
@@ -65,11 +74,11 @@ export default {
 
     const frame = /^\/frame\/([a-z0-9]+)$/.exec(path);
     if (frame) {
-      const claims = await verifyToken<{ id: string }>(env.SESSION_SECRET, "frame", url.searchParams.get("t"));
+      const claims = await verifyToken<{ id: string; c?: boolean }>(env.SESSION_SECRET, "frame", url.searchParams.get("t"));
       if (!claims || claims.id !== frame[1]) return new Response("frame link expired; reload the page", { status: 403 });
       const result = await hub.build(frame[1]);
       if (!result) return new Response("not found", { status: 404 });
-      return frameDocument(url.origin, result.meta, result.build);
+      return frameDocument(url.origin, result.meta, result.build, claims.c === true);
     }
 
     const art = /^\/a\/([a-z0-9]+)(\/sync|\/errors)?$/.exec(path);
@@ -155,6 +164,18 @@ async function authCallback(url: URL, env: Env): Promise<Response> {
     status: 303,
     headers: { Location: safeNext(url.searchParams.get("next")), "Set-Cookie": sessionCookie(session) },
   });
+}
+
+async function ownerLogin(request: Request, url: URL, env: Env): Promise<Response> {
+  if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
+  const body = (await request.json().catch(() => null)) as { key?: unknown } | null;
+  const key = typeof body?.key === "string" ? body.key : "";
+  const owner = [...ownerEmails(env)][0];
+  if (!env.OWNER_LOGIN_KEY || !owner || !timingSafeEqual(key, env.OWNER_LOGIN_KEY)) {
+    return new Response("invalid key", { status: 403 });
+  }
+  const session = await signToken(env.SESSION_SECRET, "session", OWNER_SESSION_TTL, { e: owner });
+  return new Response(null, { status: 204, headers: { "Set-Cookie": sessionCookie(session, OWNER_SESSION_TTL) } });
 }
 
 function safeNext(next: string | null): string {

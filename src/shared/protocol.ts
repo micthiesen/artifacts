@@ -59,6 +59,12 @@ export type FrameBoot = {
   /** Contents of data/*.json files keyed by path, e.g. { "data/repos.json": [...] }. */
   data: Record<string, JsonValue>;
   title: string;
+  /**
+   * Render check: the frame is loaded top-level by a headless browser. It boots
+   * without a shell, records errors in `window.__artErrors`, and sets
+   * `<pre id="art-check">{status, errors, textLength}</pre>` once the first render settles.
+   */
+  check?: boolean;
 };
 
 export const SHARED_VALUE_MAX_BYTES = 64 * 1024;
