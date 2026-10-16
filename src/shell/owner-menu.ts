@@ -375,7 +375,7 @@ export function initOwnerMenu(boot: ShellBoot): void {
             const label = isDomain ? `Everyone at ${s.email.slice(1)}` : s.email;
             return h(
               "li",
-              { class: "om-row" },
+              { class: "om-row om-share" },
               h("span", { class: "om-grow om-ellipsis", title: s.email }, label),
               h(
                 "select",
