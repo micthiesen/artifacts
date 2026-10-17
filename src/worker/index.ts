@@ -1,6 +1,7 @@
 // Shared Artifacts Worker: viewer pages, sessions, frame documents, sync and MCP.
 import { handleMcp, runOwnerTool } from "./mcp.ts";
-import { frameDocument, indexPage, messagePage, shellPage } from "./pages.ts";
+import { frameDocument, indexPage, messagePage, previewPage, profilePage, shellPage } from "./pages.ts";
+import { ChannelError, prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import {
   clearSessionCookie,
   readCookie,
@@ -26,8 +27,21 @@ export type Env = {
   /** Base URL of the Access-protected auth Worker; empty until sign-in is configured. */
   AUTH_URL?: string;
   /** Cloudflare Browser Run, used for render checks after writes. */
-  BROWSER?: { quickAction(action: "scrape", options: Record<string, unknown>): Promise<Response> };
+  BROWSER?: { quickAction(action: "snapshot", options: Record<string, unknown>): Promise<Response> };
+  /** Pushover application token shared by every user's Pushover channel. */
+  PUSHOVER_TOKEN?: string;
+  /** Web Push VAPID key pair (base64url), from `bun scripts/vapid.ts`. */
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
 };
+
+/**
+ * Link-preview fetchers (Slack, iMessage, Discord, Teams, …). They never carry a
+ * session. Only bot user agents: in-app browsers (Teams, Slack, Signal) are people.
+ */
+const PREVIEW_BOT =
+  /Slackbot|facebookexternalhit|Facebot|Twitterbot|Discordbot|TelegramBot|LinkedInBot|WhatsApp\/|SkypeUriPreview|MicrosoftPreview|Google-?Chat|Googlebot|bingbot|Applebot|redditbot|Mastodon\/|Pinterestbot|Embedly|Iframely|vkShare|Bluesky Cardyb/i;
 
 const FRAME_TTL = 10 * 60;
 
@@ -77,7 +91,23 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n", { headers: { "Content-Type": "text/plain" } });
   if (path.startsWith("/admin/")) return admin(request, url, env, hub);
 
+  const og = /^\/og\/([a-z0-9]+)\.jpg$/.exec(path);
+  if (og) return ogImage(og[1], url, env, hub);
+
+  // Previews are answered before any sign-in redirect, and a presigned link
+  // is never redeemed by a preview fetcher.
+  if (PREVIEW_BOT.test(request.headers.get("User-Agent") ?? "")) {
+    const target = /^\/a\/([a-z0-9]+)$/.exec(path)?.[1] ?? (await linkTarget(path, env));
+    if (target || path === "/") return linkPreview(target ?? null, url, env, hub);
+  }
+
   const viewer = await currentViewer(request, env);
+
+  if (path === "/me") {
+    if (!viewer.email) return env.AUTH_URL ? Response.redirect(`${url.origin}/login?return=/me`, 302) : messagePage("Sign in", "Sign in to manage notifications.", 401);
+    return profilePage(viewer.email, Boolean(env.VAPID_PUBLIC_KEY), Boolean(env.PUSHOVER_TOKEN));
+  }
+  if (path === "/api/me" || path.startsWith("/api/me/")) return meApi(request, url, env, hub, viewer);
 
   if (path === "/") {
     const artifacts = viewer.email ? await hub.list(viewer) : [];
@@ -153,6 +183,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       headers.set("X-Art-Id", id);
       headers.set("X-Art-Role", role);
       headers.set("X-Art-Email", viewer.email ?? "");
+      headers.set("X-Art-Origin", url.origin);
       return hub.fetch(new Request(request.url, { headers }));
     }
     if (sub === "/errors") {
@@ -164,6 +195,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const meta = await hub.meta(id);
     if (!meta) return messagePage("Not found", "This artifact doesn't exist.", 404);
     const token = await signToken(env.SESSION_SECRET, "frame", FRAME_TTL, { id, e: viewer.email });
+    const visit = viewer.email ? await hub.visit(id, viewer.email) : null;
     return shellPage({
       artifactId: id,
       title: meta.title,
@@ -171,6 +203,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       frameUrl: `/frame/${id}?v=${meta.version}&t=${encodeURIComponent(token)}`,
       syncUrl: `/a/${id}/sync`,
       viewer: { email: viewer.email, role: role as Role },
+      ...(visit ? { since: visit.since, readSeq: visit.readSeq, watch: visit.watch } : {}),
     });
   }
 
@@ -297,7 +330,7 @@ async function admin(request: Request, url: URL, env: Env, hub: HubApi): Promise
 async function ownerApi(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer): Promise<Response> {
   if (!viewer.owner) return Response.json({ error: "owner only" }, { status: 403 });
   if (request.method !== "GET" && !sameOrigin(request, url)) return Response.json({ error: "bad origin" }, { status: 403 });
-  const ctx = { hub, origin: url.origin, env };
+  const ctx = { hub, origin: url.origin, env, actor: viewer.email ?? undefined };
   if (url.pathname === "/api/hosts" && request.method === "POST") {
     const body = (await request.json().catch(() => ({}))) as { host?: string; allowed?: boolean };
     try {
@@ -329,4 +362,97 @@ async function ownerApi(request: Request, url: URL, env: Env, hub: HubApi, viewe
     return Response.json({ ok: !r.isError, text: r.text, data: r.structured ?? null }, { status: r.isError ? 400 : 200 });
   }
   return Response.json({ error: "method not allowed" }, { status: 405 });
+}
+
+/** The artifact a presigned /s/<code> link points at, without redeeming it. */
+async function linkTarget(path: string, env: Env): Promise<string | null> {
+  const code = /^\/s\/([A-Za-z0-9_.-]+)$/.exec(path)?.[1];
+  if (!code) return null;
+  const claims = await verifyToken<{ a: string }>(env.LOGIN_SECRET, "link", code);
+  return claims?.a ?? null;
+}
+
+const OG_TTL = 10 * 365 * 86400;
+
+/** Card for a link-preview fetcher: generic unless the owner opted in or the artifact is public. */
+async function linkPreview(id: string | null, url: URL, env: Env, hub: HubApi): Promise<Response> {
+  const info = id ? await hub.previewInfo(id) : null;
+  if (!info?.rich) return previewPage({ url: url.href, origin: url.origin });
+  let image: string | undefined;
+  if (info.image) {
+    const sig = await signToken(env.SESSION_SECRET, "og", OG_TTL, { id });
+    image = `${url.origin}/og/${id}.jpg?v=${info.version}&s=${encodeURIComponent(sig)}`;
+  }
+  return previewPage({ url: url.href, origin: url.origin, title: info.title, description: info.description, image });
+}
+
+/** The stored first-screen screenshot, for opted-in previews only. */
+async function ogImage(id: string, url: URL, env: Env, hub: HubApi): Promise<Response> {
+  const claims = await verifyToken<{ id: string }>(env.SESSION_SECRET, "og", url.searchParams.get("s"));
+  if (!claims || claims.id !== id) return new Response("not found", { status: 404 });
+  const info = await hub.previewInfo(id);
+  if (!info?.rich || !info.image) return new Response("not found", { status: 404 });
+  const bytes = Uint8Array.from(atob(info.image), (c) => c.charCodeAt(0));
+  return new Response(bytes, {
+    headers: {
+      "Content-Type": "image/jpeg",
+      // Versioned URL; previews are cached by the apps anyway.
+      "Cache-Control": "public, max-age=86400",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
+/**
+ * Your profile and notification settings (session cookie, same-origin JSON):
+ * - GET    /api/me                     profile, channels, watches
+ * - POST   /api/me {name}              display name
+ * - POST   /api/me/channels {type,...} add a channel (validated; may reveal a secret once)
+ * - DELETE /api/me/channels/<id>       remove one
+ * - POST   /api/me/channels/<id>/test  send a test notification
+ * - POST   /api/me/watch {id, level}   per-artifact level (null resets to the default)
+ */
+async function meApi(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer): Promise<Response> {
+  const email = viewer.email;
+  if (!email) return Response.json({ error: "sign in first" }, { status: 401 });
+  if (request.method !== "GET" && !sameOrigin(request, url)) return Response.json({ error: "bad origin" }, { status: 403 });
+  const body = request.method === "GET" ? {} : (((await request.json().catch(() => ({}))) ?? {}) as Record<string, unknown>);
+  const fail = (message: string, status = 400) => Response.json({ error: message }, { status });
+  try {
+    if (url.pathname === "/api/me") {
+      if (request.method === "POST" && typeof body.name === "string") await hub.setName(email, body.name);
+      return Response.json({ ...(await hub.profile(email)), vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null, pushover: Boolean(env.PUSHOVER_TOKEN) });
+    }
+    if (url.pathname === "/api/me/watch" && request.method === "POST") {
+      const id = String(body.id ?? "");
+      if (!(await hub.roleFor(id, email, viewer.owner))) return fail("not found", 404);
+      const level = body.level === null ? null : (String(body.level) as "all" | "participating" | "mute");
+      return Response.json({ level: await hub.setWatch(email, id, level) });
+    }
+    if (url.pathname === "/api/me/channels" && request.method === "POST") {
+      const type = String(body.type) as ChannelType;
+      if (!["pushover", "ntfy", "webhook", "webpush"].includes(type)) return fail("unknown channel type");
+      const prepared = await prepareChannel(type, body, env);
+      const channelId = await hub.addChannel(email, type, prepared.config, prepared.label);
+      return Response.json({ id: channelId, label: prepared.label, reveal: prepared.reveal ?? null });
+    }
+    const m = /^\/api\/me\/channels\/([a-z0-9]+)(\/test)?$/.exec(url.pathname);
+    if (m && request.method === "DELETE" && !m[2]) return Response.json({ removed: await hub.removeChannel(email, m[1]) });
+    if (m && request.method === "POST" && m[2]) {
+      const channel = await hub.channelConfig(email, m[1]);
+      if (!channel) return fail("not found", 404);
+      const result = await sendToChannel(
+        channel.type,
+        channel.config,
+        { title: "Shared Artifacts", body: "Test notification: this channel works.", url: `${url.origin}/me`, tag: "test" },
+        env,
+      );
+      await hub.recordChannelResult(m[1], result);
+      return result.ok ? Response.json({ ok: true }) : fail(result.error);
+    }
+  } catch (err) {
+    if (err instanceof ChannelError) return fail(err.message);
+    return fail((err as Error).message);
+  }
+  return fail("not found", 404);
 }

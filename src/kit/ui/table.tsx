@@ -217,7 +217,11 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
               </tr>
             ) : (
               visible.map((r, i) => (
-                <tr key={i} className="border-b border-border/70 transition-colors last:border-0 hover:bg-muted/40">
+                <tr
+                  key={i}
+                  data-row={cols[0] ? String(r[cols[0].key] ?? "").slice(0, 200) : undefined}
+                  className="border-b border-border/70 transition-colors last:border-0 hover:bg-muted/40"
+                >
                   {cols.map((c, j) => (
                     <td
                       key={c.key}

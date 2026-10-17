@@ -1,6 +1,7 @@
 // Stateless MCP server (Streamable HTTP, JSON responses only). Every tool acts
 // as the owner; the bearer token is the only credential.
 import type { ArtifactHub, HubApi, SourceInfo } from "./hub.ts";
+import type { Thread } from "../shared/protocol.ts";
 import { domainOf, isValidPrincipal, sharePrincipal } from "./principal.ts";
 import { describeCheck, type RenderCheck } from "./check.ts";
 import { signToken } from "./session.ts";
@@ -13,10 +14,10 @@ const SERVER_TITLE = "Shared Artifacts";
 const SERVER_VERSION = "0.1.0";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS = `Shared Artifacts publishes small interactive pages (reports, dashboards, polls, checklists, mini apps) that verified people can open in a browser, with per-viewer browser storage and live shared state. Use these artifact_* tools, not Executor's built-in create-artifact, whenever you make an artifact. Call artifact_guide once before writing your first artifact in a session. Change existing artifacts with artifact_edit, artifact_patch_data or artifact_write_files; never recreate one to change it. Every write reports a render check; fix a failed one (or wait for a queued one with artifact_check) before giving the user a link. Hand the user an artifact_link URL (it opens with no login).`;
+const INSTRUCTIONS = `Shared Artifacts publishes small interactive pages (reports, dashboards, polls, checklists, mini apps) that verified people can open in a browser, with per-viewer browser storage and live shared state. Use these artifact_* tools, not Executor's built-in create-artifact, whenever you make an artifact. Call artifact_guide once before writing your first artifact in a session. Change existing artifacts with artifact_edit, artifact_patch_data or artifact_write_files; never recreate one to change it. Every write reports a render check; fix a failed one (or wait for a queued one with artifact_check) before giving the user a link. Hand the user an artifact_link URL (it opens with no login). Readers can comment; use artifact_activity to pick up their feedback and pass note and resolves on the edit that addresses it.`;
 
 type Hub = HubApi;
-type Ctx = { hub: Hub; origin: string; env: Env };
+type Ctx = { hub: Hub; origin: string; env: Env; /** Owner-menu calls act as the signed-in owner; MCP calls as "agent". */ actor?: string };
 type Json = Record<string, unknown>;
 
 type Tool = {
@@ -35,6 +36,26 @@ const baseVersion = {
   type: "integer",
   description: "Optional: the version you last read. The write is rejected if the artifact changed since.",
 };
+const changeProps = {
+  note: {
+    type: "string",
+    description:
+      'One short line for readers on what changed and why, e.g. "Tightened the cost section after Dana\'s question". Shown in history, in the "changed since your last visit" banner and in update notifications.',
+  },
+  resolves: {
+    type: "array",
+    items: { type: "string" },
+    description: "Comment thread ids (from artifact_activity or artifact_threads) this change addresses. They are resolved and marked \"Addressed in vN\", and their authors are notified.",
+  },
+};
+function changeOptions(args: Json, ctx: Ctx) {
+  return {
+    note: typeof args.note === "string" ? args.note.trim().slice(0, 200) : undefined,
+    resolves: Array.isArray(args.resolves) ? args.resolves.map(String) : undefined,
+    actor: ctx.actor ?? "agent",
+    origin: ctx.origin,
+  };
+}
 const filesMap = {
   type: "object",
   additionalProperties: { type: "string" },
@@ -165,6 +186,7 @@ export const TOOLS: Tool[] = [
         title: String(args.title),
         description: typeof args.description === "string" ? args.description : "",
         files: args.files as Record<string, string>,
+        actor: ctx.actor ?? "agent",
       });
       if (r.ok && (Array.isArray(args.share) || typeof args.public === "boolean")) {
         await hub.share(r.id, { add: (args.share as never) ?? [], public: args.public as boolean | undefined });
@@ -261,13 +283,14 @@ export const TOOLS: Tool[] = [
           },
         },
         baseVersion,
+        ...changeProps,
       },
       required: ["id", "path", "edits"],
       additionalProperties: false,
     },
     run: async (args, ctx) =>
       writeResult(
-        await ctx.hub.editText(String(args.id), String(args.path), args.edits as never, args.baseVersion as number | undefined),
+        await ctx.hub.editText(String(args.id), String(args.path), args.edits as never, args.baseVersion as number | undefined, changeOptions(args, ctx)),
         ctx,
       ),
   },
@@ -296,13 +319,14 @@ export const TOOLS: Tool[] = [
           },
         },
         baseVersion,
+        ...changeProps,
       },
       required: ["id", "path", "ops"],
       additionalProperties: false,
     },
     run: async (args, ctx) =>
       writeResult(
-        await ctx.hub.patchData(String(args.id), String(args.path), args.ops as never, args.baseVersion as number | undefined),
+        await ctx.hub.patchData(String(args.id), String(args.path), args.ops as never, args.baseVersion as number | undefined, changeOptions(args, ctx)),
         ctx,
       ),
   },
@@ -317,23 +341,30 @@ export const TOOLS: Tool[] = [
         id,
         files: { type: "object", additionalProperties: { type: ["string", "null"] }, description: "Path -> new content, or null to delete." },
         baseVersion,
+        ...changeProps,
       },
       required: ["id", "files"],
       additionalProperties: false,
     },
     run: async (args, ctx) =>
       writeResult(
-        await ctx.hub.writeFiles(String(args.id), args.files as Record<string, string | null>, args.baseVersion as number | undefined),
+        await ctx.hub.writeFiles(
+          String(args.id),
+          args.files as Record<string, string | null>,
+          args.baseVersion as number | undefined,
+          changeOptions(args, ctx),
+        ),
         ctx,
       ),
   },
   {
     name: "artifact_update",
     title: "Shared Artifacts: rename",
-    description: "Shared Artifacts: change an artifact's title or description.",
+    description:
+      "Shared Artifacts: change an artifact's title or description, or turn rich link previews on or off. With preview on, links pasted into Slack, iMessage and similar apps show the title, description and a screenshot; off (the default for private artifacts), they show a generic card.",
     inputSchema: {
       type: "object",
-      properties: { id, title: { type: "string" }, description: { type: "string" } },
+      properties: { id, title: { type: "string" }, description: { type: "string" }, preview: { type: "boolean" } },
       required: ["id"],
       additionalProperties: false,
     },
@@ -341,6 +372,7 @@ export const TOOLS: Tool[] = [
       const meta = await hub.updateMeta(String(args.id), {
         title: args.title as string | undefined,
         description: args.description as string | undefined,
+        preview: typeof args.preview === "boolean" ? args.preview : undefined,
       });
       return { text: `Updated ${meta.id}: ${meta.title}`, structured: meta };
     },
@@ -533,6 +565,113 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "artifact_activity",
+    title: "Shared Artifacts: activity",
+    description:
+      "Shared Artifacts: what people did since you last looked: new comment threads and replies (with the quoted text and block they point at), resolves, votes, checklist ticks, shared-state edits and new versions, oldest first. Pass the returned cursor as `since` next time to get only newer events. Omit `id` for every artifact. Use this to pick up feedback, then change the artifact (pass `resolves` with the thread ids you addressed) or reply with artifact_comment.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Only this artifact. Omit for all." },
+        since: { type: "integer", description: "Cursor from a previous call. Omit for the most recent events." },
+        limit: { type: "integer", minimum: 1, maximum: 500, description: "Default 100." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+    run: async (args, { hub }) => {
+      const r = await hub.activity({
+        id: typeof args.id === "string" ? args.id : undefined,
+        since: typeof args.since === "number" ? args.since : undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+      });
+      // Thread context (anchor, status) for every thread mentioned, so the agent needn't fetch it.
+      const threadIds = new Set(r.events.map((e) => (e as { thread?: string }).thread).filter((t): t is string => typeof t === "string" && t.startsWith("t")));
+      const byArtifact = new Map<string, Thread[]>();
+      for (const e of r.events) {
+        if (threadIds.size && !byArtifact.has(e.artifact)) byArtifact.set(e.artifact, await hub.threads(e.artifact));
+      }
+      const threads = [...byArtifact.values()].flat().filter((t) => threadIds.has(t.id));
+      const lines = r.events.map(describeEvent);
+      const context = threads.map(describeThread);
+      return {
+        text: [
+          lines.length ? lines.join("\n") : "No new activity.",
+          context.length ? `\nThreads:\n${context.join("\n")}` : "",
+          `\ncursor: ${r.cursor}${r.more ? " (more events: call again with this cursor)" : ""}`,
+        ].join("\n"),
+        structured: { ...r, threads },
+      };
+    },
+  },
+  {
+    name: "artifact_threads",
+    title: "Shared Artifacts: comment threads",
+    description:
+      "Shared Artifacts: list an artifact's comment threads with every comment, what each points at (block id, quoted text, table row) and whether it is open, resolved or addressed. Open threads only unless includeResolved.",
+    inputSchema: {
+      type: "object",
+      properties: { id, includeResolved: { type: "boolean" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+    run: async (args, { hub }) => {
+      const all = await hub.threads(String(args.id));
+      const threads = args.includeResolved ? all : all.filter((t) => !t.resolved);
+      return {
+        text: threads.length ? threads.map(describeThread).join("\n\n") : args.includeResolved ? "No comments yet." : "No open threads.",
+        structured: { threads },
+      };
+    },
+  },
+  {
+    name: "artifact_comment",
+    title: "Shared Artifacts: comment",
+    description:
+      'Shared Artifacts: reply to a comment thread, resolve or reopen it, or start a new thread (optionally anchored to a block id from artifact_threads, or to an exact quote). Your comments show as "Agent". Prefer fixing the artifact and passing `resolves` on the edit; reply when you need to answer a question or explain why you did not change something.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        id,
+        thread: { type: "string", description: "Thread to reply to or resolve. Omit to start a new thread." },
+        text: { type: "string", description: "Comment text. Mention someone as @name@example.com." },
+        resolve: { type: "boolean", description: "true resolves the thread, false reopens it." },
+        block: { type: "string", description: "New thread only: block id to anchor to." },
+        quote: { type: "string", description: "New thread only: exact text on the page to anchor to." },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    run: async (args, ctx) => {
+      const artifactId = String(args.id);
+      const actor = ctx.actor ?? "agent";
+      let thread: Thread | null = null;
+      if (typeof args.text === "string" && args.text.trim()) {
+        const anchor =
+          !args.thread && (args.block || args.quote)
+            ? {
+                ...(typeof args.block === "string" ? { block: args.block } : {}),
+                ...(typeof args.quote === "string" ? { quote: { exact: args.quote, prefix: "", suffix: "" } } : {}),
+              }
+            : null;
+        thread = await ctx.hub.addComment(
+          artifactId,
+          actor,
+          { thread: typeof args.thread === "string" ? args.thread : undefined, anchor, text: args.text },
+          ctx.origin,
+        );
+      }
+      if (typeof args.resolve === "boolean") {
+        const target = thread?.id ?? (typeof args.thread === "string" ? args.thread : "");
+        if (!target) return { isError: true, text: "resolve needs a thread id" };
+        thread = await ctx.hub.resolveThread(artifactId, actor, target, args.resolve, "agent", ctx.origin);
+      }
+      if (!thread) return { isError: true, text: "Nothing to do: pass text and/or resolve." };
+      return { text: `${describeThread(thread)}\n${url(ctx.origin, artifactId)}#thread=${thread.id}`, structured: { thread } };
+    },
+  },
+  {
     name: "artifact_errors",
     title: "Shared Artifacts: runtime errors",
     description:
@@ -568,7 +707,8 @@ export const TOOLS: Tool[] = [
       required: ["id", "version"],
       additionalProperties: false,
     },
-    run: async (args, ctx) => writeResult(await ctx.hub.revert(String(args.id), Number(args.version)), ctx),
+    run: async (args, ctx) =>
+      writeResult(await ctx.hub.revert(String(args.id), Number(args.version), { actor: ctx.actor ?? "agent", origin: ctx.origin }), ctx),
   },
   {
     name: "artifact_check",
@@ -609,6 +749,48 @@ export const TOOLS: Tool[] = [
 ];
 
 const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
+
+function who(actor: string | null): string {
+  return actor === "agent" ? "Agent" : actor ?? "someone";
+}
+
+function describeEvent(e: { seq: number; at: string; artifact: string; title: string; actor: string | null; type: string } & Record<string, unknown>): string {
+  const head = `#${e.seq} ${e.at.slice(0, 16).replace("T", " ")} ${e.artifact} (${e.title}): ${who(e.actor)}`;
+  const text = typeof e.text === "string" ? ` “${e.text}”` : "";
+  switch (e.type) {
+    case "thread":
+      return `${head} started thread ${e.thread}:${text}`;
+    case "reply":
+      return `${head} replied in ${e.thread}:${text}`;
+    case "resolve":
+      return `${head} resolved ${e.thread}${e.version ? ` (addressed in v${e.version})` : ""}`;
+    case "reopen":
+      return `${head} reopened ${e.thread}`;
+    case "comment-delete":
+      return `${head} deleted a comment in ${e.thread}`;
+    case "version":
+      return `${head} saved v${e.version}: ${e.note}`;
+    case "state": {
+      const key = String(e.key);
+      if (key.startsWith("comments/")) return `${head} commented in <Comments id="${key.split("/")[1]}">: ${e.value ?? "(deleted)"}`;
+      if (key.startsWith("poll/")) return `${head} voted in poll "${key.split("/")[1]}": ${e.value ?? "(cleared)"}`;
+      if (key.startsWith("check/")) return `${head} updated checklist "${key.split("/")[1]}" item "${key.split("/")[2]}": ${e.value ?? "(removed)"}`;
+      return `${head} set ${key} = ${e.value ?? "null"}`;
+    }
+    default:
+      return `${head} ${e.type}`;
+  }
+}
+
+function describeThread(t: Thread): string {
+  const status = t.resolved ? (t.addressedIn ? `addressed in v${t.addressedIn}` : `resolved by ${who(t.resolved.by)}`) : "open";
+  const a = t.anchor;
+  const where = a
+    ? [a.block && `block ${a.block}`, a.row && `row "${a.row}"`, a.label, a.quote && `on “${a.quote.exact}”`].filter(Boolean).join(", ")
+    : "whole page";
+  const comments = t.comments.map((c) => `  - ${who(c.by)} (${c.at.slice(0, 16).replace("T", " ")}): ${c.text}`).join("\n");
+  return `Thread ${t.id} [${status}] on v${t.version}, ${where}\n${comments}`;
+}
 
 /** Tools the owner menu may call directly (same validation as agents get). */
 const OWNER_UI_TOOLS = new Set([

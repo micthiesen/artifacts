@@ -85,7 +85,7 @@ function sharingLine(s: ShareSummary | undefined): string {
 
 export function indexPage(
   viewer: { email: string | null },
-  artifacts: (ArtifactMeta & { role: Role })[],
+  artifacts: (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number })[],
   loginConfigured: boolean,
   summaries?: Record<string, ShareSummary>,
 ): Response {
@@ -106,7 +106,7 @@ export function indexPage(
   } else {
     body = `<h1 class="page-title">Artifacts</h1><ul class="list">${artifacts
       .map(
-        (a) => `<li><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}</span>${
+        (a) => `<li><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}${activityBadge(a)}</span>${
           a.description ? `<span class="desc">${escapeHtml(a.description)}</span>` : ""
         }${summaries ? sharingLine(summaries[a.id]) : ""}<span class="meta">${relativeTime(a.updatedAt)} · v${a.version}${
           a.public && !summaries ? " · public" : ""
@@ -115,6 +115,57 @@ export function indexPage(
       .join("")}</ul>`;
   }
   return page("Shared Artifacts", `${topBar(account)}<main class="content">${body}</main>`);
+}
+
+function activityBadge(a: { unseen?: boolean; unread?: number }): string {
+  const parts: string[] = [];
+  if (a.unread) parts.push(`<span class="badge" title="Unread comments">${a.unread} new ${a.unread === 1 ? "comment" : "comments"}</span>`);
+  else if (a.unseen) parts.push(`<span class="dot" title="Updated since you last looked" aria-label="Updated since you last looked"></span>`);
+  return parts.join("");
+}
+
+/**
+ * What link-preview fetchers get. Without `title` it's a generic card that
+ * reveals nothing about the artifact.
+ */
+export function previewPage(p: { url: string; origin: string; title?: string; description?: string; image?: string }): Response {
+  const title = p.title ?? "Private artifact";
+  const description = p.title ? p.description || "Shared Artifacts" : "Shared Artifacts · sign in to view";
+  const image = p.image ?? `${p.origin}${asset("/static/icons/og.png")}`;
+  const [w, h] = p.image ? [1024, 768] : [1200, 630];
+  const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="${escapeHtml(description)}">
+<meta name="theme-color" content="#7c6cff">
+<meta property="og:site_name" content="Shared Artifacts">
+<meta property="og:type" content="website">
+<meta property="og:url" content="${escapeHtml(p.url)}">
+<meta property="og:title" content="${escapeHtml(title)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+<meta property="og:image" content="${escapeHtml(image)}">
+<meta property="og:image:width" content="${w}">
+<meta property="og:image:height" content="${h}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escapeHtml(title)}">
+<meta name="twitter:description" content="${escapeHtml(description)}">
+<meta name="twitter:image" content="${escapeHtml(image)}">
+<link rel="icon" href="${asset("/static/icons/favicon-32.png")}" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="${asset("/static/icons/apple-touch-icon.png")}">
+</head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(description)}</p></body></html>`;
+  return new Response(html, {
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300", "X-Robots-Tag": "noindex, nofollow" },
+  });
+}
+
+/** Profile and notification settings; the client (me.js) loads and edits everything through /api/me. */
+export function profilePage(email: string, webPush: boolean, pushover: boolean): Response {
+  return page(
+    "Notifications · Shared Artifacts",
+    `${topBar(`<span id="me" class="me" data-email="${escapeHtml(email)}"></span>`)}<main class="content profile" id="profile" data-webpush="${webPush ? "1" : ""}" data-pushover="${pushover ? "1" : ""}"><h1 class="page-title">Profile and notifications</h1><p class="muted">Loading…</p></main><script type="module" src="${asset("/static/account.js")}"></script><script type="module" src="${asset("/static/me.js")}"></script>`,
+  );
 }
 
 export function messagePage(title: string, message: string, status: number, action?: { href: string; label: string }): Response {
@@ -133,7 +184,8 @@ export function shellPage(boot: ShellBoot): Response {
 <header class="bar"><span class="lead"><a class="mark" href="/" title="All artifacts" aria-label="All artifacts">◆</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status"></span><span id="presence" class="presence"></span>${
       boot.viewer.email ? `<span id="me" class="me" data-email="${escapeHtml(boot.viewer.email)}"></span>` : ""
     }</header>
-<div id="frame-host" class="frame-host"></div>
+<div id="since" class="since" hidden></div>
+<div class="workspace"><div id="frame-host" class="frame-host"></div><aside id="threads" class="threads" hidden aria-label="Comments"></aside></div>
 </div>
 <script type="application/json" id="shell-boot">${scriptJson(boot)}</script>
 <script type="module" src="${asset("/static/shell.js")}"></script>`,

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc -p . && tsc -p src/shell && tsc -p src/kit",
+    "typecheck": "tsc -p . && tsc -p src/shell && tsc -p src/shell/sw && tsc -p src/kit",
     "test": "bun test test/ src/",
     "deploy": "bun run build && alchemy deploy --stage prod",
     "build": "bun run build:kit && bun --preload ./spikes/text-loader.ts scripts/kit-exports.ts && bun scripts/build.ts",

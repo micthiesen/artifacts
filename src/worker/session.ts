@@ -1,7 +1,7 @@
 // HMAC-signed tokens: viewer sessions, frame URLs and login hand-off codes.
 // Format: base64url(JSON payload) + "." + base64url(HMAC-SHA256).
 
-export type TokenKind = "session" | "frame" | "login" | "link";
+export type TokenKind = "session" | "frame" | "login" | "link" | "og";
 
 type Payload = { k: TokenKind; exp: number } & Record<string, unknown>;
 

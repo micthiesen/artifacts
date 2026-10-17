@@ -8,7 +8,7 @@ type Children = { children?: React.ReactNode; className?: string };
 /** Readable centered column. `wide` widens it for dashboards and big tables. */
 export function Page({ title, subtitle, wide, children, className }: Children & { title?: React.ReactNode; subtitle?: React.ReactNode; wide?: boolean }) {
   return (
-    <div className={cn("mx-auto w-full px-5 pt-10 pb-20 sm:px-8 sm:pt-14", wide ? "max-w-5xl" : "max-w-3xl", className)}>
+    <div className={cn("art-page mx-auto w-full px-5 pt-10 pb-20 sm:px-8 sm:pt-14", wide ? "max-w-5xl" : "max-w-3xl", className)}>
       {(title || subtitle) && (
         <header className="mb-10">
           {title && <h1 className="text-[2rem] leading-[1.15] font-semibold tracking-[-0.022em] text-balance sm:text-[2.35rem]">{title}</h1>}
@@ -22,7 +22,7 @@ export function Page({ title, subtitle, wide, children, className }: Children & 
 
 export function Section({ title, description, children, className }: Children & { title?: React.ReactNode; description?: React.ReactNode }) {
   return (
-    <section className={cn("mt-12 first:mt-0", className)}>
+    <section className={cn("mt-12 first:mt-0 [[data-b]:first-child>&]:mt-0", className)}>
       {(title || description) && (
         <div className="mb-5">
           {title && <h2 className="text-[1.375rem] leading-snug font-semibold tracking-[-0.015em]">{title}</h2>}

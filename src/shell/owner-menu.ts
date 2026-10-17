@@ -11,6 +11,7 @@ type Overview = {
     description: string;
     version: number;
     public: boolean;
+    preview: boolean;
     createdAt: string;
     updatedAt: string;
     shares: { email: string; role: ShareRole }[];
@@ -452,9 +453,40 @@ export function initOwnerMenu(boot: ShellBoot, button: HTMLElement): { show: () 
       ),
     );
 
+    const previewToggle = h(
+      "label",
+      { class: "om-switch" },
+      h("input", {
+        type: "checkbox",
+        role: "switch",
+        checked: d.meta.preview || d.meta.public,
+        "data-key": "preview",
+        disabled: busy.has("preview") || d.meta.public,
+        onchange: (e: Event) => {
+          const on = (e.target as HTMLInputElement).checked;
+          void act("preview", "sharing", async () => {
+            await tool("artifact_update", { preview: on });
+            return { text: on ? "Links now preview with the title and a screenshot." : "Links now show a generic card." };
+          });
+        },
+      }),
+      h(
+        "span",
+        {},
+        h("span", { class: "om-strong" }, "Rich link previews"),
+        h(
+          "span",
+          { class: "muted om-small" },
+          d.meta.public
+            ? "On for public artifacts: links show the title, description and a screenshot."
+            : "Links pasted into Slack, iMessage and similar apps show the title, description and a screenshot to anyone who sees the message. Off, they show a generic card.",
+        ),
+      ),
+    );
+
     return [
       h("div", { class: "om-group" }, h("h3", { class: "om-h" }, "People"), list, form),
-      h("div", { class: "om-group" }, publicToggle),
+      h("div", { class: "om-group" }, publicToggle, previewToggle),
       h(
         "div",
         { class: "om-group" },

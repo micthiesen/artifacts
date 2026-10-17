@@ -8,9 +8,13 @@ import type {
   ShellMessage,
   SyncClientMessage,
   SyncServerMessage,
+  Thread,
+  WatchLevel,
 } from "../shared/protocol.ts";
 import { mountAccountMenu } from "./account.ts";
 import { initOwnerMenu } from "./owner-menu.ts";
+import { createDrawer } from "./threads.ts";
+import { showSince } from "./since.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
 const localKey = `art:${boot.artifactId}:local:${boot.viewer.email ?? "anon"}`;
@@ -20,19 +24,36 @@ const canWrite = boot.viewer.role !== "view" && boot.viewer.email !== null;
 const statusEl = document.getElementById("status")!;
 const presenceEl = document.getElementById("presence")!;
 
+function printArtifact() {
+  const when = new Date().toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  post({ t: "print", title: boot.title, meta: `v${boot.version} · printed ${when}` });
+}
+
+async function setWatch(level: WatchLevel): Promise<WatchLevel> {
+  const res = await fetch("/api/me/watch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: boot.artifactId, level }),
+  });
+  if (!res.ok) throw new Error("watch failed");
+  return ((await res.json()) as { level: WatchLevel }).level;
+}
+
 // Your avatar opens the account menu; owners also get Manage and a sign-in link.
 const meSlot = document.getElementById("me");
 if (meSlot && boot.viewer.email) {
+  const common = { print: printArtifact, watch: { level: boot.watch ?? "participating", set: setWatch } };
   if (boot.viewer.role === "owner") {
     let panel: ReturnType<typeof initOwnerMenu> | null = null;
     const avatar = mountAccountMenu(meSlot, boot.viewer.email, {
+      ...common,
       manage: () => panel?.show(),
       copyLink: () => panel!.copyMyLink(),
       copyLabel: "Copy my sign-in link",
     });
     panel = initOwnerMenu(boot, avatar);
   } else {
-    mountAccountMenu(meSlot, boot.viewer.email, { copyLink: async () => location.href, copyLabel: "Copy page link" });
+    mountAccountMenu(meSlot, boot.viewer.email, { ...common, copyLink: async () => location.href, copyLabel: "Copy page link" });
   }
 }
 
@@ -51,7 +72,8 @@ let presence: string[] = [];
 let snapshotReceived = false;
 let frameReady = false;
 let initSent = false;
-const pending = new Map<string, SyncClientMessage>();
+type SetMessage = Extract<SyncClientMessage, { t: "set" }>;
+const pending = new Map<string, SetMessage>();
 
 // Shared Artifacts is dark only; the frame renders dark whatever it is told.
 const theme = () => "dark" as const;
@@ -75,7 +97,58 @@ function maybeInit() {
   if (!frameReady || initSent || !snapshotReceived) return;
   initSent = true;
   post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme() });
+  // Comments and change marks follow the first render.
+  sendThreads(lastThreads);
+  if (marksOn && boot.since?.changedBlocks.length) post({ t: "changes", blocks: boot.since.changedBlocks });
 }
+
+// ---- comments ----------------------------------------------------------------------
+
+const canComment = boot.viewer.email !== null;
+let lastThreads: Thread[] = [];
+let marksOn = true;
+
+function sendThreads(threads: Thread[]) {
+  lastThreads = threads;
+  if (initSent) post({ t: "threads", threads: threads.map((t) => ({ id: t.id, anchor: t.anchor })), canComment });
+}
+
+const toggle = document.createElement("button");
+toggle.type = "button";
+toggle.className = "bar-button comments-toggle";
+toggle.setAttribute("aria-controls", "threads");
+toggle.setAttribute("aria-expanded", "false");
+toggle.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A1.5 1.5 0 0 1 4 14.5z"/></svg><span class="count"></span><span class="sr-only">Comments</span>`;
+presenceEl.after(toggle);
+
+const drawer = createDrawer(document.getElementById("threads")!, toggle, {
+  me: boot.viewer.email,
+  canComment,
+  canResolveAny: boot.viewer.role !== "view",
+  isOwner: boot.viewer.role === "owner",
+  readSeq: boot.readSeq ?? 0,
+  send: (msg) => {
+    if (msg.t !== "set" && "cid" in msg) pendingComments.add(msg.cid);
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+    else setStatus("Offline: comment not sent. Try again when reconnected.");
+  },
+  focus: (thread) => post({ t: "focus", thread }),
+  onThreads: sendThreads,
+  onRead: (seq) => sendSync({ t: "read", seq }),
+});
+const pendingComments = new Set<string>();
+
+showSince(boot, {
+  openComments: () => drawer.show(),
+  unread: () => drawer.unread(),
+  setMarks: (on) => {
+    marksOn = on;
+    post({ t: "changes", blocks: on ? (boot.since?.changedBlocks ?? []) : [] });
+  },
+});
+
+// #thread=<id> (from a notification) opens that thread once threads arrive.
+let deepLink = /^#thread=(t[a-z0-9]+)$/.exec(location.hash)?.[1] ?? null;
 
 // Don't hold the page hostage to the socket: after a short wait, start from the
 // cached snapshot and let live updates catch up.
@@ -107,7 +180,7 @@ window.addEventListener("message", (event) => {
       if (!canWrite) return;
       const value = msg.value === undefined ? null : msg.value;
       const cid = crypto.randomUUID();
-      const out: SyncClientMessage = { t: "set", key: msg.key, value, cid };
+      const out: SetMessage = { t: "set", key: msg.key, value, cid };
       pending.set(cid, out);
       if (value === null) delete shared[msg.key];
       else shared[msg.key] = value;
@@ -127,6 +200,15 @@ window.addEventListener("message", (event) => {
     }
     case "open":
       if (/^https?:\/\//i.test(msg.url)) window.open(msg.url, "_blank", "noopener,noreferrer");
+      break;
+    case "comment:new":
+      drawer.compose(msg.anchor);
+      break;
+    case "comment:open":
+      drawer.open(msg.thread);
+      break;
+    case "anchors":
+      drawer.setPlacement(msg.placed);
       break;
   }
 });
@@ -183,6 +265,10 @@ function connect() {
         if (initSent) post({ t: "shared", changes: { [msg.key]: msg.value } });
         break;
       case "rejected": {
+        if (pendingComments.delete(msg.cid)) {
+          setStatus(`Comment not saved: ${msg.reason}`);
+          break;
+        }
         const rejected = pending.get(msg.cid);
         pending.delete(msg.cid);
         setStatus(`Change not saved: ${msg.reason}`);
@@ -199,6 +285,20 @@ function connect() {
         presence = msg.viewers;
         renderPresence();
         if (initSent) post({ t: "presence", viewers: presence });
+        break;
+      case "threads":
+        drawer.setAll(msg.threads, msg.people);
+        if (deepLink) {
+          drawer.open(deepLink);
+          deepLink = null;
+        }
+        break;
+      case "thread":
+        if (msg.cid) pendingComments.delete(msg.cid);
+        drawer.upsert(msg.thread);
+        break;
+      case "version":
+        if (msg.version > boot.version) showUpdated(msg.version, msg.note);
         break;
     }
   });
@@ -226,6 +326,28 @@ function saveCache() {
   } catch {
     // ignore
   }
+}
+
+/** A newer version was saved while this page is open. */
+function showUpdated(version: number, note: string) {
+  let pill = document.getElementById("updated");
+  if (!pill) {
+    pill = document.createElement("button");
+    pill.id = "updated";
+    pill.className = "updated-pill";
+    pill.addEventListener("click", () => location.reload());
+    statusEl.before(pill);
+  }
+  pill.textContent = "";
+  const strong = document.createElement("strong");
+  strong.textContent = `Updated to v${version}`;
+  const rest = document.createElement("span");
+  rest.textContent = note ? ` · ${note}` : "";
+  const action = document.createElement("span");
+  action.className = "action";
+  action.textContent = "Reload";
+  pill.append(strong, rest, action);
+  pill.title = `Reload to see v${version}`;
 }
 
 function renderPresence() {

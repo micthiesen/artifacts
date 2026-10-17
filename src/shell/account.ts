@@ -1,7 +1,19 @@
 // The signed-in viewer's avatar in the top bar opens a small menu: Manage
-// artifact… (owners, on an artifact), Copy my link, All artifacts, Sign out.
+// artifact… (owners, on an artifact), Copy my link, Print, notification level
+// for this artifact, Notifications settings, All artifacts, Sign out.
+import type { WatchLevel } from "../shared/protocol.ts";
+
+const LEVELS: [WatchLevel, string][] = [
+  ["all", "All activity"],
+  ["participating", "Replies and mentions"],
+  ["mute", "Nothing"],
+];
 
 export type AccountMenuOptions = {
+  /** Print the artifact (or save it as PDF). */
+  print?: () => void;
+  /** This artifact's notification level and a setter. */
+  watch?: { level: WatchLevel; set: (level: WatchLevel) => Promise<WatchLevel> };
   /** Opens the Manage panel (owner on an artifact page). */
   manage?: () => void;
   /** Returns a link to copy; owners get a presigned sign-in link, others the page URL. */
@@ -61,6 +73,51 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
       setTimeout(() => (el.textContent = label), 1600);
     });
   }
+  if (options.print) {
+    const print = options.print;
+    item("Print or save as PDF", () => {
+      setOpen(false);
+      print();
+    });
+  }
+  if (options.watch) {
+    const watch = options.watch;
+    const group = document.createElement("div");
+    group.className = "account-group";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Notify me about this artifact");
+    const label = document.createElement("div");
+    label.className = "account-label";
+    label.textContent = "Notify me about";
+    group.append(label);
+    const radios = LEVELS.map(([level, text]) => {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.setAttribute("role", "menuitemradio");
+      el.dataset.level = level;
+      el.textContent = text;
+      el.addEventListener("click", async () => {
+        try {
+          paint(await watch.set(level));
+        } catch {
+          el.textContent = "Couldn't save";
+          setTimeout(() => (el.textContent = text), 1600);
+        }
+      });
+      group.append(el);
+      return el;
+    });
+    const paint = (current: WatchLevel) => {
+      for (const r of radios) r.setAttribute("aria-checked", String(r.dataset.level === current));
+    };
+    paint(watch.level);
+    menu.append(group);
+  }
+  const settings = document.createElement("a");
+  settings.href = "/me";
+  settings.textContent = "Notification settings";
+  settings.setAttribute("role", "menuitem");
+  if (location.pathname !== "/me") menu.append(settings);
   if (location.pathname !== "/") {
     const home = document.createElement("a");
     home.href = "/";
@@ -82,7 +139,7 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
   function setOpen(open: boolean) {
     menu.hidden = !open;
     button.setAttribute("aria-expanded", String(open));
-    if (open) menu.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+    if (open) menu.querySelector<HTMLElement>("[role=menuitem], [role=menuitemradio]")?.focus();
   }
   button.addEventListener("click", (e) => {
     e.stopPropagation();

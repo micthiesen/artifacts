@@ -4,6 +4,8 @@
 @source not "./CATALOG.md";
 @source not "./**/*.test.ts";
 @import "./theme.css";
+@import "./annotate.css";
+@import "./print.css";
 
 @layer base {
   * {

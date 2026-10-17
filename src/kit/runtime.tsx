@@ -7,6 +7,8 @@ import * as store from "./store.ts";
 import { ErrorBoundary, ErrorPanel } from "./ui/error.tsx";
 import { TooltipProvider } from "./ui/controls.tsx";
 import { Page } from "./ui/layout.tsx";
+import { focusThread, installAnnotations, markChanged, setThreads } from "./annotate.ts";
+import { preparePrint } from "./print.ts";
 
 const LS_PREFIX = "ls:";
 
@@ -243,6 +245,18 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         store.setTheme(THEME);
         applyTheme();
         break;
+      case "threads":
+        whenRendered(() => setThreads(msg.threads, msg.canComment));
+        break;
+      case "focus":
+        whenRendered(() => focusThread(msg.thread));
+        break;
+      case "changes":
+        whenRendered(() => markChanged(msg.blocks));
+        break;
+      case "print":
+        whenRendered(() => void printDocument(msg.title, msg.meta));
+        break;
     }
   });
 
@@ -281,11 +295,40 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     },
   });
   root.render(<Frame Entry={Entry} markdown={markdown} />);
+  if (!check) {
+    installAnnotations(rootEl, send);
+    // Give the first render (and lazy charts) a moment before anchoring.
+    setTimeout(() => {
+      rendered = true;
+      for (const fn of afterRender.splice(0)) fn();
+    }, 150);
+  }
   if (check) {
     // Let effects and lazy chunks (charts) settle before declaring success.
     setTimeout(() => emitCheck(checkErrors.length ? "error" : "rendered", checkErrors, rootEl), 600);
   }
 }
+
+let rendered = false;
+const afterRender: (() => void)[] = [];
+function whenRendered(fn: () => void) {
+  if (rendered) fn();
+  else afterRender.push(fn);
+}
+
+let restorePrint: (() => void) | null = null;
+/** Expand tabs, accordions and limited tables, then print the frame's own document. */
+async function printDocument(title: string, meta: string) {
+  restorePrint?.();
+  document.body.dataset.printTitle = title;
+  document.body.dataset.printMeta = meta;
+  restorePrint = await preparePrint();
+  window.print();
+}
+window.addEventListener("afterprint", () => {
+  restorePrint?.();
+  restorePrint = null;
+});
 
 /** Publishes the render-check result as `<pre id="art-check">` JSON for the headless reader. */
 function emitCheck(status: "rendered" | "error", errors: string[], rootEl: HTMLElement) {

@@ -15,6 +15,9 @@ Create `.env` (gitignored) in the repo root:
 | `OWNER_EMAILS` | Comma-separated emails with owner access to every artifact |
 | `SESSION_SECRET`, `LOGIN_SECRET`, `MCP_TOKEN` | Random strings, e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'` |
 | `ACCESS_TEAM_DOMAIN` | Optional: `https://<team>.cloudflareaccess.com`. Enables viewer sign-in |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Optional: Web Push keys from `bun scripts/vapid.ts`. Keep them: changing them invalidates every browser subscription |
+| `VAPID_SUBJECT` | Optional: contact for push services, default `mailto:<first owner>` |
+| `PUSHOVER_TOKEN` | Optional: one Pushover application token (pushover.net/apps/build) shared by every user's Pushover channel; users then only paste their user key |
 
 Without `ACCESS_TEAM_DOMAIN`, only public artifacts can be viewed, and agents
 still work through MCP.
@@ -39,6 +42,11 @@ every outstanding link.
 
 - **Off-Cloudflare copy:** `bun scripts/export.ts <origin>` writes `exports/artifacts-<time>.json` (gitignored).
 - **Restoring:** `bun scripts/import.ts <origin> exports/<file>.json` replaces all data with that export, in one transaction. Export the current state first if you might want it back.
+
+## Checks
+
+- `bun run test` and `bun run typecheck` locally.
+- `bun run e2e <origin>` and `bun spikes/e2e-collab.ts <origin>` against a deployment. The second covers comments, the MCP feedback tools, visits, previews and notification delivery (it waits about a minute for the notification alarm).
 
 ## After deploying
 

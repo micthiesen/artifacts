@@ -54,9 +54,28 @@ CSS.
 - **Live data:** `artifact_source` maps a `data/*.json` file to an HTTPS JSON URL with an interval (15 min to 7 days) and an optional dot-path `pick`. A 15-minute Worker cron calls the hub, which fetches due sources (no credentials, 10 s timeout, 1 MB cap) and swaps the file and build in place without a new version or render check. Only hosts the owner approved in the owner menu (`allowed_hosts`) are fetched. Agents can't approve hosts, because the MCP has no tool for it.
 - **Owner menu:** `/api/a/<id>` gives the owner an overview, and `POST /api/a/<id>/<tool>` runs a whitelisted subset of the MCP tools (share, link, rename, revert, delete, source, check), so the UI and agents share one validated code path.
 
+## Comments, activity and visits
+
+- **Threads:** `threads` and `comments` tables in the hub. Any signed-in viewer who can open an artifact may comment (view role included); shared state still needs edit access. Writes go over the sync socket (`comment`, `resolve`, `comment:delete`) and are broadcast as `thread` messages. MCP replies are stored with author `"agent"`.
+- **Anchors:** compile gives every top-level MDX block a `data-b` id (heading slug, then `<section>-<n>`; components are wrapped in a `div`) and a content hash, stored per version in `history.blocks`. A thread stores `{block, row, quote: {exact, prefix, suffix}, label}`. The frame runtime (`src/kit/annotate.ts`) re-finds anchors on every render, draws them with the CSS Custom Highlight API (no DOM changes around the text) and reports each as anchored, outdated (block there, text changed) or orphaned. The drawer lives in the shell, so artifact code can't read or forge comments.
+- **Stamped collab keys:** socket writes to `poll/`, `comments/`, `check/` and `notes/` keys are validated and stamped with the verified email: a vote must be your own, and only a comment's author (or an owner) can change or delete it.
+- **Activity log:** `events` (append-only, `seq` cursor, last 5000 per artifact) records versions with notes, threads, replies, resolves and shared-state changes (coalesced per key and person per minute). `artifact_activity` reads it with a cursor; there is no server-side model.
+- **Visits:** opening an artifact records the version in `seen`. The next visit gets the versions since, the blocks whose hash changed and removed headings, for the shell's "Updated since you last looked" bar. `read_seq` drives unread counts on the index. A commit broadcasts `{t:"version"}` so open pages show an "Updated" pill.
+
+## Notifications
+
+- **Who:** owners default to every comment on their artifacts; everyone else to replies in their threads and @mentions. Per-artifact levels (`watches`: all, participating, mute) are set from the avatar menu or `/me`. Page updates reach "all" watchers other than owners. Nobody is notified about their own actions or while they have the artifact open.
+- **When:** events add rows to `outbox`; one Durable Object alarm (shared with the render-check queue) fires 45 s after a comment or 10 min after an update (coalescing bursts, at most 30 min), groups rows per person and artifact into one message and sends at most 40 per run (free-plan subrequest limit), re-arming if more remain. No cron.
+- **Channels** (`channels`, managed at `/me`): Web Push (VAPID keys in the Worker env; iOS needs the site added to the Home Screen), Pushover (one operator app token, `PUSHOVER_TOKEN`; users paste their user key, validated on save), ntfy (random private topic; ntfy.sh rate-limits anonymous publishing from shared Worker IPs, so users add an ntfy.sh access token or their own server), and webhooks (HMAC-signed JSON; Discord webhook URLs get Discord's format). Adapters are hand-written `fetch` calls in `src/worker/notify.ts`; Web Push encryption (RFC 8291) is in `webpush.ts`. A channel is paused after 5 failures and deleted when a push endpoint returns 404/410.
+
+## Link previews and print
+
+- **Previews:** requests from link-preview fetchers (Slackbot, Discordbot, iMessage's facebookexternalhit, …) get a 200 card before any sign-in redirect. Private artifacts get a generic card; owners can opt in per artifact (`preview`), and public artifacts always get the title, description and the latest render-check screenshot at a signed `/og/<id>.jpg` URL. Presigned `/s/` links are never redeemed by a fetcher.
+- **Print:** the avatar menu asks the frame to print its own document (`allow-modals` is in the sandbox). `src/kit/print.ts` expands tabs, accordions and limited tables first; `print.css` switches to a light palette and hides interactive UI.
+
 ## Backups
 
-`GET /admin/export` (bearer MCP token) returns every table as JSON (`bun scripts/export.ts` saves it locally), and `POST /admin/import` loads one back, replacing everything in one transaction (`bun scripts/import.ts`). With an R2 bucket bound, the 10:00 UTC cron also writes a dated copy there and keeps 30. A point-in-time restore endpoint was tried and removed: on 2026-10-16, Durable Object bookmark restores on a test stage didn't land at the requested times, especially after an earlier restore.
+`GET /admin/export` (bearer MCP token) returns every table as JSON (including notification channel configs, so treat exports as secrets) (`bun scripts/export.ts` saves it locally), and `POST /admin/import` loads one back, replacing everything in one transaction (`bun scripts/import.ts`). With an R2 bucket bound, the 10:00 UTC cron also writes a dated copy there and keeps 30. A point-in-time restore endpoint was tried and removed: on 2026-10-16, Durable Object bookmark restores on a test stage didn't land at the requested times, especially after an earlier restore.
 
 ## Presigned links
 

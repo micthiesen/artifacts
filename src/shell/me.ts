@@ -1,0 +1,280 @@
+// Profile page (/me): display name, notification channels and per-artifact
+// notification levels. Everything goes through /api/me.
+import type { WatchLevel } from "../shared/protocol.ts";
+
+type Channel = { id: string; type: string; label: string; createdAt: string; lastError: string | null; disabled: boolean };
+type Profile = {
+  email: string;
+  name: string | null;
+  owner: boolean;
+  channels: Channel[];
+  watches: { id: string; title: string; level: WatchLevel; custom: boolean }[];
+  defaultLevel: WatchLevel;
+  vapidPublicKey: string | null;
+  pushover: boolean;
+};
+
+const main = document.getElementById("profile")!;
+const LEVELS: [WatchLevel, string][] = [
+  ["all", "All activity"],
+  ["participating", "Replies and mentions"],
+  ["mute", "Nothing"],
+];
+
+async function api<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
+  const res = await fetch(path, {
+    method: init?.method ?? (init?.body ? "POST" : "GET"),
+    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+    body: init?.body ? JSON.stringify(init.body) : undefined,
+  });
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  return data;
+}
+
+let profile: Profile;
+let notice: { tone: "ok" | "error"; text: string; reveal?: { label: string; value: string; hint: string } } | null = null;
+
+async function load() {
+  profile = await api<Profile>("/api/me");
+  render();
+}
+
+function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...children: (Node | string)[]) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else e.setAttribute(k, v);
+  }
+  e.append(...children);
+  return e;
+}
+
+function btn(label: string, onClick: () => void | Promise<void>, cls = "button small") {
+  const b = h("button", { type: "button", class: cls }, label);
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      await onClick();
+    } finally {
+      b.disabled = false;
+    }
+  });
+  return b;
+}
+
+async function act(fn: () => Promise<unknown>, ok?: string) {
+  try {
+    await fn();
+    if (ok) notice = { tone: "ok", text: ok };
+  } catch (err) {
+    notice = { tone: "error", text: (err as Error).message };
+  }
+  await load();
+}
+
+function render() {
+  const sections: HTMLElement[] = [h("h1", { class: "page-title" }, "Profile and notifications")];
+  if (notice) {
+    const n = h("div", { class: `notice ${notice.tone}`, role: "status" }, notice.text);
+    if (notice.reveal) {
+      const code = h("code", { class: "reveal" }, notice.reveal.value);
+      const copy = btn("Copy", async () => {
+        await navigator.clipboard.writeText(notice!.reveal!.value);
+        copy.textContent = "Copied ✓";
+      });
+      n.append(h("div", { class: "reveal-row" }, h("strong", {}, notice.reveal.label), code, copy), h("p", { class: "muted small" }, notice.reveal.hint));
+    }
+    sections.push(n);
+  }
+
+  // Name
+  const name = h("input", { type: "text", value: profile.name ?? "", placeholder: profile.email.split("@")[0], maxlength: "80", "aria-label": "Display name" }) as HTMLInputElement;
+  sections.push(
+    h(
+      "section",
+      { class: "card-section" },
+      h("h2", {}, "You"),
+      h("p", { class: "muted" }, `Signed in as ${profile.email}. Your name appears on your comments and in notifications.`),
+      h("div", { class: "row" }, name, btn("Save", () => act(() => api("/api/me", { body: { name: name.value } }), "Name saved."))),
+    ),
+  );
+
+  // Channels
+  const list = h("ul", { class: "channels" });
+  for (const c of profile.channels) {
+    const status = c.disabled ? h("span", { class: "chip caution" }, "Paused after errors") : c.lastError ? h("span", { class: "chip caution" }, "Last send failed") : h("span", { class: "chip positive" }, "On");
+    const li = h("li", {}, h("span", { class: "channel-label" }, c.label), status);
+    if (c.lastError) li.append(h("span", { class: "muted small channel-error" }, c.lastError));
+    li.append(
+      h(
+        "span",
+        { class: "channel-actions" },
+        btn("Send test", () => act(() => api(`/api/me/channels/${c.id}/test`, { body: {} }), `Test sent to ${c.label}.`), "button small ghost"),
+        btn("Remove", () => act(() => api(`/api/me/channels/${c.id}`, { method: "DELETE" }), `Removed ${c.label}.`), "button small ghost danger"),
+      ),
+    );
+    list.append(li);
+  }
+  if (!profile.channels.length) list.append(h("li", { class: "muted" }, "No channels yet. Add one below to get notified."));
+  sections.push(
+    h(
+      "section",
+      { class: "card-section" },
+      h("h2", {}, "Where to notify you"),
+      h("p", { class: "muted" }, "Every channel gets every notification. Nothing is sent while you have the artifact open."),
+      list,
+      addChannels(),
+    ),
+  );
+
+  // Watches
+  const rows = profile.watches.map((w) => {
+    const select = h("select", { "aria-label": `Notifications for ${w.title}` }) as HTMLSelectElement;
+    for (const [level, label] of LEVELS) {
+      const o = h("option", { value: level }, label + (level === profile.defaultLevel ? " (default)" : "")) as HTMLOptionElement;
+      o.selected = level === w.level;
+      select.append(o);
+    }
+    select.addEventListener("change", () => act(() => api("/api/me/watch", { body: { id: w.id, level: select.value } })));
+    return h("tr", {}, h("td", {}, h("a", { href: `/a/${w.id}` }, w.title)), h("td", {}, select));
+  });
+  sections.push(
+    h(
+      "section",
+      { class: "card-section" },
+      h("h2", {}, "What to notify you about"),
+      h(
+        "p",
+        { class: "muted" },
+        profile.owner
+          ? "You own these, so by default you hear about every comment. Choose “Replies and mentions” for quieter artifacts."
+          : "By default you hear about replies to your comments and @mentions. Choose “All activity” to also get every comment and page update.",
+      ),
+      rows.length ? h("table", { class: "watches" }, h("tbody", {}, ...rows)) : h("p", { class: "muted" }, "Nothing is shared with you yet."),
+    ),
+  );
+  main.replaceChildren(...sections);
+  // Notices render at the top; bring them into view after an action lower down.
+  if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function addChannels(): HTMLElement {
+  const wrap = h("div", { class: "add-channels" });
+
+  // This browser (Web Push)
+  const pushCard = h("div", { class: "add-card" }, h("h3", {}, "This browser or phone"));
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const standalone = matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  if (!profile.vapidPublicKey) {
+    pushCard.append(h("p", { class: "muted small" }, "Browser notifications aren't set up on this server."));
+  } else if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    pushCard.append(
+      h(
+        "p",
+        { class: "muted small" },
+        ios && !standalone
+          ? "On iPhone and iPad: tap Share, then “Add to Home Screen”, open Artifacts from your Home Screen and come back here."
+          : "This browser doesn't support push notifications.",
+      ),
+    );
+  } else {
+    pushCard.append(
+      h("p", { class: "muted small" }, "Notifications appear like any app's. Add each device you want notified."),
+      btn("Turn on for this device", () => act(enablePush, "This device will get notifications.")),
+    );
+  }
+  wrap.append(pushCard);
+
+  // Pushover
+  const user = h("input", { type: "text", placeholder: "Your Pushover user key", autocomplete: "off", spellcheck: "false" }) as HTMLInputElement;
+  const token = h("input", { type: "text", placeholder: profile.pushover ? "App token (optional)" : "Your Pushover app token", autocomplete: "off", spellcheck: "false" }) as HTMLInputElement;
+  const pushover = h(
+    "div",
+    { class: "add-card" },
+    h("h3", {}, "Pushover"),
+    h("p", { class: "muted small" }, "Paste the user key from the top of pushover.net after you sign in."),
+    user,
+  );
+  if (!profile.pushover) pushover.append(token);
+  pushover.append(
+    btn("Add Pushover", () =>
+      act(() => api("/api/me/channels", { body: { type: "pushover", user: user.value, ...(token.value ? { token: token.value } : {}) } }), "Pushover added. Send a test to check it."),
+    ),
+  );
+  wrap.append(pushover);
+
+  // ntfy
+  const ntfyToken = h("input", { type: "text", placeholder: "ntfy access token (tk_…)", autocomplete: "off", spellcheck: "false" }) as HTMLInputElement;
+  const ntfyServer = h("input", { type: "url", placeholder: "Server (default https://ntfy.sh)", autocomplete: "off" }) as HTMLInputElement;
+  wrap.append(
+    h(
+      "div",
+      { class: "add-card" },
+      h("h3", {}, "ntfy"),
+      h(
+        "p",
+        { class: "muted small" },
+        "Install the ntfy app, then subscribe to the private topic we create. ntfy.sh limits messages from shared cloud servers like this one, so add a free ntfy.sh account's access token (Account → Access tokens), or use your own ntfy server.",
+      ),
+      ntfyToken,
+      ntfyServer,
+      btn("Create a private topic", () =>
+        act(async () => {
+          const r = await api<{ label: string; reveal: string }>("/api/me/channels", {
+            body: { type: "ntfy", ...(ntfyToken.value ? { token: ntfyToken.value } : {}), ...(ntfyServer.value ? { server: ntfyServer.value } : {}) },
+          });
+          notice = {
+            tone: "ok",
+            text: "ntfy topic created. Send a test once you've subscribed.",
+            reveal: { label: "Subscribe to", value: r.reveal, hint: "In the ntfy app tap +, paste this, and keep it private: anyone with it can read your notifications." },
+          };
+        }),
+      ),
+    ),
+  );
+
+  // Webhook
+  const url = h("input", { type: "url", placeholder: "https://… (Discord works too)", autocomplete: "off" }) as HTMLInputElement;
+  wrap.append(
+    h(
+      "div",
+      { class: "add-card" },
+      h("h3", {}, "Webhook"),
+      h("p", { class: "muted small" }, "We POST JSON {title, body, url} signed with X-Artifacts-Signature."),
+      url,
+      btn("Add webhook", () =>
+        act(async () => {
+          const r = await api<{ reveal: string }>("/api/me/channels", { body: { type: "webhook", url: url.value } });
+          notice = {
+            tone: "ok",
+            text: "Webhook added.",
+            reveal: { label: "Signing secret", value: r.reveal, hint: "HMAC-SHA256 of the raw body with this secret, hex, sent as sha256=<hex>. It isn't shown again." },
+          };
+        }),
+      ),
+    ),
+  );
+  return wrap;
+}
+
+async function enablePush() {
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") throw new Error("Notifications are blocked for this site. Allow them in your browser settings and try again.");
+  const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  await navigator.serviceWorker.ready;
+  const existing = await reg.pushManager.getSubscription();
+  const sub =
+    existing ??
+    (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64url(profile.vapidPublicKey!) }));
+  await api("/api/me/channels", { body: { type: "webpush", ...sub.toJSON() } });
+}
+
+function fromB64url(s: string): Uint8Array<ArrayBuffer> {
+  const pad = s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4);
+  return Uint8Array.from(atob(pad), (c) => c.charCodeAt(0));
+}
+
+load().catch((err) => {
+  main.replaceChildren(h("h1", { class: "page-title" }, "Profile and notifications"), h("p", { class: "notice error" }, (err as Error).message));
+});

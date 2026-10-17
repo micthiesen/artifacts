@@ -18,7 +18,13 @@ export type FrameMessage =
   | { t: "local:set"; key: string; value: JsonValue | undefined }
   | { t: "shared:set"; key: string; value: JsonValue | undefined }
   | { t: "error"; message: string; stack?: string }
-  | { t: "open"; url: string };
+  | { t: "open"; url: string }
+  /** The viewer chose "Comment" on a selection or element. */
+  | { t: "comment:new"; anchor: Anchor }
+  /** The viewer clicked highlighted text belonging to a thread. */
+  | { t: "comment:open"; thread: string }
+  /** Where each thread's anchor landed, in document order. */
+  | { t: "anchors"; placed: { id: string; status: AnchorStatus }[] };
 
 /** Shell -> frame. */
 export type ShellMessage =
@@ -35,17 +41,85 @@ export type ShellMessage =
     }
   | { t: "shared"; changes: Record<string, JsonValue | null> }
   | { t: "presence"; viewers: string[] }
-  | { t: "theme"; theme: "light" | "dark" };
+  | { t: "theme"; theme: "light" | "dark" }
+  /** Threads to highlight (open ones; resolved ones are not drawn). */
+  | { t: "threads"; threads: { id: string; anchor: Anchor | null; active?: boolean }[]; canComment: boolean }
+  /** Scroll a thread's anchor into view and flash it. */
+  | { t: "focus"; thread: string }
+  /** Mark blocks that changed since the viewer's last visit (empty clears). */
+  | { t: "changes"; blocks: string[] }
+  | { t: "print"; title: string; meta: string };
 
 /** Shell <-> Worker sync WebSocket (one per open artifact tab). */
 export type SyncClientMessage =
-  | { t: "set"; key: string; value: JsonValue | null; cid: string };
+  | { t: "set"; key: string; value: JsonValue | null; cid: string }
+  /** New thread (no `thread`) or a reply. */
+  | { t: "comment"; cid: string; thread?: string; anchor?: Anchor | null; text: string }
+  | { t: "resolve"; cid: string; thread: string; resolved: boolean }
+  | { t: "comment:delete"; cid: string; comment: string }
+  /** The viewer has read comments up to this event seq. */
+  | { t: "read"; seq: number };
 
 export type SyncServerMessage =
   | { t: "snapshot"; seq: number; state: Record<string, JsonValue> }
   | { t: "set"; key: string; value: JsonValue | null; seq: number; by: string | null; cid?: string }
   | { t: "rejected"; cid: string; reason: string }
-  | { t: "presence"; viewers: string[] };
+  | { t: "presence"; viewers: string[] }
+  | { t: "threads"; threads: Thread[]; people: Person[] }
+  | { t: "thread"; thread: Thread; cid?: string }
+  | { t: "ack"; cid: string }
+  | { t: "version"; version: number; note: string };
+
+/**
+ * Where a comment points. `block` is a stable block id from the compiled MDX
+ * (`data-b`), `row` a table row key inside it, and `quote` the selected text
+ * with some context (W3C TextQuoteSelector). Any part may be missing: a block
+ * without a quote is a whole-element comment, a quote without a block is
+ * matched anywhere on the page.
+ */
+export type Anchor = {
+  block?: string;
+  row?: string;
+  quote?: { exact: string; prefix: string; suffix: string };
+  /** Short label for element anchors without text ("Chart", "Table row Forgejo"). */
+  label?: string;
+};
+
+/** anchored: found as written; moved: found by fuzzy match; outdated: block exists but text changed; orphaned: gone. */
+export type AnchorStatus = "anchored" | "outdated" | "orphaned";
+
+export type ThreadComment = {
+  id: string;
+  /** Email, or "agent" for replies posted through MCP. */
+  by: string;
+  text: string;
+  at: string;
+  seq: number;
+};
+
+export type Thread = {
+  id: string;
+  anchor: Anchor | null;
+  /** Version the thread was started on. */
+  version: number;
+  by: string;
+  at: string;
+  resolved: { by: string; at: string } | null;
+  /** Version that addressed it, when an agent edit listed it in `resolves`. */
+  addressedIn?: number;
+  comments: ThreadComment[];
+};
+
+export type Person = { email: string; name: string | null };
+
+/** What changed since this viewer last opened the artifact (shell banner). */
+export type SinceLastVisit = {
+  fromVersion: number;
+  at: string;
+  versions: { version: number; note: string; at: string }[];
+  changedBlocks: string[];
+  removedHeadings: string[];
+};
 
 /**
  * The frame document the Worker serves for one artifact version. The kit's
@@ -80,4 +154,12 @@ export type ShellBoot = {
   frameUrl: string;
   syncUrl: string;
   viewer: Viewer;
+  /** Present when the artifact changed since this viewer's last visit. */
+  since?: SinceLastVisit;
+  /** Comments posted by others after the viewer last read them. */
+  readSeq?: number;
+  /** Notification level for this artifact (signed-in viewers). */
+  watch?: WatchLevel;
 };
+
+export type WatchLevel = "all" | "participating" | "mute";

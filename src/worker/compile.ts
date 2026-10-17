@@ -11,6 +11,7 @@ import utilitiesCss from "tailwindcss/utilities.css";
 import kitThemeCss from "../kit/theme.css";
 import type { JsonValue } from "../shared/protocol.ts";
 import kitExports from "./kit-exports.json";
+import { remarkBlockIds, type BlockInfo } from "./blocks.ts";
 
 export const ALLOWED_IMPORTS = new Set([
   "react",
@@ -22,7 +23,7 @@ export const ALLOWED_IMPORTS = new Set([
 ]);
 
 export type CompileError = { path: string; message: string; line?: number };
-export type CompiledModule = { path: string; code: string; classes: string[] };
+export type CompiledModule = { path: string; code: string; classes: string[]; blocks?: BlockInfo[] };
 
 
 export async function compileFile(
@@ -31,13 +32,15 @@ export async function compileFile(
   files: Set<string>,
 ): Promise<{ module?: CompiledModule; errors: CompileError[] }> {
   let code: string;
+  let blocks: BlockInfo[] | undefined;
   try {
     if (path.endsWith(".mdx") || path.endsWith(".md")) {
+      blocks = [];
       const out = await compileMdx(stripFrontmatter(source), {
         jsxImportSource: "react",
         format: path.endsWith(".md") ? "md" : "mdx",
         providerImportSource: "@a/ui",
-        remarkPlugins: [remarkGfm],
+        remarkPlugins: [remarkGfm, remarkBlockIds(blocks)],
       });
       code = String(out.value);
     } else if (/\.(tsx|ts|jsx|js)$/.test(path)) {
@@ -80,7 +83,7 @@ export async function compileFile(
     }
   }
   errors.push(...checkNames(path, code));
-  return { module: { path, code, classes: extractCandidates(source) }, errors };
+  return { module: { path, code, classes: extractCandidates(source), blocks }, errors };
 }
 
 const MODULE_EXPORTS: Record<string, Set<string>> = Object.fromEntries(
@@ -224,6 +227,8 @@ export type Build = {
   imports: Record<string, string>;
   css: string;
   data: Record<string, JsonValue>;
+  /** Top-level blocks of an MDX/MD entry, in order (empty for app.tsx). */
+  blocks?: BlockInfo[];
 };
 
 const ART_PREFIX = "@art/";
@@ -267,6 +272,7 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
   const imports: Record<string, string> = {};
   const data: Record<string, JsonValue> = {};
   const candidates = new Set<string>();
+  let blocks: BlockInfo[] = [];
   for (const path of paths) {
     if (path.startsWith("data/")) {
       try {
@@ -280,6 +286,7 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
     errors.push(...result.errors);
     if (!result.module) continue;
     for (const c of result.module.classes) candidates.add(c);
+    if (path === entries[0] && result.module.blocks) blocks = result.module.blocks;
     const code = await rewriteRelativeImports(path, result.module.code, pathSet);
     imports[ART_PREFIX + path] = `data:text/javascript;base64,${toBase64(code)}`;
   }
@@ -291,7 +298,7 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
   } catch (err) {
     return { errors: [{ path: "", message: `stylesheet: ${(err as Error).message}` }] };
   }
-  return { build: { entry: ART_PREFIX + entries[0], imports, css, data }, errors: [] };
+  return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks }, errors: [] };
 }
 
 const ARTIFACT_CSS_ENTRY = `@import "tailwindcss/theme.css" layer(theme);

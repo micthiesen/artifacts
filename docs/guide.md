@@ -32,8 +32,16 @@ email code, so they need no account.
 - **Render check:** after a successful write, the artifact is rendered in a headless browser and the result is part of the tool response. `artifact_create` and `artifact_check` also attach a screenshot of the first screen; look at it and fix layout problems before reporting. If it reports "Render check FAILED", the version is saved but broken for viewers: fix it with `artifact_edit` right away. `artifact_check` re-runs the check.
 - **Version checks and undo:** pass `baseVersion` to guard against concurrent edits. Use `artifact_history` and `artifact_revert` to undo.
 
+## Feedback from readers
+
+- **Comments:** readers can comment on any text, block, table row or the whole page. Each thread records the block it points at (`block` ids follow the outline: a heading's slug, then `<section>-1`, `<section>-2` for the blocks under it), the quoted text and the version it was written on.
+- **Pick up feedback:** call `artifact_activity` (all artifacts, or one `id`) to see new threads, replies, votes, checklist ticks and versions since your last cursor. `artifact_threads` lists an artifact's open threads with every comment.
+- **Act on it:** fix the artifact with the usual edit tools and pass `note` (one line readers will see, e.g. "Split costs per seat") and `resolves` (the thread ids you addressed). Those threads show "Addressed in vN" and their authors are notified. Reply with `artifact_comment` when you need to answer a question or explain why you didn't change something.
+- **Notes matter:** every edit's `note` appears in history, in the "Updated since you last looked" bar readers see, and in update notifications. Without one, readers see "edit index.mdx".
+
 ## Sharing
 
 - **People:** `artifact_share` adds people by email with role `view` or `edit`, removes people, or sets `public: true` for a read-only link anyone can open.
 - **Domains:** share with `"@example.com"` to let everyone with a verified email at that domain in. A person's own entry overrides the domain role. Make an `artifact_link` per person, or they sign in with their email.
+- **Link previews:** links pasted into Slack, iMessage and similar apps show a generic card for private artifacts. `artifact_update` with `preview: true` shows the title, description and a screenshot instead; only do that when the user asks.
 - **Links:** to hand the user an artifact, give them an `artifact_link` URL (it defaults to the owner and opens with no login). `artifact_share` returns a sign-in link for each person it adds. Each link signs in as one email, so a link goes only to its own person.

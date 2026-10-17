@@ -2,6 +2,7 @@ import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 
 // Secrets and owner emails come from the deployer's environment (see
 // docs/DEPLOY.md); nothing account-specific is committed.
@@ -53,6 +54,24 @@ export default Alchemy.Stack(
     const r2Backups = (yield* Config.String("R2_BACKUPS").pipe(Config.withDefault(""))) === "1";
     const backups: Record<string, Cloudflare.R2.Bucket> = r2Backups ? { BACKUPS: yield* Cloudflare.R2.Bucket("Backups") } : {};
 
+    // Notifications: Web Push keys (`bun scripts/vapid.ts`) and one Pushover
+    // application token shared by every user's Pushover channel. All optional.
+    const optional = (key: string) => Config.String(key).pipe(Config.withDefault(""));
+    const vapidPublic = yield* optional("VAPID_PUBLIC_KEY");
+    const vapidPrivate = yield* optional("VAPID_PRIVATE_KEY");
+    const pushoverToken = yield* optional("PUSHOVER_TOKEN");
+    const ownerEmails = yield* Config.String("OWNER_EMAILS");
+    const notify: Record<string, string | Redacted.Redacted<string>> = {
+      ...(vapidPublic && vapidPrivate
+        ? {
+            VAPID_PUBLIC_KEY: vapidPublic,
+            VAPID_PRIVATE_KEY: Redacted.make(vapidPrivate),
+            VAPID_SUBJECT: (yield* optional("VAPID_SUBJECT")) || `mailto:${ownerEmails.split(",")[0].trim()}`,
+          }
+        : {}),
+      ...(pushoverToken ? { PUSHOVER_TOKEN: Redacted.make(pushoverToken) } : {}),
+    };
+
     const worker = yield* Cloudflare.Worker("Artifacts", {
       name,
       main: "./build/worker/index.js",
@@ -68,8 +87,9 @@ export default Alchemy.Stack(
         LOGIN_SECRET: yield* Config.Redacted("LOGIN_SECRET"),
         MCP_TOKEN: yield* Config.Redacted("MCP_TOKEN"),
         BROWSER: Cloudflare.Browser(),
-        OWNER_EMAILS: yield* Config.String("OWNER_EMAILS"),
+        OWNER_EMAILS: ownerEmails,
         AUTH_URL: authUrl,
+        ...notify,
       },
     });
 

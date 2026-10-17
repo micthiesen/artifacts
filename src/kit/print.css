@@ -1,0 +1,390 @@
+/*
+ * Print stylesheet (included by kit.css, so it ships in /kit/v1/kit.css).
+ * Unlayered on purpose: it must beat Tailwind utilities (which live in
+ * @layer utilities) without !important, except where inline styles force it.
+ * Turns the dark UI into a light, paginated document ("Save as PDF").
+ * Pair with print.ts (preparePrint) to reveal unmounted tab/accordion panels
+ * and table rows hidden behind "Show all".
+ */
+@page {
+  margin: 16mm 14mm;
+}
+
+@media print {
+  :root,
+  .dark {
+    color-scheme: light;
+    --background: #fff;
+    --foreground: oklch(0.2 0.015 275);
+    --card: #fff;
+    --card-foreground: oklch(0.2 0.015 275);
+    --popover: #fff;
+    --popover-foreground: oklch(0.2 0.015 275);
+    --muted: oklch(0.965 0.005 275);
+    --muted-foreground: oklch(0.42 0.02 275);
+    --secondary: oklch(0.95 0.006 275);
+    --secondary-foreground: oklch(0.2 0.015 275);
+    --primary: oklch(0.47 0.17 285);
+    --primary-foreground: #fff;
+    --accent: oklch(0.95 0.025 285);
+    --accent-foreground: oklch(0.36 0.12 285);
+    --border: oklch(0.88 0.006 275);
+    --input: oklch(0.78 0.01 275);
+    --ring: oklch(0.55 0.15 285);
+    --positive: oklch(0.5 0.14 158);
+    --caution: oklch(0.58 0.14 70);
+    --negative: oklch(0.54 0.19 25);
+    --chart-1: oklch(0.52 0.18 285);
+    --chart-2: oklch(0.6 0.12 205);
+    --chart-3: oklch(0.7 0.15 75);
+    --chart-4: oklch(0.58 0.19 22);
+    --chart-5: oklch(0.58 0.14 150);
+    --chart-6: oklch(0.56 0.17 335);
+    --signal-from: oklch(0.5 0.17 285);
+    --signal-to: oklch(0.6 0.12 205);
+    --glow: none;
+    --shadow-card: none;
+    --shadow-pop: none;
+  }
+
+  /* ---- Page ---------------------------------------------------------------- */
+  html,
+  body,
+  #root {
+    height: auto !important;
+    min-height: 0 !important;
+    background: #fff !important;
+    background-image: none !important;
+    color: var(--foreground);
+  }
+  body {
+    font-size: 10.5pt;
+    line-height: 1.5;
+    orphans: 3;
+    widows: 3;
+  }
+  /* Apps often use h-full/overflow containers; let content flow across pages. */
+  #root * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+  #root [class*="h-full"],
+  #root [class*="min-h-"],
+  #root [class*="overflow-auto"],
+  #root [class*="overflow-y-auto"],
+  #root [class*="overflow-x-auto"] {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  /* Page column: full printable width, no screen paddings. */
+  #root [class*="max-w-3xl"],
+  #root [class*="max-w-5xl"] {
+    max-width: none !important;
+  }
+  #root [class*="mx-auto"][class*="w-full"] {
+    padding: 0 !important;
+  }
+  header.mb-10 {
+    margin-bottom: 1.5rem;
+  }
+  header.mb-10 h1 {
+    font-size: 24pt;
+  }
+
+  /* Header: runtime sets body.dataset.printTitle / printMeta. */
+  body[data-print-title]::before,
+  body[data-print-meta]::before {
+    display: block;
+    margin-bottom: 14pt;
+    padding-bottom: 6pt;
+    border-bottom: 0.5pt solid var(--border);
+    color: var(--muted-foreground);
+    font-size: 8.5pt;
+    letter-spacing: 0.02em;
+    white-space: pre;
+  }
+  body[data-print-title]::before {
+    content: attr(data-print-title);
+  }
+  body[data-print-meta]::before {
+    content: attr(data-print-meta);
+  }
+  body[data-print-title][data-print-meta]::before {
+    content: attr(data-print-title) "  ·  " attr(data-print-meta);
+  }
+
+  /* Stat rows and grids: print width is below the lg breakpoint; keep the wide layout. */
+  [class*="lg:grid-cols-3"] { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+  [class*="lg:grid-cols-4"] { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+  [class*="lg:grid-cols-5"] { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; }
+  [class*="lg:grid-cols-6"] { grid-template-columns: repeat(6, minmax(0, 1fr)) !important; }
+
+  /* ---- Motion -------------------------------------------------------------- */
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .recharts-wrapper *,
+  .recharts-surface * {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  /* ---- Hidden, interactive-only UI ---------------------------------------- */
+  [data-print="hide"],
+  #art-error-toast,
+  [role="tooltip"],
+  [data-base-ui-inert],
+  [data-popup-open],
+  [role="dialog"],
+  form,
+  textarea[placeholder="Add a comment…"],
+  div:has(> input[aria-label="Filter rows"]),
+  button:not([role="checkbox"]):not([role="radio"]),
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  .recharts-tooltip-wrapper,
+  .recharts-tooltip-cursor {
+    display: none !important;
+  }
+  /* ...but buttons that carry content stay: poll options, checkboxes, accordion headings. */
+  button[role="checkbox"],
+  button[role="radio"],
+  h3 > button[aria-expanded],
+  [data-print="show"] {
+    display: flex !important;
+  }
+  button[role="checkbox"][class*="size-["] {
+    display: inline-flex !important;
+  }
+  h3 > button[aria-expanded] svg {
+    display: none;
+  }
+  th button:not([role="checkbox"]):not([role="radio"]) {
+    display: inline-flex !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: none !important;
+    color: inherit !important;
+    font: inherit !important;
+  }
+  th button svg {
+    display: none;
+  }
+  button[aria-label^="Remove"],
+  button[aria-label^="Delete"] {
+    display: none !important;
+  }
+  /* "You have view access" style notes under collab widgets. */
+  p.mt-3.text-\[13px\].text-muted-foreground {
+    display: none;
+  }
+  /* Shared notes keep their text, lose the form chrome. */
+  textarea {
+    display: block !important;
+    field-sizing: content;
+    height: auto !important;
+    min-height: 0 !important;
+    resize: none;
+    border: 0.5pt solid var(--border) !important;
+    background: transparent !important;
+    color: var(--foreground);
+    overflow: visible !important;
+  }
+  textarea[placeholder="Add a comment…"] {
+    display: none !important;
+  }
+
+  /* ---- Keep-together and breaks ------------------------------------------- */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  figcaption {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  p,
+  li,
+  blockquote {
+    orphans: 3;
+    widows: 3;
+  }
+  figure,
+  img,
+  svg,
+  pre,
+  blockquote,
+  tr,
+  [role="note"],
+  section > ul > li,
+  [class*="rounded-xl"][class*="border"],
+  [class*="rounded-lg"][class*="border"],
+  [data-slot="card"] {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  img,
+  svg {
+    max-width: 100%;
+  }
+  pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: visible !important;
+    background: var(--muted) !important;
+    color: var(--foreground) !important;
+    font-size: 8.5pt;
+  }
+  /* Very tall cards (big lists, comment threads) may split. */
+  ul,
+  ol {
+    break-inside: auto;
+  }
+
+  /* ---- Tables --------------------------------------------------------------- */
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+  tr {
+    break-inside: avoid;
+  }
+  table {
+    width: 100% !important;
+    font-size: 9.5pt;
+  }
+  th,
+  td {
+    white-space: normal !important;
+    padding: 4pt 8pt !important;
+  }
+  th {
+    background: var(--muted) !important;
+  }
+  [class*="overflow-hidden"][class*="rounded-xl"] {
+    overflow: visible !important;
+  }
+  [class*="overflow-x-auto"] {
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
+  }
+
+  /* ---- Charts --------------------------------------------------------------- */
+  .recharts-responsive-container,
+  .recharts-wrapper {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .recharts-responsive-container > div {
+    width: 100% !important;
+    overflow: visible !important;
+  }
+  .recharts-wrapper > .recharts-surface {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+  }
+  .recharts-legend-wrapper svg {
+    width: 14px !important;
+    height: 14px !important;
+  }
+  .recharts-legend-wrapper {
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+  }
+
+  /* ---- Tabs (clones inserted by preparePrint) and accordions -------------- */
+  [data-print-tabs] > section {
+    margin-top: 14pt;
+  }
+  [data-print-tab-label] {
+    margin: 0 0 6pt;
+    font-size: 10pt;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    break-after: avoid;
+  }
+  [role="tabpanel"][hidden],
+  [role="region"][hidden] {
+    display: block !important;
+    height: auto !important;
+    opacity: 1 !important;
+  }
+  [role="region"] {
+    height: auto !important;
+    overflow: visible !important;
+  }
+  [data-ending-style],
+  [data-starting-style] {
+    opacity: 1 !important;
+  }
+
+  /* ---- Links ----------------------------------------------------------------- */
+  a {
+    color: var(--primary) !important;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklab, var(--primary) 40%, transparent);
+  }
+  a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    color: var(--muted-foreground);
+    font-size: 0.78em;
+    font-weight: 400;
+    overflow-wrap: anywhere;
+  }
+  /* Bare URLs already show themselves. */
+  a[href^="http"][data-print-url="same"]::after {
+    content: none;
+  }
+
+  /* ---- Colour that carries meaning (keep exact on paper) ---------------------- */
+  .recharts-surface,
+  .recharts-surface *,
+  [role="note"],
+  [role="progressbar"] *,
+  button[role="radio"] *,
+  button[role="checkbox"],
+  button[role="checkbox"] *,
+  [class*="bg-signal"],
+  [class*="bg-positive"],
+  [class*="bg-caution"],
+  [class*="bg-negative"],
+  [class*="bg-primary"],
+  [class*="bg-accent"],
+  [class*="bg-muted"],
+  [class*="rounded-full"][class*="border"],
+  [class*="text-positive"],
+  [class*="text-negative"],
+  [class*="text-caution"],
+  [class*="before:bg-signal"],
+  svg {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* Gradient text becomes solid ink. */
+  [class*="text-signal"] {
+    background: none !important;
+    -webkit-background-clip: border-box !important;
+    background-clip: border-box !important;
+    color: var(--primary) !important;
+  }
+  /* Summary lead: drop the tinted gradient, keep the rule. */
+  [class*="bg-[linear-gradient"] {
+    background-image: none !important;
+    background-color: var(--accent) !important;
+  }
+}

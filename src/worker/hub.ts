@@ -6,13 +6,22 @@ import { buildArtifact, type Build, type CompileError } from "./compile.ts";
 import { renderCheck, type CheckEnv, type CheckOutcome, type RenderCheck } from "./check.ts";
 import { domainOf, sharePrincipal } from "./principal.ts";
 import { applyJsonPatch, applyTextEdits, EditError, grepFiles, type JsonPatchOp, type TextEdit } from "./edit.ts";
+import { diffBlocks, type BlockInfo } from "./blocks.ts";
+import { composeMessage, mentionedEmails, type OutboxItem } from "./notifications.ts";
+import { sendToChannel, type ChannelType, type NotifyEnv } from "./notify.ts";
 import {
   SHARED_STATE_MAX_BYTES,
   SHARED_VALUE_MAX_BYTES,
+  type Anchor,
   type JsonValue,
+  type Person,
   type Role,
+  type SinceLastVisit,
   type SyncClientMessage,
   type SyncServerMessage,
+  type Thread,
+  type ThreadComment,
+  type WatchLevel,
 } from "../shared/protocol.ts";
 
 export type ArtifactMeta = {
@@ -21,9 +30,14 @@ export type ArtifactMeta = {
   description: string;
   version: number;
   public: boolean;
+  /** Owner opted in to rich link previews (title, description, screenshot). */
+  preview: boolean;
   createdAt: string;
   updatedAt: string;
 };
+
+/** "agent" for MCP writes, an email for people. */
+export type Actor = string;
 
 /** `email` is a full address, or "@domain" for everyone at that domain. */
 export type ShareEntry = { email: string; role: Exclude<Role, "owner"> };
@@ -48,15 +62,36 @@ export type HubApi = AsyncMethods<
     | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState" | "recordError" | "errors"
     | "runRenderCheck" | "screenshot" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts" | "setHostAllowed"
     | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportAll" | "importAll" | "backupToR2"
+    | "threads" | "addComment" | "resolveThread" | "deleteComment" | "activity" | "visit" | "people" | "previewInfo"
+    | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "recordChannelResult" | "setWatch"
   >
 > & { fetch(request: Request): Promise<Response> };
 
-type SocketTag = { id: string; email: string | null; role: Role };
+type SocketTag = { id: string; email: string | null; role: Role; origin?: string };
 
 const HISTORY_KEEP = 50;
 const ASSETS_MAX_BYTES = 20 * 1024 * 1024;
 const SOURCE_MAX_BYTES = 1024 * 1024;
-const EXPORT_TABLES = ["artifacts", "files", "history", "builds", "shares", "state", "errors", "checks", "assets", "sources", "allowed_hosts"];
+const EXPORT_TABLES = [
+  "artifacts", "files", "history", "builds", "shares", "state", "errors", "checks", "assets", "sources", "allowed_hosts",
+  "events", "threads", "comments", "users", "channels", "watches", "seen",
+];
+/** Tables keyed by artifact, cleared when an artifact is deleted. */
+const ARTIFACT_TABLES = [
+  "files", "history", "builds", "shares", "state", "errors", "checks", "assets", "sources",
+  "events", "threads", "comments", "watches", "seen", "outbox",
+];
+const EVENTS_KEEP = 5000;
+const COMMENT_MAX_CHARS = 5000;
+const ANCHOR_MAX_BYTES = 2048;
+// Notifications wait briefly so a burst of comments becomes one message, and
+// longer for page updates, which agents tend to make in runs.
+const COMMENT_DELAY_MS = 45_000;
+const UPDATE_DELAY_MS = 10 * 60_000;
+const UPDATE_MAX_WAIT_MS = 30 * 60_000;
+// Workers Free allows 50 subrequests per invocation; leave headroom.
+const SENDS_PER_ALARM = 40;
+const CHANNEL_MAX_FAILURES = 5;
 // Browser Run free plan: one quick action every 10 s.
 const CHECK_SPACING_MS = 10_500;
 const CHECK_INLINE_WAIT_MS = 8_000;
@@ -100,20 +135,55 @@ export class ArtifactHub extends DurableObject {
       CREATE TABLE IF NOT EXISTS errors (
         artifact_id TEXT NOT NULL, at TEXT NOT NULL, version INTEGER NOT NULL, viewer TEXT, message TEXT NOT NULL,
         stack TEXT);
+      CREATE TABLE IF NOT EXISTS events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, artifact_id TEXT NOT NULL, at TEXT NOT NULL, actor TEXT,
+        type TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS events_by_artifact ON events (artifact_id, seq);
+      CREATE TABLE IF NOT EXISTS threads (
+        id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, anchor TEXT, version INTEGER NOT NULL, by TEXT NOT NULL,
+        at TEXT NOT NULL, resolved_by TEXT, resolved_at TEXT, addressed_in INTEGER);
+      CREATE INDEX IF NOT EXISTS threads_by_artifact ON threads (artifact_id);
+      CREATE TABLE IF NOT EXISTS comments (
+        id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, artifact_id TEXT NOT NULL, by TEXT NOT NULL, text TEXT NOT NULL,
+        at TEXT NOT NULL, seq INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS comments_by_artifact ON comments (artifact_id, seq);
+      CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, name TEXT, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS channels (
+        id TEXT PRIMARY KEY, email TEXT NOT NULL, type TEXT NOT NULL, label TEXT NOT NULL, config TEXT NOT NULL,
+        created_at TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, last_error TEXT, disabled INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS watches (
+        email TEXT NOT NULL, artifact_id TEXT NOT NULL, level TEXT NOT NULL, PRIMARY KEY (email, artifact_id));
+      CREATE TABLE IF NOT EXISTS seen (
+        email TEXT NOT NULL, artifact_id TEXT NOT NULL, version INTEGER NOT NULL, read_seq INTEGER NOT NULL DEFAULT 0,
+        at TEXT NOT NULL, PRIMARY KEY (email, artifact_id));
+      CREATE TABLE IF NOT EXISTS outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL,
+        data TEXT NOT NULL, due_at INTEGER NOT NULL);
     `);
     // Columns added after the first deploy.
-    const checkCols = this.sql.exec(`PRAGMA table_info(checks)`).toArray().map((c) => c.name);
-    if (!checkCols.includes("screenshot")) this.sql.exec(`ALTER TABLE checks ADD COLUMN screenshot TEXT`);
+    const columns = (table: string) => this.sql.exec(`PRAGMA table_info(${table})`).toArray().map((c) => c.name);
+    if (!columns("checks").includes("screenshot")) this.sql.exec(`ALTER TABLE checks ADD COLUMN screenshot TEXT`);
+    if (!columns("history").includes("blocks")) this.sql.exec(`ALTER TABLE history ADD COLUMN blocks TEXT`);
+    if (!columns("seen").includes("since_version")) {
+      this.sql.exec(`ALTER TABLE seen ADD COLUMN since_version INTEGER`);
+      this.sql.exec(`ALTER TABLE seen ADD COLUMN since_at TEXT`);
+    }
+    if (!columns("artifacts").includes("preview")) {
+      this.sql.exec(`ALTER TABLE artifacts ADD COLUMN preview INTEGER NOT NULL DEFAULT 0`);
+    }
   }
 
   // ---- reads -------------------------------------------------------------
 
-  list(viewer: { email: string | null; owner: boolean }): (ArtifactMeta & { role: Role })[] {
+  list(viewer: { email: string | null; owner: boolean }): (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number })[] {
+    const withActivity = <T extends ArtifactMeta>(rows: T[]) => (viewer.email ? rows.map((a) => ({ ...a, ...this.activityFor(a, viewer.email!) })) : rows);
     if (viewer.owner) {
-      return this.sql
-        .exec(`SELECT *, 'owner' AS role FROM artifacts ORDER BY updated_at DESC`)
-        .toArray()
-        .map((r) => ({ ...toMeta(r), role: "owner" as Role }));
+      return withActivity(
+        this.sql
+          .exec(`SELECT *, 'owner' AS role FROM artifacts ORDER BY updated_at DESC`)
+          .toArray()
+          .map((r) => ({ ...toMeta(r), role: "owner" as Role })),
+      );
     }
     const email = viewer.email ?? "";
     const rows = this.sql
@@ -130,7 +200,17 @@ export class ArtifactHub extends DurableObject {
       const prev = byId.get(r.id as string);
       if (!prev || r.principal === email) byId.set(r.id as string, r);
     }
-    return [...byId.values()].map((r) => ({ ...toMeta(r), role: r.role as Role }));
+    return withActivity([...byId.values()].map((r) => ({ ...toMeta(r), role: r.role as Role })));
+  }
+
+  /** Whether a viewer has a newer version to see and how many comments by others they haven't read. */
+  private activityFor(a: ArtifactMeta, email: string): { unseen: boolean; unread: number } {
+    const seen = this.sql.exec(`SELECT version, read_seq FROM seen WHERE email = ? AND artifact_id = ?`, email, a.id).toArray()[0];
+    if (!seen) return { unseen: true, unread: 0 };
+    const unread = this.sql
+      .exec(`SELECT COUNT(*) AS n FROM comments WHERE artifact_id = ? AND seq > ? AND by != ?`, a.id, seen.read_seq, email)
+      .one().n as number;
+    return { unseen: (seen.version as number) < a.version, unread };
   }
 
   meta(id: string): (ArtifactMeta & { shares: ShareEntry[]; files: { path: string; bytes: number }[] }) | null {
@@ -197,7 +277,7 @@ export class ArtifactHub extends DurableObject {
 
   // ---- writes ------------------------------------------------------------
 
-  async create(input: { title: string; description?: string; files: Record<string, string> }): Promise<WriteResult> {
+  async create(input: { title: string; description?: string; files: Record<string, string>; actor?: Actor }): Promise<WriteResult> {
     const { build, errors } = await buildArtifact(input.files);
     if (!build) return { ok: false, errors };
     const id = newId();
@@ -212,22 +292,25 @@ export class ArtifactHub extends DurableObject {
         now,
       );
       this.commitFiles(id, 1, input.files, build, "created", now);
+      this.logEvent(id, input.actor ?? "agent", "version", { version: 1, note: "created" });
     });
     return { ok: true, id, version: 1, files: Object.keys(input.files).sort() };
   }
 
-  async editText(id: string, path: string, edits: TextEdit[], baseVersion?: number): Promise<WriteResult> {
-    return this.change(id, baseVersion, `edit ${path}`, (files) => {
+  async editText(id: string, path: string, edits: TextEdit[], baseVersion?: number, opts: ChangeOptions = {}): Promise<WriteResult> {
+    return this.change(id, baseVersion, opts.note || `edit ${path}`, opts, (files) => {
       if (!(path in files)) throw new EditError(`no file ${path}; files: ${Object.keys(files).join(", ")}`);
       files[path] = applyTextEdits(path, files[path], edits);
     });
   }
 
-  async writeFiles(id: string, changes: Record<string, string | null>, baseVersion?: number): Promise<WriteResult> {
-    const note = Object.entries(changes)
-      .map(([p, c]) => `${c === null ? "delete" : "write"} ${p}`)
-      .join(", ");
-    return this.change(id, baseVersion, note, (files) => {
+  async writeFiles(id: string, changes: Record<string, string | null>, baseVersion?: number, opts: ChangeOptions = {}): Promise<WriteResult> {
+    const note =
+      opts.note ||
+      Object.entries(changes)
+        .map(([p, c]) => `${c === null ? "delete" : "write"} ${p}`)
+        .join(", ");
+    return this.change(id, baseVersion, note, opts, (files) => {
       for (const [path, content] of Object.entries(changes)) {
         if (content === null) {
           if (!(path in files)) throw new EditError(`cannot delete ${path}: no such file`);
@@ -237,8 +320,8 @@ export class ArtifactHub extends DurableObject {
     });
   }
 
-  async patchData(id: string, path: string, ops: JsonPatchOp[], baseVersion?: number): Promise<WriteResult> {
-    return this.change(id, baseVersion, `patch ${path}`, (files) => {
+  async patchData(id: string, path: string, ops: JsonPatchOp[], baseVersion?: number, opts: ChangeOptions = {}): Promise<WriteResult> {
+    return this.change(id, baseVersion, opts.note || `patch ${path}`, opts, (files) => {
       if (!path.startsWith("data/") || !(path in files)) throw new EditError(`no data file ${path}`);
       let doc: unknown;
       try {
@@ -250,22 +333,23 @@ export class ArtifactHub extends DurableObject {
     });
   }
 
-  async revert(id: string, version: number): Promise<WriteResult> {
+  async revert(id: string, version: number, opts: ChangeOptions = {}): Promise<WriteResult> {
     const row = this.sql.exec(`SELECT files FROM history WHERE artifact_id = ? AND version = ?`, id, version).toArray()[0];
     if (!row) throw new HubError(`no stored version ${version}; see artifact_history`);
     const target = JSON.parse(row.files as string) as Record<string, string>;
-    return this.change(id, undefined, `revert to v${version}`, (files) => {
+    return this.change(id, undefined, `revert to v${version}`, opts, (files) => {
       for (const k of Object.keys(files)) delete files[k];
       Object.assign(files, target);
     });
   }
 
-  updateMeta(id: string, patch: { title?: string; description?: string }): ArtifactMeta {
+  updateMeta(id: string, patch: { title?: string; description?: string; preview?: boolean }): ArtifactMeta {
     this.requireArtifact(id);
     if (patch.title !== undefined) this.sql.exec(`UPDATE artifacts SET title = ? WHERE id = ?`, patch.title, id);
     if (patch.description !== undefined) {
       this.sql.exec(`UPDATE artifacts SET description = ? WHERE id = ?`, patch.description, id);
     }
+    if (patch.preview !== undefined) this.sql.exec(`UPDATE artifacts SET preview = ? WHERE id = ?`, patch.preview ? 1 : 0, id);
     return toMeta(this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).one());
   }
 
@@ -299,9 +383,7 @@ export class ArtifactHub extends DurableObject {
   delete(id: string) {
     this.requireArtifact(id);
     this.ctx.storage.transactionSync(() => {
-      for (const t of ["files", "history", "builds", "shares", "state", "errors", "checks", "assets", "sources"]) {
-        this.sql.exec(`DELETE FROM ${t} WHERE artifact_id = ?`, id);
-      }
+      for (const t of ARTIFACT_TABLES) this.sql.exec(`DELETE FROM ${t} WHERE artifact_id = ?`, id);
       this.sql.exec(`DELETE FROM artifacts WHERE id = ?`, id);
     });
     for (const ws of this.ctx.getWebSockets(id)) ws.close(4004, "artifact deleted");
@@ -318,14 +400,28 @@ export class ArtifactHub extends DurableObject {
     return out;
   }
 
-  /** Set (or delete with null) shared keys as `by`; broadcasts to live viewers. */
-  setState(id: string, changes: Record<string, JsonValue | null>, by: string | null, cid?: string): number {
+  /**
+   * Set (or delete with null) shared keys; broadcasts to live viewers. `by` is
+   * the verified email of a socket write, or null for MCP. People's writes to
+   * the kit's collab keys are stamped here so authorship can't be forged: a
+   * poll vote must be your own, and only a comment's author (or an owner) can
+   * change or delete it.
+   */
+  setState(
+    id: string,
+    changes: Record<string, JsonValue | null>,
+    by: string | null,
+    cid?: string,
+    opts: { role?: Role; origin?: string } = {},
+  ): number {
     this.requireArtifact(id);
     let seq = 0;
-    const applied: { key: string; value: JsonValue | null; seq: number }[] = [];
+    const applied: { key: string; value: JsonValue | null; seq: number; created: boolean }[] = [];
     this.ctx.storage.transactionSync(() => {
-      for (const [key, value] of Object.entries(changes)) {
+      for (const [key, raw] of Object.entries(changes)) {
         if (key.length === 0 || key.length > 200) throw new HubError(`state key "${key.slice(0, 40)}" must be 1-200 chars`);
+        const existing = this.sql.exec(`SELECT by FROM state WHERE artifact_id = ? AND key = ?`, id, key).toArray()[0];
+        const value = by ? stampCollab(key, raw, by, Boolean(existing), (existing?.by as string | null) ?? null, opts.role) : raw;
         seq = (this.sql.exec(`UPDATE artifacts SET state_seq = state_seq + 1 WHERE id = ? RETURNING state_seq`, id).one()
           .state_seq as number);
         if (value === null) {
@@ -343,14 +439,31 @@ export class ArtifactHub extends DurableObject {
             by,
           );
         }
-        applied.push({ key, value, seq });
+        applied.push({ key, value, seq, created: !existing && value !== null });
       }
       const total = this.sql
         .exec(`SELECT COALESCE(SUM(length(value)), 0) AS n FROM state WHERE artifact_id = ?`, id)
         .one().n as number;
       if (total > SHARED_STATE_MAX_BYTES) throw new HubError(`shared state for this artifact would exceed 4 MB`);
+      for (const a of applied) this.logStateEvent(id, by ?? "agent", a.key, a.value, a.created);
     });
     for (const a of applied) this.broadcast(id, { t: "set", key: a.key, value: a.value, seq: a.seq, by, cid });
+    // A new comment in a <Comments> block notifies like a thread comment.
+    for (const a of applied) {
+      const scope = /^comments\/([^/]+)\//.exec(a.key)?.[1];
+      if (!a.created || !scope || !by || !a.value || typeof a.value !== "object") continue;
+      const text = String((a.value as { text?: unknown }).text ?? "");
+      const earlier = this.sql
+        .exec(
+          `SELECT DISTINCT by FROM state WHERE artifact_id = ? AND substr(key, 1, ?) = ? AND by IS NOT NULL`,
+          id,
+          `comments/${scope}/`.length,
+          `comments/${scope}/`,
+        )
+        .toArray()
+        .map((r) => r.by as string);
+      this.notifyComment(id, by, { thread: `comments/${scope}`, text, participants: earlier, reply: false, origin: opts.origin });
+    }
     return seq;
   }
 
@@ -419,17 +532,31 @@ export class ArtifactHub extends DurableObject {
 
   async alarm() {
     const next = this.sql.exec(`SELECT artifact_id, origin FROM checks WHERE status = 'queued' ORDER BY at LIMIT 1`).toArray()[0];
-    if (!next) return;
-    const id = next.artifact_id as string;
-    const row = this.sql.exec(`SELECT version FROM artifacts WHERE id = ?`, id).toArray()[0];
-    if (!row) {
-      this.sql.exec(`DELETE FROM checks WHERE artifact_id = ?`, id);
-    } else {
-      this.nextCheckAt = Date.now() + CHECK_SPACING_MS;
-      await this.runCheck(id, row.version as number, next.origin as string);
+    if (next && Date.now() >= this.nextCheckAt) {
+      const id = next.artifact_id as string;
+      const row = this.sql.exec(`SELECT version FROM artifacts WHERE id = ?`, id).toArray()[0];
+      if (!row) {
+        this.sql.exec(`DELETE FROM checks WHERE artifact_id = ?`, id);
+      } else {
+        this.nextCheckAt = Date.now() + CHECK_SPACING_MS;
+        await this.runCheck(id, row.version as number, next.origin as string);
+      }
     }
-    const remaining = this.sql.exec(`SELECT COUNT(*) AS n FROM checks WHERE status = 'queued'`).one().n as number;
-    if (remaining > 0) await this.ctx.storage.setAlarm(Math.max(Date.now() + CHECK_SPACING_MS, this.nextCheckAt));
+    await this.deliverDue();
+    await this.armAlarm();
+  }
+
+  /** One alarm serves both queues: the earliest queued render check and the earliest due notification. */
+  private async armAlarm() {
+    const times: number[] = [];
+    const queued = this.sql.exec(`SELECT COUNT(*) AS n FROM checks WHERE status = 'queued'`).one().n as number;
+    if (queued > 0) times.push(Math.max(Date.now() + CHECK_SPACING_MS, this.nextCheckAt));
+    const due = this.sql.exec(`SELECT MIN(due_at) AS t FROM outbox`).one().t as number | null;
+    if (due !== null) times.push(Math.max(due, Date.now() + 1000));
+    if (!times.length) return;
+    const at = Math.min(...times);
+    const existing = await this.ctx.storage.getAlarm();
+    if (existing === null || existing > at || existing < Date.now()) await this.ctx.storage.setAlarm(at);
   }
 
   /** Runs one check and stores it. Returns null when Browser Run rate-limited us. */
@@ -466,9 +593,7 @@ export class ArtifactHub extends DurableObject {
     );
     const queued = this.sql.exec(`SELECT COUNT(*) AS n FROM checks WHERE status = 'queued'`).one().n as number;
     const at = Math.max(Date.now() + CHECK_SPACING_MS, this.nextCheckAt);
-    void this.ctx.storage.getAlarm().then((existing) => {
-      if (existing === null || existing > at) return this.ctx.storage.setAlarm(at);
-    });
+    void this.armAlarm();
     return { status: "queued", inSeconds: Math.ceil((at - Date.now()) / 1000) + (queued - 1) * 11 + 5 };
   }
 
@@ -695,14 +820,17 @@ export class ArtifactHub extends DurableObject {
     const id = request.headers.get("X-Art-Id") ?? "";
     const role = request.headers.get("X-Art-Role") as Role | null;
     const email = request.headers.get("X-Art-Email") || null;
+    const origin = request.headers.get("X-Art-Origin") ?? undefined;
     if (request.headers.get("Upgrade") !== "websocket" || !role) return new Response("expected websocket", { status: 400 });
     this.requireArtifact(id);
     const pair = new WebSocketPair();
-    const tag: SocketTag = { id, email, role };
+    const tag: SocketTag = { id, email, role, origin };
     this.ctx.acceptWebSocket(pair[1], [id]);
     pair[1].serializeAttachment(tag);
     const seq = this.sql.exec(`SELECT state_seq FROM artifacts WHERE id = ?`, id).one().state_seq as number;
     send(pair[1], { t: "snapshot", seq, state: this.state(id) });
+    // Comments are for signed-in collaborators; anonymous public viewers don't get them.
+    if (email) send(pair[1], { t: "threads", threads: this.threads(id), people: this.people(id, role !== "view" ? undefined : email) });
     this.broadcastPresence(id);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -715,15 +843,30 @@ export class ArtifactHub extends DurableObject {
     } catch {
       return;
     }
-    if (msg.t !== "set") return;
-    if (tag.role === "view" || !tag.email) {
-      send(ws, { t: "rejected", cid: msg.cid, reason: "this viewer has read-only access" });
+    if (!msg || typeof msg !== "object") return;
+    if (msg.t === "read") {
+      if (tag.email && Number.isFinite(msg.seq)) this.markRead(tag.id, tag.email, msg.seq);
+      return;
+    }
+    const cid = "cid" in msg ? String(msg.cid) : "";
+    if (!tag.email) {
+      send(ws, { t: "rejected", cid, reason: "sign in to take part" });
       return;
     }
     try {
-      this.setState(tag.id, { [msg.key]: msg.value }, tag.email, msg.cid);
+      // Anyone signed in who can open the artifact may comment; shared state needs edit access.
+      if (msg.t === "comment") {
+        this.addComment(tag.id, tag.email, { thread: msg.thread, anchor: msg.anchor ?? null, text: msg.text }, tag.origin, cid, tag.role);
+      } else if (msg.t === "resolve") {
+        this.resolveThread(tag.id, tag.email, msg.thread, msg.resolved, tag.role, tag.origin, cid);
+      } else if (msg.t === "comment:delete") {
+        this.deleteComment(tag.id, tag.email, msg.comment, tag.role, cid);
+      } else if (msg.t === "set") {
+        if (tag.role === "view") throw new HubError("this viewer has read-only access");
+        this.setState(tag.id, { [msg.key]: msg.value }, tag.email, msg.cid, { role: tag.role, origin: tag.origin });
+      }
     } catch (err) {
-      send(ws, { t: "rejected", cid: msg.cid, reason: (err as Error).message });
+      send(ws, { t: "rejected", cid, reason: (err as Error).message });
     }
   }
 
@@ -737,12 +880,534 @@ export class ArtifactHub extends DurableObject {
     this.broadcastPresence(tag.id, ws);
   }
 
+  // ---- comment threads -------------------------------------------------------
+
+  threads(id: string): Thread[] {
+    const threads = this.sql.exec(`SELECT * FROM threads WHERE artifact_id = ? ORDER BY at`, id).toArray();
+    const comments = new Map<string, ThreadComment[]>();
+    for (const c of this.sql.exec(`SELECT * FROM comments WHERE artifact_id = ? ORDER BY seq`, id)) {
+      const list = comments.get(c.thread_id as string) ?? [];
+      list.push({ id: c.id as string, by: c.by as string, text: c.text as string, at: c.at as string, seq: c.seq as number });
+      comments.set(c.thread_id as string, list);
+    }
+    return threads.map((t) => toThread(t, comments.get(t.id as string) ?? []));
+  }
+
+  private thread(threadId: string): Thread | null {
+    const t = this.sql.exec(`SELECT * FROM threads WHERE id = ?`, threadId).toArray()[0];
+    if (!t) return null;
+    const comments = this.sql
+      .exec(`SELECT * FROM comments WHERE thread_id = ? ORDER BY seq`, threadId)
+      .toArray()
+      .map((c) => ({ id: c.id as string, by: c.by as string, text: c.text as string, at: c.at as string, seq: c.seq as number }));
+    return toThread(t, comments);
+  }
+
+  /** Start a thread (no `thread`) or reply to one. `actor` is an email or "agent". */
+  addComment(
+    id: string,
+    actor: Actor,
+    input: { thread?: string; anchor?: Anchor | null; text: string },
+    origin?: string,
+    cid?: string,
+    role: Role | "agent" = "agent",
+  ): Thread {
+    const art = this.requireArtifact(id);
+    if (actor !== "agent") {
+      const recent = this.sql
+        .exec(`SELECT COUNT(*) AS n FROM comments WHERE artifact_id = ? AND by = ? AND at > ?`, id, actor, new Date(Date.now() - 60_000).toISOString())
+        .one().n as number;
+      if (recent >= 20) throw new HubError("too many comments in a minute; wait a moment");
+    }
+    const text = String(input.text ?? "").trim();
+    if (!text) throw new HubError("comment text is empty");
+    if (text.length > COMMENT_MAX_CHARS) throw new HubError(`comments are limited to ${COMMENT_MAX_CHARS} characters`);
+    const now = new Date().toISOString();
+    let threadId = input.thread;
+    const reply = Boolean(threadId);
+    let participants: string[] = [];
+    this.ctx.storage.transactionSync(() => {
+      if (threadId) {
+        const t = this.sql.exec(`SELECT id, by FROM threads WHERE id = ? AND artifact_id = ?`, threadId, id).toArray()[0];
+        if (!t) throw new HubError(`no thread ${threadId} on ${id}`);
+        const mayReopen = role !== "view" || t.by === actor;
+        participants = this.sql
+          .exec(`SELECT DISTINCT by FROM comments WHERE thread_id = ?`, threadId)
+          .toArray()
+          .map((r) => r.by as string);
+        // A reply reopens a resolved thread, as in most review tools.
+        if (mayReopen) this.sql.exec(`UPDATE threads SET resolved_by = NULL, resolved_at = NULL WHERE id = ? AND resolved_at IS NOT NULL`, threadId);
+      } else {
+        const anchor = cleanAnchor(input.anchor ?? null);
+        threadId = `t${newId().slice(1)}`;
+        this.sql.exec(
+          `INSERT INTO threads (id, artifact_id, anchor, version, by, at) VALUES (?, ?, ?, ?, ?, ?)`,
+          threadId,
+          id,
+          anchor ? JSON.stringify(anchor) : null,
+          art.version as number,
+          actor,
+          now,
+        );
+      }
+      const commentId = `c${newId().slice(1)}`;
+      const seq = this.logEvent(id, actor, reply ? "reply" : "thread", { thread: threadId, comment: commentId, text: text.slice(0, 500) });
+      this.sql.exec(
+        `INSERT INTO comments (id, thread_id, artifact_id, by, text, at, seq) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        commentId,
+        threadId,
+        id,
+        actor,
+        text,
+        now,
+        seq,
+      );
+    });
+    const thread = this.thread(threadId!)!;
+    this.broadcast(id, { t: "thread", thread, cid });
+    this.notifyComment(id, actor, { thread: threadId!, text, participants, reply, origin });
+    return thread;
+  }
+
+  resolveThread(id: string, actor: Actor, threadId: string, resolved: boolean, role: Role | "agent" = "agent", origin?: string, cid?: string): Thread {
+    const t = this.sql.exec(`SELECT * FROM threads WHERE id = ? AND artifact_id = ?`, threadId, id).toArray()[0];
+    if (!t) throw new HubError(`no thread ${threadId} on ${id}`);
+    if (role === "view" && t.by !== actor) throw new HubError("only the thread's author or an editor can resolve it");
+    const now = new Date().toISOString();
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE threads SET resolved_by = ?, resolved_at = ? WHERE id = ?`,
+        resolved ? actor : null,
+        resolved ? now : null,
+        threadId,
+      );
+      this.logEvent(id, actor, resolved ? "resolve" : "reopen", { thread: threadId });
+    });
+    const thread = this.thread(threadId)!;
+    this.broadcast(id, { t: "thread", thread, cid });
+    if (resolved) this.notifyResolved(id, actor, thread, origin);
+    return thread;
+  }
+
+  deleteComment(id: string, actor: Actor, commentId: string, role: Role | "agent" = "agent", cid?: string): Thread | null {
+    const c = this.sql.exec(`SELECT * FROM comments WHERE id = ? AND artifact_id = ?`, commentId, id).toArray()[0];
+    if (!c) throw new HubError(`no comment ${commentId}`);
+    if (c.by !== actor && role !== "owner" && role !== "agent") throw new HubError("you can only delete your own comments");
+    const threadId = c.thread_id as string;
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(`DELETE FROM comments WHERE id = ?`, commentId);
+      const left = this.sql.exec(`SELECT COUNT(*) AS n FROM comments WHERE thread_id = ?`, threadId).one().n as number;
+      if (left === 0) this.sql.exec(`DELETE FROM threads WHERE id = ?`, threadId);
+      this.logEvent(id, actor, "comment-delete", { thread: threadId, comment: commentId });
+    });
+    const thread = this.thread(threadId);
+    // A deleted thread is sent as an empty one so viewers drop it.
+    this.broadcast(id, {
+      t: "thread",
+      thread: thread ?? { id: threadId, anchor: null, version: 0, by: actor, at: "", resolved: null, comments: [] },
+      cid,
+    });
+    return thread;
+  }
+
+  /**
+   * People to @mention, with display names: owners, exact-email shares and
+   * commenters. A view-role viewer (`limitedTo`) only sees commenters and
+   * themselves, so the share list stays private to editors.
+   */
+  people(id: string, limitedTo?: string): Person[] {
+    const emails = new Set(limitedTo ? [limitedTo] : ownerList(this.env));
+    if (!limitedTo) {
+      for (const r of this.sql.exec(`SELECT email FROM shares WHERE artifact_id = ? AND email NOT LIKE '@%'`, id)) emails.add(r.email as string);
+    }
+    for (const r of this.sql.exec(`SELECT DISTINCT by FROM comments WHERE artifact_id = ? AND by LIKE '%@%'`, id)) emails.add(r.by as string);
+    return [...emails].sort().map((email) => ({ email, name: this.nameOf(email) }));
+  }
+
+  private nameOf(email: string): string | null {
+    return (this.sql.exec(`SELECT name FROM users WHERE email = ?`, email).toArray()[0]?.name as string | null) ?? null;
+  }
+
+  // ---- activity log ------------------------------------------------------------
+
+  private logEvent(id: string, actor: Actor | null, type: string, data: Record<string, unknown>): number {
+    const seq = this.sql
+      .exec(
+        `INSERT INTO events (artifact_id, at, actor, type, data) VALUES (?, ?, ?, ?, ?) RETURNING seq`,
+        id,
+        new Date().toISOString(),
+        actor,
+        type,
+        JSON.stringify(data),
+      )
+      .one().seq as number;
+    if (seq % 100 === 0) {
+      this.sql.exec(
+        `DELETE FROM events WHERE artifact_id = ? AND seq <= (SELECT seq FROM events WHERE artifact_id = ? ORDER BY seq DESC LIMIT 1 OFFSET ?)`,
+        id,
+        id,
+        EVENTS_KEEP,
+      );
+    }
+    return seq;
+  }
+
+  /** State changes are logged once per key and person per minute, so typing in Notes isn't one event per pause. */
+  private logStateEvent(id: string, actor: Actor, key: string, value: JsonValue | null, created: boolean) {
+    const summary = value === null ? null : JSON.stringify(value).slice(0, 400);
+    // Only recent rows are candidates, so the scan stays small however long the log is.
+    const floor = (this.sql.exec(`SELECT COALESCE(MAX(seq), 0) AS n FROM events`).one().n as number) - 200;
+    const recent = this.sql
+      .exec(
+        `SELECT seq, data FROM events WHERE seq > ? AND artifact_id = ? AND type = 'state' AND actor = ? AND at > ?
+         ORDER BY seq DESC`,
+        floor,
+        id,
+        actor,
+        new Date(Date.now() - 60_000).toISOString(),
+      )
+      .toArray()
+      .find((r) => (JSON.parse(r.data as string) as { key?: string }).key === key);
+    const wasCreated = recent ? Boolean((JSON.parse(recent.data as string) as { created?: boolean }).created) : false;
+    // Replace rather than update in place, so the event moves past readers' cursors.
+    if (recent) this.sql.exec(`DELETE FROM events WHERE seq = ?`, recent.seq);
+    this.logEvent(id, actor, "state", { key, value: summary, ...(created || wasCreated ? { created: true } : {}) });
+  }
+
+  /** Events after `since` (all artifacts, or one), oldest first, with each artifact's title. */
+  activity(input: { id?: string; since?: number; limit?: number }) {
+    const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
+    const latest = this.sql.exec(`SELECT COALESCE(MAX(seq), 0) AS n FROM events`).one().n as number;
+    // Without a cursor, start from the most recent `limit` events (of this artifact, with an id).
+    const since =
+      input.since ??
+      ((this.sql
+        .exec(
+          `SELECT MIN(seq) AS s FROM (SELECT seq FROM events ${input.id ? "WHERE artifact_id = ?" : ""} ORDER BY seq DESC LIMIT ?)`,
+          ...(input.id ? [input.id, limit] : [limit]),
+        )
+        .one().s as number | null) ?? latest + 1) - 1;
+    const rows = this.sql
+      .exec(
+        `SELECT e.*, a.title AS title FROM events e JOIN artifacts a ON a.id = e.artifact_id
+         WHERE e.seq > ? ${input.id ? "AND e.artifact_id = ?" : ""} ORDER BY e.seq LIMIT ?`,
+        ...(input.id ? [since, input.id, limit] : [since, limit]),
+      )
+      .toArray();
+    const events = rows.map((r) => ({
+      seq: r.seq as number,
+      at: r.at as string,
+      artifact: r.artifact_id as string,
+      title: r.title as string,
+      actor: (r.actor as string | null) ?? null,
+      type: r.type as string,
+      ...(JSON.parse(r.data as string) as Record<string, unknown>),
+    }));
+    const cursor = events.length ? events[events.length - 1].seq : Math.max(since, input.since ?? latest);
+    return { events, cursor, more: events.length === limit };
+  }
+
+  // ---- visits ("changed since you last looked") ------------------------------
+
+  /**
+   * Called when a signed-in viewer opens the artifact. Returns what changed
+   * since their previous visit and their read position for comments, then
+   * records this visit.
+   */
+  visit(id: string, email: string): { since?: SinceLastVisit; readSeq: number; watch: WatchLevel } {
+    const art = this.requireArtifact(id);
+    const version = art.version as number;
+    const prev = this.sql.exec(`SELECT * FROM seen WHERE email = ? AND artifact_id = ?`, email, id).toArray()[0];
+    const latestSeq = this.sql.exec(`SELECT COALESCE(MAX(seq), 0) AS n FROM events`).one().n as number;
+    let since: SinceLastVisit | undefined;
+    // A reload soon after seeing the banner shows it again instead of losing it.
+    const recentBanner =
+      prev && prev.since_version !== null && (prev.version as number) === version && Date.now() - Date.parse(prev.at as string) < 30 * 60_000;
+    const from = prev ? (recentBanner ? (prev.since_version as number) : (prev.version as number)) : version;
+    if (prev && from < version) {
+      const versions = this.sql
+        .exec(
+          `SELECT version, note, created_at FROM history WHERE artifact_id = ? AND version > ? ORDER BY version DESC LIMIT 20`,
+          id,
+          from,
+        )
+        .toArray()
+        .map((r) => ({ version: r.version as number, note: r.note as string, at: r.created_at as string }));
+      const blocksOf = (v: number): BlockInfo[] | null => {
+        const r = this.sql.exec(`SELECT blocks FROM history WHERE artifact_id = ? AND version = ?`, id, v).toArray()[0];
+        return r?.blocks ? (JSON.parse(r.blocks as string) as BlockInfo[]) : null;
+      };
+      const before = blocksOf(from);
+      const after = blocksOf(version);
+      const diff = before && after ? diffBlocks(before, after) : { changed: [], removedHeadings: [] };
+      since = { fromVersion: from, at: (recentBanner ? prev.since_at : prev.at) as string, versions, changedBlocks: diff.changed, removedHeadings: diff.removedHeadings };
+    }
+    const readSeq = prev ? (prev.read_seq as number) : latestSeq;
+    const keepAt = recentBanner ? (prev.at as string) : new Date().toISOString();
+    this.sql.exec(
+      `INSERT INTO seen (email, artifact_id, version, read_seq, at, since_version, since_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (email, artifact_id) DO UPDATE SET version = excluded.version, at = excluded.at,
+         since_version = excluded.since_version, since_at = excluded.since_at`,
+      email,
+      id,
+      version,
+      readSeq,
+      keepAt,
+      since ? from : null,
+      since ? since.at : null,
+    );
+    return { since, readSeq, watch: this.watchLevel(email, id) };
+  }
+
+  private markRead(id: string, email: string, seq: number) {
+    this.sql.exec(`UPDATE seen SET read_seq = MAX(read_seq, ?) WHERE email = ? AND artifact_id = ?`, Math.floor(seq), email, id);
+  }
+
+  // ---- link previews -----------------------------------------------------------
+
+  /** What a link-preview fetcher may see: title and screenshot only when the owner opted in or the artifact is public. */
+  previewInfo(id: string): { rich: boolean; title: string; description: string; version: number; image: string | null } | null {
+    const row = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).toArray()[0];
+    if (!row) return null;
+    const rich = Boolean(row.preview) || Boolean(row.public);
+    const shot = this.sql.exec(`SELECT screenshot FROM checks WHERE artifact_id = ?`, id).toArray()[0];
+    return {
+      rich,
+      title: row.title as string,
+      description: row.description as string,
+      version: row.version as number,
+      image: rich ? ((shot?.screenshot as string | null) ?? null) : null,
+    };
+  }
+
+  // ---- profiles, channels and watches -------------------------------------------
+
+  profile(email: string) {
+    const channels = this.sql
+      .exec(`SELECT id, type, label, created_at, failures, last_error, disabled FROM channels WHERE email = ? ORDER BY created_at`, email)
+      .toArray()
+      .map((c) => ({
+        id: c.id as string,
+        type: c.type as ChannelType,
+        label: c.label as string,
+        createdAt: c.created_at as string,
+        lastError: (c.last_error as string | null) ?? null,
+        disabled: Boolean(c.disabled),
+      }));
+    const owner = ownerList(this.env).includes(email);
+    const visible = this.list({ email, owner });
+    const levels = new Map(
+      this.sql.exec(`SELECT artifact_id, level FROM watches WHERE email = ?`, email).toArray().map((r) => [r.artifact_id as string, r.level as WatchLevel]),
+    );
+    const watches = visible.map((a) => ({
+      id: a.id,
+      title: a.title,
+      level: levels.get(a.id) ?? defaultLevel(owner),
+      custom: levels.has(a.id),
+    }));
+    return { email, name: this.nameOf(email), owner, channels, watches, defaultLevel: defaultLevel(owner) };
+  }
+
+  setName(email: string, name: string) {
+    const clean = name.trim().slice(0, 80);
+    this.sql.exec(
+      `INSERT INTO users (email, name, created_at) VALUES (?, ?, ?) ON CONFLICT (email) DO UPDATE SET name = excluded.name`,
+      email,
+      clean || null,
+      new Date().toISOString(),
+    );
+  }
+
+  addChannel(email: string, type: ChannelType, config: Record<string, unknown>, label: string): string {
+    const count = this.sql.exec(`SELECT COUNT(*) AS n FROM channels WHERE email = ?`, email).one().n as number;
+    if (count >= 10) throw new HubError("you can have at most 10 notification channels");
+    // The same browser subscribing twice replaces its old subscription.
+    if (type === "webpush") {
+      for (const c of this.sql.exec(`SELECT id, config FROM channels WHERE email = ? AND type = 'webpush'`, email).toArray()) {
+        if ((JSON.parse(c.config as string) as { endpoint?: string }).endpoint === config.endpoint) {
+          this.sql.exec(`DELETE FROM channels WHERE id = ?`, c.id);
+        }
+      }
+    }
+    const channelId = `n${newId().slice(1)}`;
+    this.sql.exec(
+      `INSERT INTO channels (id, email, type, label, config, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      channelId,
+      email,
+      type,
+      label,
+      JSON.stringify(config),
+      new Date().toISOString(),
+    );
+    return channelId;
+  }
+
+  removeChannel(email: string, channelId: string): boolean {
+    return this.sql.exec(`DELETE FROM channels WHERE id = ? AND email = ? RETURNING id`, channelId, email).toArray().length > 0;
+  }
+
+  channelConfig(email: string, channelId: string): { type: ChannelType; config: Record<string, unknown> } | null {
+    const c = this.sql.exec(`SELECT type, config FROM channels WHERE id = ? AND email = ?`, channelId, email).toArray()[0];
+    return c ? { type: c.type as ChannelType, config: JSON.parse(c.config as string) } : null;
+  }
+
+  /** Track delivery health; a channel is switched off after repeated failures or when its endpoint is gone. */
+  recordChannelResult(channelId: string, result: { ok: boolean; error?: string; gone?: boolean }) {
+    if (result.ok) {
+      this.sql.exec(`UPDATE channels SET failures = 0, last_error = NULL, disabled = 0 WHERE id = ?`, channelId);
+      return;
+    }
+    if (result.gone) {
+      this.sql.exec(`DELETE FROM channels WHERE id = ?`, channelId);
+      return;
+    }
+    this.sql.exec(
+      `UPDATE channels SET failures = failures + 1, last_error = ?, disabled = CASE WHEN failures + 1 >= ? THEN 1 ELSE disabled END WHERE id = ?`,
+      (result.error ?? "failed").slice(0, 300),
+      CHANNEL_MAX_FAILURES,
+      channelId,
+    );
+  }
+
+  setWatch(email: string, id: string, level: WatchLevel | null): WatchLevel {
+    this.requireArtifact(id);
+    if (level === null) this.sql.exec(`DELETE FROM watches WHERE email = ? AND artifact_id = ?`, email, id);
+    else {
+      if (!["all", "participating", "mute"].includes(level)) throw new HubError(`unknown level ${level}`);
+      this.sql.exec(
+        `INSERT INTO watches (email, artifact_id, level) VALUES (?, ?, ?) ON CONFLICT (email, artifact_id) DO UPDATE SET level = excluded.level`,
+        email,
+        id,
+        level,
+      );
+    }
+    return this.watchLevel(email, id);
+  }
+
+  private watchLevel(email: string, id: string): WatchLevel {
+    const row = this.sql.exec(`SELECT level FROM watches WHERE email = ? AND artifact_id = ?`, email, id).toArray()[0];
+    return (row?.level as WatchLevel | undefined) ?? defaultLevel(ownerList(this.env).includes(email));
+  }
+
+  // ---- notifications -------------------------------------------------------------
+
+  /**
+   * Queue notifications for a new comment. Mentions and replies to threads you
+   * took part in reach "participating" watchers; every comment reaches "all"
+   * watchers (owners by default). Muted people get nothing.
+   */
+  private notifyComment(
+    id: string,
+    actor: Actor,
+    c: { thread: string; text: string; participants: string[]; reply: boolean; origin?: string },
+  ) {
+    const mentioned = new Set(mentionedEmails(c.text));
+    const participants = new Set(c.participants);
+    const candidates = new Set<string>([...mentioned, ...participants, ...ownerList(this.env)]);
+    for (const r of this.sql.exec(`SELECT email FROM watches WHERE artifact_id = ? AND level = 'all'`, id)) candidates.add(r.email as string);
+    const owners = new Set(ownerList(this.env));
+    for (const email of candidates) {
+      if (email === actor || !email.includes("@")) continue;
+      // The agent acts for the owners, so its comments are their own actions.
+      if (actor === "agent" && owners.has(email)) continue;
+      const level = this.watchLevel(email, id);
+      if (level === "mute") continue;
+      const why = mentioned.has(email) ? "mention" : participants.has(email) ? "reply" : "all";
+      if (why === "all" && level !== "all") continue;
+      if (!this.canOpen(id, email)) continue;
+      this.enqueue(email, id, "comment", { thread: c.thread, by: actor, text: c.text.slice(0, 300), why, reply: c.reply, origin: c.origin }, COMMENT_DELAY_MS);
+    }
+  }
+
+  private notifyResolved(id: string, actor: Actor, thread: Thread, origin?: string) {
+    const author = thread.by;
+    if (author === actor || !author.includes("@") || this.watchLevel(author, id) === "mute" || !this.canOpen(id, author)) return;
+    this.enqueue(author, id, "resolve", { thread: thread.id, by: actor, addressedIn: thread.addressedIn ?? null, origin }, COMMENT_DELAY_MS);
+  }
+
+  /** Page updates reach "all" watchers other than owners (whose agents make them), batched over a quiet period. */
+  private notifyUpdate(id: string, actor: Actor, version: number, note: string, origin?: string) {
+    const owners = new Set(ownerList(this.env));
+    for (const r of this.sql.exec(`SELECT email FROM watches WHERE artifact_id = ? AND level = 'all'`, id).toArray()) {
+      const email = r.email as string;
+      if (email === actor || owners.has(email) || !this.canOpen(id, email)) continue;
+      const pending = this.sql
+        .exec(`SELECT id, data FROM outbox WHERE email = ? AND artifact_id = ? AND kind = 'update'`, email, id)
+        .toArray()[0];
+      if (pending) {
+        const data = JSON.parse(pending.data as string) as { notes: string[]; first: number; version: number };
+        data.notes = [...data.notes, note].slice(-5);
+        data.version = version;
+        const due = Math.min(data.first + UPDATE_MAX_WAIT_MS, Date.now() + UPDATE_DELAY_MS);
+        this.sql.exec(`UPDATE outbox SET data = ?, due_at = ? WHERE id = ?`, JSON.stringify(data), due, pending.id);
+      } else {
+        this.enqueue(email, id, "update", { version, notes: [note], first: Date.now(), origin }, UPDATE_DELAY_MS);
+      }
+    }
+    void this.armAlarm();
+  }
+
+  private canOpen(id: string, email: string): boolean {
+    return this.roleFor(id, email, ownerList(this.env).includes(email)) !== null;
+  }
+
+  private enqueue(email: string, id: string, kind: string, data: Record<string, unknown>, delayMs: number) {
+    this.sql.exec(
+      `INSERT INTO outbox (email, artifact_id, kind, data, due_at) VALUES (?, ?, ?, ?, ?)`,
+      email,
+      id,
+      kind,
+      JSON.stringify(data),
+      Date.now() + delayMs,
+    );
+    void this.armAlarm();
+  }
+
+  /** Send due notifications, one message per person and artifact, skipping people who have the page open. */
+  async deliverDue(now = Date.now()): Promise<number> {
+    const due = this.sql.exec(`SELECT * FROM outbox WHERE due_at <= ? ORDER BY due_at`, now).toArray();
+    if (!due.length) return 0;
+    const groups = new Map<string, Record<string, SqlStorageValue>[]>();
+    for (const row of due) {
+      const k = `${row.email}\n${row.artifact_id}`;
+      groups.set(k, [...(groups.get(k) ?? []), row]);
+    }
+    const env = this.env as NotifyEnv;
+    let sends = 0;
+    for (const rows of groups.values()) {
+      const email = rows[0].email as string;
+      const id = rows[0].artifact_id as string;
+      const channels = this.sql.exec(`SELECT id, type, config FROM channels WHERE email = ? AND disabled = 0`, email).toArray();
+      if (sends + channels.length > SENDS_PER_ALARM && sends > 0) break;
+      for (const r of rows) this.sql.exec(`DELETE FROM outbox WHERE id = ?`, r.id);
+      const art = this.sql.exec(`SELECT title FROM artifacts WHERE id = ?`, id).toArray()[0];
+      if (!art || !channels.length || this.isViewing(id, email) || !this.canOpen(id, email)) continue;
+      const items: OutboxItem[] = rows.map((r) => ({ kind: r.kind as OutboxItem["kind"], data: JSON.parse(r.data as string) }));
+      const origin = items.map((i) => i.data.origin).find((o): o is string => typeof o === "string") ?? "";
+      const msg = composeMessage({ title: art.title as string, artifactId: id, origin, items, nameOf: (e) => this.nameOf(e) });
+      for (const c of channels) {
+        sends++;
+        const result = await sendToChannel(c.type as ChannelType, JSON.parse(c.config as string), msg, env).catch((err: Error) => ({
+          ok: false as const,
+          error: err.message,
+        }));
+        this.recordChannelResult(c.id as string, result);
+      }
+    }
+    return sends;
+  }
+
+  private isViewing(id: string, email: string): boolean {
+    return this.ctx.getWebSockets(id).some((ws) => (ws.deserializeAttachment() as SocketTag).email === email);
+  }
+
   // ---- internals -------------------------------------------------------------
 
   private async change(
     id: string,
     baseVersion: number | undefined,
     note: string,
+    opts: ChangeOptions,
     mutate: (files: Record<string, string>) => void,
   ): Promise<WriteResult> {
     const row = this.requireArtifact(id);
@@ -767,11 +1432,34 @@ export class ArtifactHub extends DurableObject {
     if (!build) return { ok: false, version: current, errors };
     const next = current + 1;
     const now = new Date().toISOString();
+    const resolves = (opts.resolves ?? []).filter((t) =>
+      this.sql.exec(`SELECT 1 FROM threads WHERE id = ? AND artifact_id = ?`, t, id).toArray().length > 0,
+    );
+    const actor = opts.actor ?? "agent";
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(`DELETE FROM files WHERE artifact_id = ?`, id);
       this.sql.exec(`UPDATE artifacts SET version = ?, updated_at = ? WHERE id = ?`, next, now, id);
       this.commitFiles(id, next, files, build, note, now);
+      this.logEvent(id, actor, "version", { version: next, note, ...(resolves.length ? { resolves } : {}) });
+      for (const t of resolves) {
+        this.sql.exec(
+          `UPDATE threads SET addressed_in = ?, resolved_by = COALESCE(resolved_by, ?), resolved_at = COALESCE(resolved_at, ?) WHERE id = ?`,
+          next,
+          actor,
+          now,
+          t,
+        );
+        this.logEvent(id, actor, "resolve", { thread: t, version: next });
+      }
     });
+    this.broadcast(id, { t: "version", version: next, note });
+    for (const t of resolves) {
+      const thread = this.thread(t);
+      if (!thread) continue;
+      this.broadcast(id, { t: "thread", thread });
+      this.notifyResolved(id, actor, thread, opts.origin);
+    }
+    this.notifyUpdate(id, actor, next, note, opts.origin);
     return { ok: true, id, version: next, files: Object.keys(files).sort() };
   }
 
@@ -787,12 +1475,13 @@ export class ArtifactHub extends DurableObject {
       JSON.stringify(build),
     );
     this.sql.exec(
-      `INSERT INTO history (artifact_id, version, files, note, created_at) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO history (artifact_id, version, files, note, created_at, blocks) VALUES (?, ?, ?, ?, ?, ?)`,
       id,
       version,
       JSON.stringify(files),
       note,
       now,
+      JSON.stringify(build.blocks ?? []),
     );
     this.sql.exec(`DELETE FROM history WHERE artifact_id = ? AND version <= ?`, id, version - HISTORY_KEEP);
   }
@@ -806,6 +1495,7 @@ export class ArtifactHub extends DurableObject {
   private broadcast(id: string, msg: SyncServerMessage) {
     const text = JSON.stringify(msg);
     for (const ws of this.ctx.getWebSockets(id)) {
+      if (msg.t === "thread" && !(ws.deserializeAttachment() as SocketTag).email) continue;
       try {
         ws.send(text);
       } catch {
@@ -836,6 +1526,7 @@ function toMeta(r: Record<string, SqlStorageValue>): ArtifactMeta {
     description: r.description as string,
     version: r.version as number,
     public: Boolean(r.public),
+    preview: Boolean(r.preview),
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -911,4 +1602,89 @@ function toBase64(bytes: Uint8Array): string {
 
 function fromBase64(s: string): Uint8Array {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+
+export type ChangeOptions = {
+  /** Version note shown in history and the "changed since" banner. */
+  note?: string;
+  /** Thread ids this change addresses; they are resolved as "Addressed in vN". */
+  resolves?: string[];
+  actor?: Actor;
+  origin?: string;
+};
+
+function ownerList(env: unknown): string[] {
+  return String((env as { OWNER_EMAILS?: string }).OWNER_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function defaultLevel(owner: boolean): WatchLevel {
+  return owner ? "all" : "participating";
+}
+
+function toThread(t: Record<string, SqlStorageValue>, comments: ThreadComment[]): Thread {
+  return {
+    id: t.id as string,
+    anchor: t.anchor ? (JSON.parse(t.anchor as string) as Anchor) : null,
+    version: t.version as number,
+    by: t.by as string,
+    at: t.at as string,
+    resolved: t.resolved_at ? { by: t.resolved_by as string, at: t.resolved_at as string } : null,
+    ...(t.addressed_in ? { addressedIn: t.addressed_in as number } : {}),
+    comments,
+  };
+}
+
+function cleanAnchor(anchor: Anchor | null): Anchor | null {
+  if (!anchor || typeof anchor !== "object") return null;
+  const str = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : undefined);
+  const out: Anchor = {};
+  const block = str(anchor.block, 80);
+  if (block) out.block = block;
+  const row = str(anchor.row, 200);
+  if (row) out.row = row;
+  const label = str(anchor.label, 120);
+  if (label) out.label = label;
+  const q = anchor.quote;
+  if (q && typeof q === "object" && typeof q.exact === "string" && q.exact.trim()) {
+    out.quote = { exact: q.exact.slice(0, 1000), prefix: str(q.prefix, 64) ?? "", suffix: str(q.suffix, 64) ?? "" };
+  }
+  if (JSON.stringify(out).length > ANCHOR_MAX_BYTES) throw new HubError("comment anchor is too large");
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Server-side checks and stamps for the kit's collab keys written by a person.
+ * Other keys pass through unchanged.
+ */
+function stampCollab(
+  key: string,
+  value: JsonValue | null,
+  by: string,
+  exists: boolean,
+  existingBy: string | null,
+  role: Role | undefined,
+): JsonValue | null {
+  const poll = /^poll\/[^/]+\/(.+)$/.exec(key);
+  if (poll) {
+    if (poll[1] !== by) throw new HubError("you can only change your own vote");
+    return value;
+  }
+  if (key.startsWith("comments/")) {
+    if (exists && existingBy !== null && existingBy !== by && role !== "owner") {
+      throw new HubError("you can only change your own comments");
+    }
+    if (value === null) return null;
+    if (typeof value !== "object" || Array.isArray(value) || typeof value.text !== "string") {
+      throw new HubError("a comment needs text");
+    }
+    if (value.text.length > COMMENT_MAX_CHARS) throw new HubError(`comments are limited to ${COMMENT_MAX_CHARS} characters`);
+    return { ...value, by, at: exists && typeof value.at === "number" ? value.at : Date.now() };
+  }
+  if ((key.startsWith("check/") || key.startsWith("notes/")) && value && typeof value === "object" && !Array.isArray(value)) {
+    return key.startsWith("notes/") ? { ...value, by, at: Date.now() } : { ...value, by };
+  }
+  return value;
 }
