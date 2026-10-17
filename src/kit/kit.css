@@ -14,6 +14,14 @@
   html,
   body {
     height: 100%;
+    /* The page never scrolls sideways (phones especially); wide code and
+       tables scroll inside their own boxes. clip, unlike hidden, keeps
+       position: sticky working. */
+    overflow-x: clip;
+  }
+  /* Long unbroken strings (hashes, paths, URLs) wrap instead of widening the page. */
+  .art-page :is(p, li, blockquote, h1, h2, h3, h4, h5, h6, dd, dt, figcaption) {
+    overflow-wrap: anywhere;
   }
   html {
     font-family: var(--font-sans);

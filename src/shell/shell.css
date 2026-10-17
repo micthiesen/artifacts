@@ -149,8 +149,11 @@ a.title:hover { text-decoration: none; }
 
 /* Artifact page: the bar plus a full-height frame. */
 .shell { display: flex; flex-direction: column; height: 100%; }
-.frame-host { flex: 1; min-height: 0; }
-.frame-host iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
+.shell { overflow-x: clip; }
+.frame-host { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+/* iOS Safari can size an iframe to its content's width; width 1px + min-width
+   100% pins it to the container. */
+.frame-host iframe { width: 1px; min-width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
 
 /* Index and message pages. */
 .content { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
