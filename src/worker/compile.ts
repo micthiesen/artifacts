@@ -12,6 +12,7 @@ import kitThemeCss from "../kit/theme.css";
 import type { JsonValue } from "../shared/protocol.ts";
 import kitExports from "./kit-exports.json";
 import { remarkBlockIds, type BlockInfo } from "./blocks.ts";
+import { checkMermaid, remarkMermaid, type MermaidBlock } from "./mermaid.ts";
 
 export const ALLOWED_IMPORTS = new Set([
   "react",
@@ -33,16 +34,19 @@ export async function compileFile(
 ): Promise<{ module?: CompiledModule; errors: CompileError[] }> {
   let code: string;
   let blocks: BlockInfo[] | undefined;
+  const errors: CompileError[] = [];
   try {
     if (path.endsWith(".mdx") || path.endsWith(".md")) {
       blocks = [];
+      const diagrams: MermaidBlock[] = [];
       const out = await compileMdx(stripFrontmatter(source), {
         jsxImportSource: "react",
         format: path.endsWith(".md") ? "md" : "mdx",
         providerImportSource: "@a/ui",
-        remarkPlugins: [remarkGfm, remarkBlockIds(blocks)],
+        remarkPlugins: [remarkGfm, remarkMermaid(diagrams), remarkBlockIds(blocks)],
       });
       code = String(out.value);
+      errors.push(...(await checkMermaid(path, diagrams)));
     } else if (/\.(tsx|ts|jsx|js)$/.test(path)) {
       code = transform(source, {
         transforms: ["typescript", "jsx"],
@@ -63,7 +67,6 @@ export async function compileFile(
     return { errors: [{ path, message, line }] };
   }
 
-  const errors: CompileError[] = [];
   let specs: string[];
   try {
     specs = await importSpecifiers(code);

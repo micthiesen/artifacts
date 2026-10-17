@@ -14,7 +14,7 @@ serves everything from `workers.dev`.
 | Worker `artifacts-auth` | `src/auth/` | Sits behind Cloudflare Access (email one-time PIN). Turns a verified Access identity into a signed one-time code for the main Worker |
 | Shell | served by the Worker at `/a/<id>` | Parent page: title bar, owns the sync WebSocket and browser storage, bridges them to the frame |
 | Frame | `/frame/<id>?v=<version>&t=<token>` | Sandboxed document (`Content-Security-Policy: sandbox allow-scripts ...`, opaque origin, no network) that renders the artifact |
-| Kit | `src/kit/`, built to `dist/kit/` and served at `/kit/v1/` | React, `@a/ui` components, `@a/hooks`, the frame runtime, `lucide-react`, `recharts`, theme CSS |
+| Kit | `src/kit/`, built to `dist/kit/` and served at `/kit/v1/` | React, `@a/ui` components, `@a/hooks`, the frame runtime, `lucide-react`, `recharts`, Pele (Mermaid diagrams, lazy-loaded per diagram type), theme CSS |
 
 ## Security model
 

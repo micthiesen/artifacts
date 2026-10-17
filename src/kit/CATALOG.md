@@ -21,6 +21,11 @@ Data
 - `Chart({type?: "line"|"bar"|"area"|"pie", data, x, y: "a"|"a b"|string[], height?: 280, stacked?, legend?, title?})`
 - `Sparkline({data: number[]|"x.json", y?, tone?})`
 
+Diagrams (the only way to draw one)
+- In MDX/Markdown, write a ```` ```mermaid ```` fenced block; it renders as a themed, responsive, zoomable SVG. In TSX use `Diagram({code: string, title?})` (or the source as children). Any Mermaid type works: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `erDiagram`, `classDiagram`, `gantt`, `timeline`, `mindmap`, `journey`, `gitGraph`, `architecture-beta`, `block-beta`, `kanban`…
+- Use one whenever a process, dependency, request flow, data model or plan reads faster as a picture. Keep labels short; let the theme supply colors (avoid `style`/`classDef` colors).
+- Never hand-draw diagrams with SVG, positioned divs or ASCII art. Data charts are not diagrams: use `Chart` instead of Mermaid `pie`/`xychart` (rejected at write time).
+
 Primitives
 - `Button({variant?: default|secondary|outline|ghost|destructive|link, size?: sm|default|lg|icon|icon-sm})`
 - `Badge({tone?: neutral|primary|positive|caution|negative|outline})`
@@ -52,7 +57,7 @@ Shared-state rules: store one key per list item (`todo/<id>`), never a whole arr
 
 ## Example: `index.mdx` with `data/tools.json`
 
-```mdx
+````mdx
 # Picking a CI provider
 
 <Summary>Use **Buildkite**: fastest on our monorepo and cheapest at our scale.</Summary>
@@ -68,12 +73,21 @@ Shared-state rules: store one key per list item (`todo/<id>`), never a whole arr
 
 <Callout tone="warning">Self-hosted agents need one more runner box.</Callout>
 
+## How it ships
+
+```mermaid
+flowchart LR
+  PR[Pull request] --> CI{Buildkite}
+  CI -- green --> Stage[Staging] --> Prod[Production]
+  CI -- red --> PR
+```
+
 ## Decide
 
 <Poll id="ci" options={["Buildkite", "GitHub Actions", "CircleCI"]} />
 <Checklist id="next" items={["Trial on the monorepo", "Get a quote"]} allowAdd />
 <Comments />
-```
+````
 
 ## Example: `app.tsx`
 

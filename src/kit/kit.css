@@ -81,3 +81,31 @@
     transform: translateX(300%);
   }
 }
+
+/* Pele diagrams (<Diagram>, ```mermaid blocks): map its CSS variables onto the
+   kit theme so diagrams match the page without re-rendering. */
+.art-diagram {
+  --pele-bg: var(--card);
+  --pele-fg: var(--foreground);
+  --pele-muted: var(--muted-foreground);
+  --pele-line: var(--muted-foreground);
+  --pele-surface: var(--secondary);
+  --pele-surface-alt: var(--muted);
+  --pele-border: var(--input);
+  --pele-accent: var(--primary);
+  --pele-critical: var(--negative);
+  --pele-error: var(--negative);
+  --pele-font: var(--font-sans);
+  --pele-font-mono: var(--font-mono);
+  --pele-radius: 6px;
+  --pele-series-1: var(--chart-1);
+  --pele-series-2: var(--chart-2);
+  --pele-series-3: var(--chart-3);
+  --pele-series-4: var(--chart-4);
+  --pele-series-5: var(--chart-5);
+  --pele-series-6: var(--chart-6);
+  --pele-series-7: var(--positive);
+  --pele-series-8: var(--caution);
+  display: block;
+  width: 100%;
+}

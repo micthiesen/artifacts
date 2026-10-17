@@ -22,6 +22,7 @@ No code from React Bits or Aceternity UI is used.
 | @base-ui/react (and @floating-ui/*) | MIT, Copyright (c) 2025 Material-UI SAS / Floating UI contributors |
 | lucide-react | ISC, Copyright (c) Lucide Contributors; portions MIT, Copyright (c) Cole Bemis (Feather) |
 | recharts (and its d3-* / redux dependencies) | MIT, Copyright (c) Recharts Group; d3 modules ISC, Copyright Mike Bostock |
+| pele | MIT, Copyright (c) kepano |
 | clsx | MIT, Copyright (c) Luke Edwards |
 | tailwind-merge | MIT, Copyright (c) Dany Castillo |
 | tailwindcss (compiled CSS, preflight) | MIT, Copyright (c) Tailwind Labs, Inc. |

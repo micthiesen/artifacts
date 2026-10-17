@@ -54,3 +54,21 @@ test("unknown kit names are rejected with suggestions", async () => {
   const icons = await compileFile("app.tsx", 'import { Check, NotAnIcon } from "lucide-react";\nexport default () => <Check />;', new Set());
   expect(icons.errors.length).toBe(1);
 });
+
+test("mermaid fences become <Diagram> and are syntax-checked at write time", async () => {
+  const ok = await compileFile("index.mdx", "# Flow\n\n```mermaid\nflowchart LR\n  A[Write] --> B[Check]\n```\n", files);
+  expect(ok.errors).toEqual([]);
+  expect(ok.module!.code).toContain("Diagram");
+  expect(ok.module!.blocks!.map((b) => b.id)).toEqual(["flow", "flow-1"]);
+  const md = await compileFile("index.md", "```mermaid\nsequenceDiagram\n  A->>B: Hi\n```\n", files);
+  expect(md.errors).toEqual([]);
+  expect(md.module!.code).toContain("Diagram");
+
+  const bad = await compileFile("index.mdx", "# Flow\n\n```mermaid\nflowchart LR\n  A[Write --> B\n```\n", files);
+  expect(bad.errors).toHaveLength(1);
+  expect(bad.errors[0].message).toStartWith("mermaid diagram (fence on line 3");
+  expect(bad.errors[0].line).toBeGreaterThan(3);
+
+  const pie = await compileFile("index.mdx", '```mermaid\npie title Share\n  "A" : 60\n  "B" : 40\n```\n', files);
+  expect(pie.errors[0]?.message).toContain('<Chart type="pie">');
+});

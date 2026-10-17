@@ -122,6 +122,9 @@ function showErrorToast(message: string) {
 
 function installErrorHandlers(send: (m: FrameMessage) => void) {
   window.addEventListener("error", (ev) => {
+    // Browsers report this when an observer's callback resizes what it watches
+    // (diagrams re-laying out to their width); nothing is lost, so not an error.
+    if (/^ResizeObserver loop/.test(ev.message)) return;
     const { message, stack } = errorMessage(ev.error ?? ev.message);
     send({ t: "error", message, stack });
     showErrorToast(message);
