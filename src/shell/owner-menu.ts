@@ -1,4 +1,4 @@
-// Owner menu: a "Manage" button in the artifact bar that opens a side panel for
+// Owner menu: "Manage artifact…" in the avatar menu opens a side panel for
 // sharing, history, problems, live data sources and settings. Talks to the
 // owner API (/api/a/<id>, /api/a/<id>/<tool>, /api/hosts) with the session cookie.
 import type { ShellBoot } from "../shared/protocol.ts";
@@ -140,8 +140,11 @@ async function copyText(text: string): Promise<boolean> {
 
 // --- Menu -----------------------------------------------------------------
 
-/** Turns `button` (the owner's avatar in the bar) into the Manage panel trigger. */
-export function initOwnerMenu(boot: ShellBoot, button: HTMLButtonElement): void {
+/**
+ * Builds the Manage panel. It's opened from the avatar menu ("Manage artifact…");
+ * `button` (the avatar) gets focus back when the panel closes.
+ */
+export function initOwnerMenu(boot: ShellBoot, button: HTMLElement): { show: () => void; copyMyLink: () => Promise<string> } {
   const base = `/api/a/${encodeURIComponent(boot.artifactId)}`;
   const tool = (name: string, args: Record<string, unknown> = {}) => request<ToolResponse>(`${base}/${name}`, args);
 
@@ -161,12 +164,6 @@ export function initOwnerMenu(boot: ShellBoot, button: HTMLButtonElement): void 
     return el;
   }
 
-  button.setAttribute("aria-haspopup", "dialog");
-  button.setAttribute("aria-expanded", "false");
-  button.setAttribute("aria-controls", "om-panel");
-  button.setAttribute("aria-label", `Manage this artifact (signed in as ${boot.viewer.email})`);
-  button.title = `Manage · ${boot.viewer.email}`;
-  button.addEventListener("click", () => (open ? close() : show()));
 
   const backdrop = h("div", { class: "om-backdrop", hidden: true, onclick: () => close() });
   const titleId = "om-title";
@@ -219,7 +216,6 @@ export function initOwnerMenu(boot: ShellBoot, button: HTMLButtonElement): void 
     returnFocus = document.activeElement as HTMLElement | null;
     backdrop.hidden = false;
     panel.hidden = false;
-    button.setAttribute("aria-expanded", "true");
     document.querySelector<HTMLElement>(".shell")?.setAttribute("inert", "");
     document.body.classList.add("om-open");
     render();
@@ -231,7 +227,6 @@ export function initOwnerMenu(boot: ShellBoot, button: HTMLButtonElement): void 
     open = false;
     backdrop.hidden = true;
     panel.hidden = true;
-    button.setAttribute("aria-expanded", "false");
     document.querySelector<HTMLElement>(".shell")?.removeAttribute("inert");
     document.body.classList.remove("om-open");
     (returnFocus && document.contains(returnFocus) ? returnFocus : button).focus();
@@ -718,4 +713,15 @@ export function initOwnerMenu(boot: ShellBoot, button: HTMLButtonElement): void 
       ),
     ];
   }
+
+  return {
+    show,
+    // A presigned link for the owner, for opening this artifact on another device.
+    copyMyLink: async () => {
+      const r = await tool("artifact_link", { email: boot.viewer.email ?? undefined });
+      const link = String(r.data?.link ?? "");
+      if (!link) throw new Error(r.text || "No link returned.");
+      return link;
+    },
+  };
 }

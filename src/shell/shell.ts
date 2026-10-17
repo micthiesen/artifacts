@@ -9,7 +9,7 @@ import type {
   SyncClientMessage,
   SyncServerMessage,
 } from "../shared/protocol.ts";
-import { avatarButton, mountAccountMenu } from "./account.ts";
+import { mountAccountMenu } from "./account.ts";
 import { initOwnerMenu } from "./owner-menu.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
@@ -20,14 +20,20 @@ const canWrite = boot.viewer.role !== "view" && boot.viewer.email !== null;
 const statusEl = document.getElementById("status")!;
 const presenceEl = document.getElementById("presence")!;
 
-// Your own avatar: owners open the Manage panel, everyone else gets the account menu.
+// Your avatar opens the account menu; owners also get Manage and a sign-in link.
 const meSlot = document.getElementById("me");
 if (meSlot && boot.viewer.email) {
   if (boot.viewer.role === "owner") {
-    const trigger = avatarButton(boot.viewer.email);
-    meSlot.append(trigger);
-    initOwnerMenu(boot, trigger);
-  } else mountAccountMenu(meSlot, boot.viewer.email);
+    let panel: ReturnType<typeof initOwnerMenu> | null = null;
+    const avatar = mountAccountMenu(meSlot, boot.viewer.email, {
+      manage: () => panel?.show(),
+      copyLink: () => panel!.copyMyLink(),
+      copyLabel: "Copy my sign-in link",
+    });
+    panel = initOwnerMenu(boot, avatar);
+  } else {
+    mountAccountMenu(meSlot, boot.viewer.email, { copyLink: async () => location.href, copyLabel: "Copy page link" });
+  }
 }
 
 function readJson<T>(key: string, fallback: T): T {
@@ -228,7 +234,7 @@ function renderPresence() {
     ...presence.filter((email) => email !== boot.viewer.email).map((email) => {
       const el = document.createElement("span");
       el.className = "avatar";
-      el.title = email;
+      el.title = `Viewing now: ${email}`;
       el.textContent = email.slice(0, 1).toUpperCase();
       return el;
     }),

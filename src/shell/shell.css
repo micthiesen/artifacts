@@ -105,7 +105,14 @@ a.title:hover { text-decoration: none; }
 .bar .spacer { flex: 1; }
 .bar .status { color: var(--muted-fg); font-size: 13px; white-space: nowrap; }
 .bar .status:empty { display: none; }
-.bar .presence { display: flex; gap: .25rem; }
+/* Other people viewing now: a small overlapping stack, then a hairline before your avatar. */
+.bar .presence { display: flex; align-items: center; }
+.bar .presence:not(:empty) { padding-right: .7rem; margin-right: .1rem; border-right: 1px solid var(--border); height: 1.5rem; }
+.bar .presence .avatar {
+  width: 1.5rem; height: 1.5rem; font-size: 10.5px; margin-left: -.35rem; border: 2px solid var(--bg);
+  background: var(--muted); color: var(--muted-fg); cursor: default;
+}
+.bar .presence .avatar:first-child { margin-left: 0; }
 /* Your own avatar: opens the Manage panel (owner) or the account menu. */
 .me { position: relative; flex: none; display: flex; }
 .me .avatar-button {
@@ -127,7 +134,10 @@ a.title:hover { text-decoration: none; }
   display: block; width: 100%; text-align: left; padding: .5rem .6rem; border-radius: .45rem; border: 0; background: none;
   color: var(--fg); font: inherit; font-size: 14px; cursor: pointer;
 }
-.account-menu a:hover, .account-menu button:hover { background: var(--muted); text-decoration: none; }
+.account-menu a:hover, .account-menu button:hover, .account-menu [role=menuitem]:focus-visible { background: var(--muted); text-decoration: none; outline: none; }
+.account-menu .account-primary { color: var(--fg); font-weight: 600; }
+.account-menu .account-primary::before { content: "◆"; margin-right: .5rem; font-size: 11px; background: var(--signal); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.account-menu .account-quiet { color: var(--muted-fg); }
 .account-menu form { margin: 0; }
 .avatar {
   width: 1.75rem; height: 1.75rem; border-radius: 999px; background: var(--accent); color: var(--accent-fg);
