@@ -15,21 +15,15 @@ Create `.env` (gitignored) in the repo root:
 | `OWNER_EMAILS` | Comma-separated emails with owner access to every artifact |
 | `SESSION_SECRET`, `LOGIN_SECRET`, `MCP_TOKEN` | Random strings, e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'` |
 | `ACCESS_TEAM_DOMAIN` | Optional: `https://<team>.cloudflareaccess.com`. Enables viewer sign-in |
-| `ACCESS_AUD` | Required with `ACCESS_TEAM_DOMAIN`: the AUD tag of the auth Worker's Access application |
 
 Without `ACCESS_TEAM_DOMAIN`, only public artifacts can be viewed, and agents
 still work through MCP.
 
 ## Viewer sign-in (Cloudflare Access)
 
-1. Create a Zero Trust organization (the free plan covers 50 users) and enable
-   the One-time PIN login method.
-2. Give the deploy credentials Access permissions: Access: Apps and Policies
-   Edit, plus Access: Organizations, Identity Providers, and Groups Read.
-3. Set `ACCESS_TEAM_DOMAIN` and deploy. Alchemy creates the `artifacts-auth`
-   Worker and its Access application, with an allow-everyone policy (any email
-   that passes the PIN). Per-artifact sharing is enforced by the main Worker.
-4. Copy the application's AUD tag into `ACCESS_AUD` and deploy again.
+1. **Zero Trust:** create a Zero Trust organization (free for up to 50 users) and add the One-time PIN login method.
+2. **Token:** give the deploy token Access: Apps and Policies → Edit, and Access: Organizations, Identity Providers, and Groups → Read.
+3. **Deploy:** set `ACCESS_TEAM_DOMAIN` (e.g. `https://<team>.cloudflareaccess.com`) and deploy. Alchemy creates the "Shared Artifacts sign-in" Access application (one-time PIN only, allow everyone) in front of the `<worker>-auth` Worker and passes its AUD tag to it. Per-artifact sharing is enforced by the main Worker.
 
 ## Presigned links
 
