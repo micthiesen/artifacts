@@ -129,7 +129,7 @@ export function indexPage(
   } else {
     body = `<h1 class="page-title">Artifacts</h1>${list(artifacts, viewer, summaries, false)}<section class="empty" data-list-empty hidden><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}`;
   }
-  const script = viewer.owner && viewer.email ? `<script type="module" src="${asset("/static/home.js")}"></script>` : "";
+  const script = `<script type="module" src="${asset("/static/home.js")}"></script>`;
   return page(archived ? "Archived · Shared Artifacts" : "Shared Artifacts", `${topBar(account)}<main class="content">${body}</main>${script}`);
 }
 

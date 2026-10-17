@@ -1,6 +1,15 @@
-// Owner actions on the artifact list: archive a row from the main list or
+// The artifact list page. Owners archive a row from the main list or
 // unarchive it from /archived, with an Undo toast either way.
 import { setArchived } from "./archive.ts";
+
+// On the list itself, the logo reloads the page (handy for checking changes).
+for (const a of document.querySelectorAll<HTMLAnchorElement>(".bar a[href='/']")) {
+  a.addEventListener("click", (e) => {
+    if (location.pathname !== "/" || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    location.reload();
+  });
+}
 
 const removals = new WeakMap<HTMLLIElement, ReturnType<typeof setTimeout>>();
 

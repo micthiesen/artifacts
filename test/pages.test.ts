@@ -29,7 +29,6 @@ test("non-owners see the split but no archive buttons", async () => {
   const html = await indexPage({ email: "x@example.com", owner: false }, rows.map((r) => ({ ...r, role: "view" as const })), true).text();
   expect(html).toContain("data-archived-count>2<");
   expect(html).not.toContain("row-action");
-  expect(html).not.toContain("home.js");
 });
 
 test("everything archived shows a tidy empty state with the archive link", async () => {
