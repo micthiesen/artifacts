@@ -40,6 +40,12 @@ function page(title: string, body: string, init: ResponseInit = {}): Response {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
+<meta name="theme-color" content="#0b0d15">
+<meta name="apple-mobile-web-app-title" content="Artifacts">
+<link rel="icon" href="${asset("/static/icons/icon.svg")}" type="image/svg+xml">
+<link rel="icon" href="${asset("/static/icons/favicon-32.png")}" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="${asset("/static/icons/apple-touch-icon.png")}">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="${asset("/static/shell.css")}">
 </head>
 <body>${body}</body>
@@ -54,7 +60,7 @@ function page(title: string, body: string, init: ResponseInit = {}): Response {
 }
 
 function topBar(right = ""): string {
-  return `<header class="bar"><a class="brand" href="/"><span class="mark">◆</span>Shared Artifacts</a><span class="spacer"></span>${right}</header>`;
+  return `<header class="bar"><span class="lead"><a class="mark" href="/" aria-label="All artifacts">◆</a><a class="title" href="/">Shared Artifacts</a></span>${right}</header>`;
 }
 
 function relativeTime(iso: string): string {
@@ -84,7 +90,7 @@ export function indexPage(
   summaries?: Record<string, ShareSummary>,
 ): Response {
   const account = viewer.email
-    ? `<form class="account" method="post" action="/logout"><span class="muted email">${escapeHtml(viewer.email)}</span><button class="link">Sign out</button></form>`
+    ? `<span id="me" class="me" data-email="${escapeHtml(viewer.email)}"></span><script type="module" src="${asset("/static/account.js")}"></script>`
     : loginConfigured
       ? `<a class="button small" href="/login?return=/">Sign in</a>`
       : "";
@@ -124,7 +130,9 @@ export function shellPage(boot: ShellBoot): Response {
   return page(
     boot.title,
     `<div class="shell">
-<header class="bar"><a class="home" href="/" title="All artifacts" aria-label="All artifacts">◆</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span><span id="status" class="status"></span><span id="owner-menu" class="owner-menu"></span><span id="presence" class="presence"></span></header>
+<header class="bar"><span class="lead"><a class="mark" href="/" title="All artifacts" aria-label="All artifacts">◆</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status"></span><span id="presence" class="presence"></span>${
+      boot.viewer.email ? `<span id="me" class="me" data-email="${escapeHtml(boot.viewer.email)}"></span>` : ""
+    }</header>
 <div id="frame-host" class="frame-host"></div>
 </div>
 <script type="application/json" id="shell-boot">${scriptJson(boot)}</script>

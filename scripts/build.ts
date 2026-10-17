@@ -15,7 +15,29 @@ const common = {
 
 await mkdir("dist/kit/static", { recursive: true });
 await build({ ...common, entryPoints: ["src/shell/shell.ts"], outfile: "dist/kit/static/shell.js", platform: "browser" });
+await build({ ...common, entryPoints: ["src/shell/account.ts"], outfile: "dist/kit/static/account.js", platform: "browser" });
 await cp("src/shell/shell.css", "dist/kit/static/shell.css");
+// Icons: tab favicon (SVG + PNG), iOS home screen / favourites, and the paths
+// browsers probe at the root.
+await cp("src/shell/icons", "dist/kit/static/icons", { recursive: true });
+await cp("src/shell/icons/apple-touch-icon.png", "dist/kit/apple-touch-icon.png");
+await cp("src/shell/icons/apple-touch-icon.png", "dist/kit/apple-touch-icon-precomposed.png");
+await cp("src/shell/icons/favicon-32.png", "dist/kit/favicon.ico");
+await Bun.write(
+  "dist/kit/manifest.webmanifest",
+  JSON.stringify({
+    name: "Shared Artifacts",
+    short_name: "Artifacts",
+    start_url: "/",
+    display: "standalone",
+    background_color: "#0b0d15",
+    theme_color: "#0b0d15",
+    icons: [
+      { src: "/static/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { src: "/static/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+  }),
+);
 
 // Static files keep stable names, and edge caches hold them, so the Worker
 // references them with ?v=<hash of all assets>.

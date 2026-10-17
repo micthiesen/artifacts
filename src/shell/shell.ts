@@ -9,6 +9,7 @@ import type {
   SyncClientMessage,
   SyncServerMessage,
 } from "../shared/protocol.ts";
+import { avatarButton, mountAccountMenu } from "./account.ts";
 import { initOwnerMenu } from "./owner-menu.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
@@ -19,7 +20,15 @@ const canWrite = boot.viewer.role !== "view" && boot.viewer.email !== null;
 const statusEl = document.getElementById("status")!;
 const presenceEl = document.getElementById("presence")!;
 
-if (boot.viewer.role === "owner") initOwnerMenu(boot);
+// Your own avatar: owners open the Manage panel, everyone else gets the account menu.
+const meSlot = document.getElementById("me");
+if (meSlot && boot.viewer.email) {
+  if (boot.viewer.role === "owner") {
+    const trigger = avatarButton(boot.viewer.email);
+    meSlot.append(trigger);
+    initOwnerMenu(boot, trigger);
+  } else mountAccountMenu(meSlot, boot.viewer.email);
+}
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -214,8 +223,9 @@ function saveCache() {
 }
 
 function renderPresence() {
+  // Your own avatar is the account/manage button; show only the others here.
   presenceEl.replaceChildren(
-    ...presence.map((email) => {
+    ...presence.filter((email) => email !== boot.viewer.email).map((email) => {
       const el = document.createElement("span");
       el.className = "avatar";
       el.title = email;

@@ -90,21 +90,45 @@ button.link:hover { text-decoration: underline; text-underline-offset: 3px; }
   background: linear-gradient(90deg, var(--border), color-mix(in oklab, var(--signal-from) 70%, var(--border)) 35%, color-mix(in oklab, var(--signal-to) 70%, var(--border)) 65%, var(--border));
 }
 .shell .bar { background: var(--bg); }
-.bar .brand { display: inline-flex; align-items: center; gap: .55rem; color: var(--fg); font-weight: 650; letter-spacing: -.005em; }
-.bar .brand:hover { text-decoration: none; }
+/* Logo + title: identical on every page. */
+.bar .lead { flex: 1; display: flex; align-items: center; gap: .6rem; min-width: 0; }
 .bar .mark {
-  font-size: 14px; background: var(--signal); -webkit-background-clip: text; background-clip: text; color: transparent;
+  flex: none; display: grid; place-items: center; width: 1.75rem; height: 1.75rem; margin-left: -.25rem; border-radius: .5rem;
+  font-size: 14px; line-height: 1; background: var(--signal); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.bar .home { color: var(--primary); font-size: 14px; }
-.bar .home { display: grid; place-items: center; width: 2rem; height: 2rem; margin-left: -.5rem; border-radius: .5rem; flex: none; }
-.bar .home:hover { background: var(--muted); text-decoration: none; }
-.bar .title { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar .mark:hover { text-decoration: none; background-color: var(--muted); }
+.bar .title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg); font-weight: 650; letter-spacing: -.005em;
+}
+a.title:hover { text-decoration: none; }
 .bar .spacer { flex: 1; }
 .bar .status { color: var(--muted-fg); font-size: 13px; white-space: nowrap; }
 .bar .status:empty { display: none; }
 .bar .presence { display: flex; gap: .25rem; }
-.bar .account { display: flex; align-items: center; gap: .5rem; min-width: 0; }
-.bar .email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Your own avatar: opens the Manage panel (owner) or the account menu. */
+.me { position: relative; flex: none; display: flex; }
+.me .avatar-button {
+  position: relative; width: 2rem; height: 2rem; padding: 0; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 650;
+  transition: transform .12s ease;
+}
+/* 44px touch target around the 32px circle. */
+.me .avatar-button::before { content: ""; position: absolute; inset: -6px; border-radius: 999px; }
+.me .avatar-button:hover { transform: scale(1.06); }
+.me .avatar-button[aria-expanded="true"] { box-shadow: 0 0 0 3px color-mix(in oklab, var(--signal-from) 35%, transparent); }
+.account-menu {
+  position: absolute; right: 0; top: calc(100% + .5rem); z-index: 40; min-width: 13rem; padding: .35rem;
+  display: grid; gap: .1rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgb(0 0 0 / .45);
+}
+.account-menu[hidden] { display: none; }
+.account-email { padding: .5rem .6rem .45rem; font-size: 12.5px; color: var(--muted-fg); border-bottom: 1px solid var(--border); margin-bottom: .2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-menu a, .account-menu button {
+  display: block; width: 100%; text-align: left; padding: .5rem .6rem; border-radius: .45rem; border: 0; background: none;
+  color: var(--fg); font: inherit; font-size: 14px; cursor: pointer;
+}
+.account-menu a:hover, .account-menu button:hover { background: var(--muted); text-decoration: none; }
+.account-menu form { margin: 0; }
 .avatar {
   width: 1.75rem; height: 1.75rem; border-radius: 999px; background: var(--accent); color: var(--accent-fg);
   display: grid; place-items: center; font-size: 12px; font-weight: 600;
@@ -169,15 +193,6 @@ h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.
 .button.secondary::after { background: oklch(1 0 0 / 0.06); }
 .button:disabled { opacity: .55; cursor: default; }
 .button:disabled::after { opacity: 0; }
-.owner-menu:empty { display: none; }
-.owner-menu { margin-left: .25rem; }
-.om-trigger {
-  display: inline-flex; align-items: center; gap: .4rem; height: 2.25rem; min-width: 2.25rem; padding: 0 .7rem; flex: none;
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--fg);
-  font: inherit; font-size: 14px; font-weight: 550; cursor: pointer; transition: border-color .15s, background-color .15s;
-}
-.om-trigger:hover, .om-trigger[aria-expanded="true"] { background: var(--muted); border-color: var(--input); }
-.om-trigger svg { flex: none; color: var(--muted-fg); }
 .om-backdrop { position: fixed; inset: 0; z-index: 40; background: oklch(0.08 0.02 275 / 0.6); }
 .om-panel {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 41; width: min(28rem, 100vw); max-width: 100vw;
@@ -287,8 +302,6 @@ body.om-open { overflow: hidden; }
 .om-danger-zone > .input { flex: none; width: 100%; }
 .om-danger-button { background: var(--negative); color: var(--bg); }
 @media (max-width: 560px) {
-  .om-trigger { padding: 0; justify-content: center; }
-  .om-trigger-label { display: none; }
   .om-panel { width: 100vw; border-left: 0; }
   .om-section { padding: 1rem .9rem 2rem; }
 }

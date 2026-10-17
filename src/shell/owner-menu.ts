@@ -82,7 +82,6 @@ function icon(paths: string[]): SVGSVGElement {
   }
   return svg;
 }
-const ICON_MANAGE = ["M21 4h-7", "M10 4H3", "M21 12h-9", "M8 12H3", "M21 20h-5", "M12 20H3", "M14 2v4", "M8 10v4", "M16 18v4"];
 const ICON_CLOSE = ["M6 6l12 12", "M18 6L6 18"];
 
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
@@ -141,9 +140,8 @@ async function copyText(text: string): Promise<boolean> {
 
 // --- Menu -----------------------------------------------------------------
 
-export function initOwnerMenu(boot: ShellBoot): void {
-  const slot = document.getElementById("owner-menu");
-  if (!slot) return;
+/** Turns `button` (the owner's avatar in the bar) into the Manage panel trigger. */
+export function initOwnerMenu(boot: ShellBoot, button: HTMLButtonElement): void {
   const base = `/api/a/${encodeURIComponent(boot.artifactId)}`;
   const tool = (name: string, args: Record<string, unknown> = {}) => request<ToolResponse>(`${base}/${name}`, args);
 
@@ -163,22 +161,12 @@ export function initOwnerMenu(boot: ShellBoot): void {
     return el;
   }
 
-  const button = h(
-    "button",
-    {
-      type: "button",
-      class: "om-trigger",
-      "aria-haspopup": "dialog",
-      "aria-expanded": "false",
-      "aria-controls": "om-panel",
-      title: "Manage this artifact",
-      onclick: () => (open ? close() : show()),
-    },
-    icon(ICON_MANAGE),
-    h("span", { class: "om-trigger-label" }, "Manage"),
-  );
-  button.setAttribute("aria-label", "Manage");
-  slot.append(button);
+  button.setAttribute("aria-haspopup", "dialog");
+  button.setAttribute("aria-expanded", "false");
+  button.setAttribute("aria-controls", "om-panel");
+  button.setAttribute("aria-label", `Manage this artifact (signed in as ${boot.viewer.email})`);
+  button.title = `Manage · ${boot.viewer.email}`;
+  button.addEventListener("click", () => (open ? close() : show()));
 
   const backdrop = h("div", { class: "om-backdrop", hidden: true, onclick: () => close() });
   const titleId = "om-title";
