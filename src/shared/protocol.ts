@@ -160,6 +160,8 @@ export type ShellBoot = {
   readSeq?: number;
   /** Notification level for this artifact (signed-in viewers). */
   watch?: WatchLevel;
+  /** Set when the owner archived the artifact. */
+  archivedAt?: string;
 };
 
 export type WatchLevel = "all" | "participating" | "mute";

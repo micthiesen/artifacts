@@ -83,17 +83,34 @@ function sharingLine(s: ShareSummary | undefined): string {
   return `<span class="sharing">Shared with ${shown}${parts.length > 4 ? ` +${parts.length - 4} more` : ""}</span>`;
 }
 
+const ICON_ARCHIVE =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>';
+const ICON_RESTORE =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>';
+
+type ListedArtifact = ArtifactMeta & { role: Role; unseen?: boolean; unread?: number };
+
+/**
+ * The artifact list. `archived` shows the archive instead: artifacts the owner
+ * is done with, hidden from the main list but still readable.
+ */
 export function indexPage(
-  viewer: { email: string | null },
-  artifacts: (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number })[],
+  viewer: { email: string | null; owner?: boolean },
+  all: ListedArtifact[],
   loginConfigured: boolean,
   summaries?: Record<string, ShareSummary>,
+  archived = false,
 ): Response {
   const account = viewer.email
     ? `<span id="me" class="me" data-email="${escapeHtml(viewer.email)}"></span><script type="module" src="${asset("/static/account.js")}"></script>`
     : loginConfigured
-      ? `<a class="button small" href="/login?return=/">Sign in</a>`
+      ? `<a class="button small" href="/login?return=${archived ? "/archived" : "/"}">Sign in</a>`
       : "";
+  const artifacts = all.filter((a) => Boolean(a.archivedAt) === archived);
+  if (archived) artifacts.sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
+  const archivedCount = archived ? 0 : all.length - artifacts.length;
+  // Always present (hidden at zero) so archiving the first row can reveal it.
+  const archivedLink = `<p class="archived-link"${archivedCount ? "" : " hidden"}><a href="/archived">${ICON_ARCHIVE}Archived · <span data-archived-count>${archivedCount}</span></a></p>`;
   let body: string;
   if (!viewer.email) {
     body = `<section class="empty"><h1>Shared Artifacts</h1><p class="muted">${
@@ -101,20 +118,37 @@ export function indexPage(
         ? "Sign in with your email to see artifacts shared with you."
         : "Open the link you were sent to view an artifact."
     }</p></section>`;
+  } else if (archived) {
+    body = `<p class="back-link"><a href="/">← All artifacts</a></p><h1 class="page-title">Archived</h1><p class="muted page-lede">Hidden from the main list. They still open at their links, with history and comments.</p>${
+      list(artifacts, viewer, summaries, true)
+    }<p class="muted archive-empty" data-list-empty${artifacts.length ? " hidden" : ""}>Nothing archived.</p>`;
   } else if (!artifacts.length) {
-    body = `<section class="empty"><h1>Nothing here yet</h1><p class="muted">Artifacts shared with ${escapeHtml(viewer.email)} will show up here.</p></section>`;
+    body = all.length
+      ? `<section class="empty"><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}`
+      : `<section class="empty"><h1>Nothing here yet</h1><p class="muted">Artifacts shared with ${escapeHtml(viewer.email)} will show up here.</p></section>`;
   } else {
-    body = `<h1 class="page-title">Artifacts</h1><ul class="list">${artifacts
-      .map(
-        (a) => `<li><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}${activityBadge(a)}</span>${
-          a.description ? `<span class="desc">${escapeHtml(a.description)}</span>` : ""
-        }${summaries ? sharingLine(summaries[a.id]) : ""}<span class="meta">${relativeTime(a.updatedAt)} · v${a.version}${
-          a.public && !summaries ? " · public" : ""
-        }${a.role === "owner" ? "" : ` · ${a.role}`} · <code>${a.id}</code></span></a></li>`,
-      )
-      .join("")}</ul>`;
+    body = `<h1 class="page-title">Artifacts</h1>${list(artifacts, viewer, summaries, false)}<section class="empty" data-list-empty hidden><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}`;
   }
-  return page("Shared Artifacts", `${topBar(account)}<main class="content">${body}</main>`);
+  const script = viewer.owner && viewer.email ? `<script type="module" src="${asset("/static/home.js")}"></script>` : "";
+  return page(archived ? "Archived · Shared Artifacts" : "Shared Artifacts", `${topBar(account)}<main class="content">${body}</main>${script}`);
+}
+
+function list(artifacts: ListedArtifact[], viewer: { owner?: boolean }, summaries: Record<string, ShareSummary> | undefined, archived: boolean): string {
+  return `<ul class="list" data-list="${archived ? "archived" : "active"}">${artifacts
+    .map((a, i) => {
+      const when = archived ? `archived ${relativeTime(a.archivedAt!)}` : relativeTime(a.updatedAt);
+      const action = viewer.owner
+        ? `<button type="button" class="row-action" data-action="${archived ? "unarchive" : "archive"}" title="${archived ? "Unarchive" : "Archive"}" aria-label="${
+            archived ? "Unarchive" : "Archive"
+          } ${escapeHtml(a.title)}">${archived ? ICON_RESTORE : ICON_ARCHIVE}</button>`
+        : "";
+      return `<li data-id="${a.id}" data-order="${i}" data-title="${escapeHtml(a.title)}"><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}${archived ? "" : activityBadge(a)}</span>${
+        a.description ? `<span class="desc">${escapeHtml(a.description)}</span>` : ""
+      }${summaries ? sharingLine(summaries[a.id]) : ""}<span class="meta">${when} · v${a.version}${a.public && !summaries ? " · public" : ""}${
+        a.role === "owner" ? "" : ` · ${a.role}`
+      } · <code>${a.id}</code></span></a>${action}</li>`;
+    })
+    .join("")}</ul>`;
 }
 
 function activityBadge(a: { unseen?: boolean; unread?: number }): string {

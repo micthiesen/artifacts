@@ -109,10 +109,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   if (path === "/api/me" || path.startsWith("/api/me/")) return meApi(request, url, env, hub, viewer);
 
-  if (path === "/") {
+  if (path === "/" || path === "/archived") {
     const artifacts = viewer.email ? await hub.list(viewer) : [];
     const summaries = viewer.owner ? await hub.shareSummaries() : undefined;
-    return indexPage(viewer, artifacts, Boolean(env.AUTH_URL), summaries);
+    return indexPage(viewer, artifacts, Boolean(env.AUTH_URL), summaries, path === "/archived");
   }
   if (path === "/login") return login(url, env);
   const signin = /^\/s\/([A-Za-z0-9_.-]+)$/.exec(path);
@@ -203,6 +203,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       frameUrl: `/frame/${id}?v=${meta.version}&t=${encodeURIComponent(token)}`,
       syncUrl: `/a/${id}/sync`,
       viewer: { email: viewer.email, role: role as Role },
+      ...(meta.archivedAt ? { archivedAt: meta.archivedAt } : {}),
       ...(visit ? { since: visit.since, readSeq: visit.readSeq, watch: visit.watch } : {}),
     });
   }

@@ -16,6 +16,7 @@ const common = {
 await mkdir("dist/kit/static", { recursive: true });
 await build({ ...common, entryPoints: ["src/shell/shell.ts"], outfile: "dist/kit/static/shell.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/account.ts"], outfile: "dist/kit/static/account.js", platform: "browser" });
+await build({ ...common, entryPoints: ["src/shell/home.ts"], outfile: "dist/kit/static/home.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/me.ts"], outfile: "dist/kit/static/me.js", platform: "browser" });
 // The service worker must be served from the root to control every page.
 await build({ ...common, entryPoints: ["src/shell/sw/sw.ts"], outfile: "dist/kit/sw.js", platform: "browser" });

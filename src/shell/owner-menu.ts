@@ -12,6 +12,7 @@ type Overview = {
     version: number;
     public: boolean;
     preview: boolean;
+    archivedAt: string | null;
     createdAt: string;
     updatedAt: string;
     shares: { email: string; role: ShareRole }[];
@@ -145,7 +146,11 @@ async function copyText(text: string): Promise<boolean> {
  * Builds the Manage panel. It's opened from the avatar menu ("Manage artifact…");
  * `button` (the avatar) gets focus back when the panel closes.
  */
-export function initOwnerMenu(boot: ShellBoot, button: HTMLElement): { show: () => void; copyMyLink: () => Promise<string> } {
+export function initOwnerMenu(
+  boot: ShellBoot,
+  button: HTMLElement,
+  onArchived?: (archivedAt: string | null) => void,
+): { show: () => void; copyMyLink: () => Promise<string>; reload: () => void } {
   const base = `/api/a/${encodeURIComponent(boot.artifactId)}`;
   const tool = (name: string, args: Record<string, unknown> = {}) => request<ToolResponse>(`${base}/${name}`, args);
 
@@ -732,8 +737,30 @@ export function initOwnerMenu(boot: ShellBoot, button: HTMLElement): { show: () 
     syncDelete();
     confirmInput.addEventListener("input", syncDelete);
 
+    const archived = Boolean(d.meta.archivedAt);
+    const archiveButton = btn(archived ? "Unarchive" : "Archive", "archive", () => {
+      void act("archive", "settings", async () => {
+        const r = await tool("artifact_update", { archived: !archived });
+        onArchived?.((r.data as { archivedAt?: string | null } | null)?.archivedAt ?? null);
+        return { text: archived ? "Back in the artifact list." : "Archived. It's hidden from the artifact list." };
+      });
+    }, "button small secondary");
+
     return [
       h("div", { class: "om-group" }, form),
+      h(
+        "div",
+        { class: "om-group" },
+        h("h3", { class: "om-h" }, archived ? "Archived" : "Archive"),
+        h(
+          "p",
+          { class: "muted om-small" },
+          archived
+            ? `Archived ${new Date(d.meta.archivedAt!).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}. It's hidden from everyone's artifact list but still opens at its link.`
+            : "Done with it? Archiving hides it from everyone's artifact list. It still opens at its link, keeps its history and comments, and you can unarchive it any time.",
+        ),
+        h("div", {}, archiveButton),
+      ),
       h(
         "div",
         { class: "om-group om-danger-zone" },
@@ -748,6 +775,9 @@ export function initOwnerMenu(boot: ShellBoot, button: HTMLElement): { show: () 
 
   return {
     show,
+    reload: () => {
+      if (open) void load();
+    },
     // A presigned link for the owner, for opening this artifact on another device.
     copyMyLink: async () => {
       const r = await tool("artifact_link", { email: boot.viewer.email ?? undefined });

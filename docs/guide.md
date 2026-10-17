@@ -34,6 +34,7 @@ email code, so they need no account.
 - **New files or rewrites:** use `artifact_write_files`. Pass `null` to delete a file.
 - **Validation:** every write is compiled and checked for unknown components and import names. On any error nothing is saved and the errors come back; fix them and retry.
 - **Render check:** after a successful write, the artifact is rendered in a headless browser and the result is part of the tool response. `artifact_create` and `artifact_check` also attach a screenshot of the first screen; look at it and fix layout problems before reporting. If it reports "Render check FAILED", the version is saved but broken for viewers: fix it with `artifact_edit` right away. `artifact_check` re-runs the check.
+- **Archive, don't delete:** when the user is done with an artifact, `artifact_update` with `archived: true` hides it from everyone's list. It stays readable at its link, with history and comments, and `archived: false` brings it back. `artifact_list` skips archived artifacts unless you pass `archived: true`. Use `artifact_delete` only when the user explicitly asks to delete.
 - **Version checks and undo:** pass `baseVersion` to guard against concurrent edits. Use `artifact_history` and `artifact_revert` to undo.
 
 ## Feedback from readers

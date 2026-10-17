@@ -15,6 +15,7 @@ import { mountAccountMenu } from "./account.ts";
 import { initOwnerMenu } from "./owner-menu.ts";
 import { createDrawer } from "./threads.ts";
 import { showSince } from "./since.ts";
+import { mountArchiveBar } from "./archive.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
 const localKey = `art:${boot.artifactId}:local:${boot.viewer.email ?? "anon"}`;
@@ -51,11 +52,15 @@ if (meSlot && boot.viewer.email) {
       copyLink: () => panel!.copyMyLink(),
       copyLabel: "Copy my sign-in link",
     });
-    panel = initOwnerMenu(boot, avatar);
+    const bar = mountArchiveBar(boot.artifactId, boot.archivedAt ?? null, true, () => panel?.reload());
+    panel = initOwnerMenu(boot, avatar, (at) => bar.set(at));
   } else {
     mountAccountMenu(meSlot, boot.viewer.email, { ...common, copyLink: async () => location.href, copyLabel: "Copy page link" });
   }
 }
+
+// Owners get the bar from the menu setup above; everyone else just sees it.
+if (boot.archivedAt && boot.viewer.role !== "owner") mountArchiveBar(boot.artifactId, boot.archivedAt, false);
 
 function readJson<T>(key: string, fallback: T): T {
   try {

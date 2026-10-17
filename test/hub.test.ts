@@ -80,3 +80,19 @@ test("render check is skipped without a BROWSER binding; no alarm pending", asyn
   expect(r.check.status).toBe("skipped");
   expect(await advanceAlarm(h)).toBe(false);
 });
+
+test("archive keeps access and updated_at, and unarchives", async () => {
+  const id = await make();
+  h.hub.share(id, { add: [{ email: "a@corp.com", role: "view" }] });
+  const before = h.hub.meta(id)!;
+  const archived = h.hub.updateMeta(id, { archived: true });
+  expect(archived.archivedAt).toBeString();
+  expect(archived.updatedAt).toBe(before.updatedAt);
+  expect(archived.version).toBe(before.version);
+  // Archiving again keeps the original time.
+  expect(h.hub.updateMeta(id, { archived: true }).archivedAt).toBe(archived.archivedAt);
+  expect(h.hub.list(OWNER)[0].archivedAt).toBe(archived.archivedAt);
+  expect(h.hub.list({ email: "a@corp.com", owner: false })[0].archivedAt).toBe(archived.archivedAt);
+  expect(h.hub.roleFor(id, "a@corp.com", false)).toBe("view");
+  expect(h.hub.updateMeta(id, { archived: false }).archivedAt).toBeNull();
+});

@@ -32,6 +32,8 @@ export type ArtifactMeta = {
   public: boolean;
   /** Owner opted in to rich link previews (title, description, screenshot). */
   preview: boolean;
+  /** When the owner archived it: hidden from lists, still readable at its link. */
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -171,6 +173,7 @@ export class ArtifactHub extends DurableObject {
     if (!columns("artifacts").includes("preview")) {
       this.sql.exec(`ALTER TABLE artifacts ADD COLUMN preview INTEGER NOT NULL DEFAULT 0`);
     }
+    if (!columns("artifacts").includes("archived_at")) this.sql.exec(`ALTER TABLE artifacts ADD COLUMN archived_at TEXT`);
   }
 
   // ---- reads -------------------------------------------------------------
@@ -343,13 +346,16 @@ export class ArtifactHub extends DurableObject {
     });
   }
 
-  updateMeta(id: string, patch: { title?: string; description?: string; preview?: boolean }): ArtifactMeta {
+  updateMeta(id: string, patch: { title?: string; description?: string; preview?: boolean; archived?: boolean }): ArtifactMeta {
     this.requireArtifact(id);
     if (patch.title !== undefined) this.sql.exec(`UPDATE artifacts SET title = ? WHERE id = ?`, patch.title, id);
     if (patch.description !== undefined) {
       this.sql.exec(`UPDATE artifacts SET description = ? WHERE id = ?`, patch.description, id);
     }
     if (patch.preview !== undefined) this.sql.exec(`UPDATE artifacts SET preview = ? WHERE id = ?`, patch.preview ? 1 : 0, id);
+    // Archiving doesn't touch updated_at: it isn't a change to the content.
+    if (patch.archived === true) this.sql.exec(`UPDATE artifacts SET archived_at = COALESCE(archived_at, ?) WHERE id = ?`, new Date().toISOString(), id);
+    if (patch.archived === false) this.sql.exec(`UPDATE artifacts SET archived_at = NULL WHERE id = ?`, id);
     return toMeta(this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).one());
   }
 
@@ -1527,6 +1533,7 @@ function toMeta(r: Record<string, SqlStorageValue>): ArtifactMeta {
     version: r.version as number,
     public: Boolean(r.public),
     preview: Boolean(r.preview),
+    archivedAt: (r.archived_at as string | null) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };

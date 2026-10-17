@@ -145,20 +145,39 @@ export const TOOLS: Tool[] = [
   {
     name: "artifact_list",
     title: "Shared Artifacts: list",
-    description: "Shared Artifacts: list artifacts (id, title, description, version, url), newest first. Optional text filter.",
+    description:
+      "Shared Artifacts: list artifacts (id, title, description, version, url), newest first. Optional text filter. Archived artifacts are left out unless archived is true.",
     inputSchema: {
       type: "object",
-      properties: { query: { type: "string", description: "Case-insensitive filter on title and description." } },
+      properties: {
+        query: { type: "string", description: "Case-insensitive filter on title and description." },
+        archived: { type: "boolean", description: "true: list only archived artifacts. Default: only active ones." },
+      },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
     run: async (args, { hub, origin }) => {
       const q = typeof args.query === "string" ? args.query.toLowerCase() : "";
-      const rows = (await hub.list({ email: null, owner: true }))
+      const archived = args.archived === true;
+      const all = await hub.list({ email: null, owner: true });
+      const rows = all
+        .filter((a) => Boolean(a.archivedAt) === archived)
         .filter((a) => !q || `${a.title} ${a.description}`.toLowerCase().includes(q))
-        .map((a) => ({ id: a.id, title: a.title, description: a.description, version: a.version, public: a.public, updatedAt: a.updatedAt, url: url(origin, a.id) }));
+        .map((a) => ({
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          version: a.version,
+          public: a.public,
+          updatedAt: a.updatedAt,
+          archivedAt: a.archivedAt,
+          url: url(origin, a.id),
+        }));
+      const hidden = archived ? 0 : all.filter((a) => a.archivedAt).length;
+      const lines = rows.map((a) => `${a.id} v${a.version} ${a.title}${a.description ? `: ${a.description}` : ""}${a.archivedAt ? ` (archived ${a.archivedAt.slice(0, 10)})` : ""}`);
+      if (hidden) lines.push(`(${hidden} archived not shown; pass archived: true to list them.)`);
       return {
-        text: rows.length ? rows.map((a) => `${a.id} v${a.version} ${a.title}${a.description ? `: ${a.description}` : ""}`).join("\n") : "No artifacts.",
+        text: rows.length ? lines.join("\n") : archived ? "No archived artifacts." : ["No artifacts.", ...lines].join("\n"),
         structured: { artifacts: rows },
       };
     },
@@ -359,22 +378,33 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_update",
-    title: "Shared Artifacts: rename",
+    title: "Shared Artifacts: update details or archive",
     description:
-      "Shared Artifacts: change an artifact's title or description, or turn rich link previews on or off. With preview on, links pasted into Slack, iMessage and similar apps show the title, description and a screenshot; off (the default for private artifacts), they show a generic card.",
+      "Shared Artifacts: change an artifact's title or description, archive or unarchive it, or turn rich link previews on or off. Archiving hides an artifact the user is done with from everyone's list; it stays readable at its link with its history and can be unarchived. Prefer archiving over artifact_delete unless the user explicitly asks to delete. With preview on, links pasted into Slack, iMessage and similar apps show the title, description and a screenshot; off (the default for private artifacts), they show a generic card.",
     inputSchema: {
       type: "object",
-      properties: { id, title: { type: "string" }, description: { type: "string" }, preview: { type: "boolean" } },
+      properties: {
+        id,
+        title: { type: "string" },
+        description: { type: "string" },
+        archived: { type: "boolean", description: "true archives, false unarchives." },
+        preview: { type: "boolean" },
+      },
       required: ["id"],
       additionalProperties: false,
     },
     run: async (args, { hub }) => {
+      for (const k of ["archived", "preview"]) {
+        if (args[k] !== undefined && typeof args[k] !== "boolean") return { isError: true, text: `${k} must be true or false.` };
+      }
       const meta = await hub.updateMeta(String(args.id), {
         title: args.title as string | undefined,
         description: args.description as string | undefined,
         preview: typeof args.preview === "boolean" ? args.preview : undefined,
+        archived: typeof args.archived === "boolean" ? args.archived : undefined,
       });
-      return { text: `Updated ${meta.id}: ${meta.title}`, structured: meta };
+      const verb = args.archived === true ? "Archived" : args.archived === false ? "Unarchived" : "Updated";
+      return { text: `${verb} ${meta.id}: ${meta.title}`, structured: meta };
     },
   },
   {
@@ -738,7 +768,8 @@ export const TOOLS: Tool[] = [
   {
     name: "artifact_delete",
     title: "Shared Artifacts: delete",
-    description: "Shared Artifacts: permanently delete an artifact, its history and its shared state.",
+    description:
+      "Shared Artifacts: permanently delete an artifact, its history and its shared state. Only when the user explicitly asks to delete; to tidy up finished work, archive it with artifact_update instead.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { destructiveHint: true },
     run: async (args, { hub }) => {
