@@ -210,6 +210,13 @@ const expJson = await exp.json() as any;
 check("admin export", exp.status === 200 && expJson.tables?.artifacts?.some((a: any) => a.id === id), exp.status);
 check("admin needs token", (await fetch(`${origin}/admin/export`)).status === 401);
 
+// Sliding sessions: an older (but valid) session cookie gets renewed.
+const oldSession = await signToken(process.env.SESSION_SECRET!, "session", 10 * 86400, { e: owner });
+const renewed = await fetch(`${origin}/`, { headers: { Cookie: `__Host-art_session=${oldSession}` } });
+check("old session is renewed", /Max-Age=2592000/.test(renewed.headers.get("Set-Cookie") ?? ""), renewed.headers.get("Set-Cookie"));
+const freshSession = await signToken(process.env.SESSION_SECRET!, "session", 30 * 86400, { e: owner });
+check("fresh session left alone", !(await fetch(`${origin}/`, { headers: { Cookie: `__Host-art_session=${freshSession}` } })).headers.get("Set-Cookie"));
+
 // Domain shares.
 const asEmail = async (e: string) => `__Host-art_session=${await signToken(process.env.SESSION_SECRET!, "session", 600, { e })}`;
 await call("artifact_share", { id, add: [{ email: "@example.org", role: "view" }] });

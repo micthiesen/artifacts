@@ -44,6 +44,7 @@ export default {
 
   async fetch(request: Request, env: Env): Promise<Response> {
     const response = await route(request, env);
+    await renewSession(request, env, response);
     // Nothing here should be indexed by search engines, public artifacts included.
     if (!response.headers.has("X-Robots-Tag") && response.status !== 101) {
       try {
@@ -174,6 +175,22 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   return messagePage("Not found", "There's nothing here.", 404);
+}
+
+/**
+ * Sliding sessions: a visit more than a day after the cookie was issued gets a
+ * fresh 30-day cookie, so a session only lapses after 30 days without use.
+ */
+async function renewSession(request: Request, env: Env, response: Response) {
+  if (response.status === 101 || response.headers.has("Set-Cookie")) return;
+  const claims = await verifyToken<{ e: string }>(env.SESSION_SECRET, "session", readCookie(request, SESSION_COOKIE));
+  if (!claims || claims.exp - Date.now() / 1000 > SESSION_TTL - 86400) return;
+  const fresh = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: claims.e });
+  try {
+    response.headers.append("Set-Cookie", sessionCookie(fresh));
+  } catch {
+    // immutable headers (e.g. Response.redirect); the next page view renews instead
+  }
 }
 
 async function currentViewer(request: Request, env: Env): Promise<Viewer> {
