@@ -242,6 +242,7 @@ function sameOrigin(request: Request, url: URL): boolean {
  * Admin endpoints (bearer MCP token):
  * - GET /admin/export: everything as JSON (asset bytes base64, screenshots omitted).
  * - POST /admin/import <export>: replace ALL data with an export (one transaction).
+ * - POST /admin/backup: write today's export to the R2 bucket now (the cron does it daily).
  */
 async function admin(request: Request, url: URL, env: Env, hub: HubApi): Promise<Response> {
   const auth = request.headers.get("Authorization") ?? "";
@@ -253,6 +254,10 @@ async function admin(request: Request, url: URL, env: Env, hub: HubApi): Promise
     return new Response(JSON.stringify({ exportedAt: new Date().toISOString(), tables: data }), {
       headers: { "Content-Type": "application/json", "Content-Disposition": "attachment; filename=artifacts-export.json" },
     });
+  }
+  if (url.pathname === "/admin/backup" && request.method === "POST") {
+    const key = await hub.backupToR2();
+    return key ? Response.json({ key }) : Response.json({ error: "no BACKUPS bucket bound" }, { status: 409 });
   }
   if (url.pathname === "/admin/import" && request.method === "POST") {
     const body = (await request.json().catch(() => null)) as { tables?: Record<string, Record<string, unknown>[]> } | null;

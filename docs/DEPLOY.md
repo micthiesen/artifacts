@@ -35,7 +35,7 @@ every outstanding link.
 
 ## Backups
 
-- **Nightly offsite copy (optional):** with `R2_BACKUPS=1` in `.env` and R2 edit permission on the deploy token, Alchemy creates a bucket, and the 10:00 UTC cron writes `exports/<date>.json` to it, keeping 30 days.
+- **Nightly offsite copy (optional):** with `R2_BACKUPS=1` in `.env` and R2 edit permission on the deploy token, Alchemy creates a bucket, and the 10:00 UTC cron writes `exports/<date>.json` to it, keeping 30 days. `POST /admin/backup` (bearer MCP token) runs it immediately.
 
 - **Off-Cloudflare copy:** `bun scripts/export.ts <origin>` writes `exports/artifacts-<time>.json` (gitignored).
 - **Restoring:** `bun scripts/import.ts <origin> exports/<file>.json` replaces all data with that export, in one transaction. Export the current state first if you might want it back.
