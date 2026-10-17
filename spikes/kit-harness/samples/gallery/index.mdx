@@ -1,0 +1,656 @@
+# Diagram gallery
+
+## Block
+
+```mermaid
+block
+  blockArrowId<["Label"]>(right)
+  blockArrowId2<["Label"]>(left)
+  blockArrowId3<["Label"]>(up)
+  blockArrowId4<["Label"]>(down)
+  blockArrowId5<["Label"]>(x)
+  blockArrowId6<["Label"]>(y)
+  blockArrowId7<["Label"]>(x, down)
+```
+
+## C4
+
+```mermaid
+    C4Component
+    title Component diagram for Internet Banking System - API Application
+
+    Container(spa, "Single Page Application", "javascript and angular", "Provides all the internet banking functionality to customers via their web browser.")
+    Container(ma, "Mobile App", "Xamarin", "Provides a limited subset to the internet banking functionality to customers via their mobile device.")
+    ContainerDb(db, "Database", "Relational Database Schema", "Stores user registration information, hashed authentication credentials, access logs, etc.")
+    System_Ext(mbs, "Mainframe Banking System", "Stores all of the core banking information about customers, accounts, transactions, etc.")
+
+    Container_Boundary(api, "API Application") {
+        Component(sign, "Sign In Controller", "MVC Rest Controller", "Allows users to sign in to the internet banking system")
+        Component(accounts, "Accounts Summary Controller", "MVC Rest Controller", "Provides customers with a summary of their bank accounts")
+        Component(security, "Security Component", "Spring Bean", "Provides functionality related to singing in, changing passwords, etc.")
+        Component(mbsfacade, "Mainframe Banking System Facade", "Spring Bean", "A facade onto the mainframe banking system.")
+
+        Rel(sign, security, "Uses")
+        Rel(accounts, mbsfacade, "Uses")
+        Rel(security, db, "Read & write to", "JDBC")
+        Rel(mbsfacade, mbs, "Uses", "XML/HTTPS")
+    }
+
+    Rel_Back(spa, sign, "Uses", "JSON/HTTPS")
+    Rel(spa, accounts, "Uses", "JSON/HTTPS")
+
+    Rel(ma, sign, "Uses", "JSON/HTTPS")
+    Rel(ma, accounts, "Uses", "JSON/HTTPS")
+
+    UpdateRelStyle(spa, sign, $offsetY="-40")
+    UpdateRelStyle(spa, accounts, $offsetX="40", $offsetY="40")
+
+    UpdateRelStyle(ma, sign, $offsetX="-90", $offsetY="40")
+    UpdateRelStyle(ma, accounts, $offsetY="-40")
+
+        UpdateRelStyle(sign, security, $offsetX="-160", $offsetY="10")
+        UpdateRelStyle(accounts, mbsfacade, $offsetX="140", $offsetY="10")
+        UpdateRelStyle(security, db, $offsetY="-40")
+        UpdateRelStyle(mbsfacade, mbs, $offsetY="-40")
+```
+
+## Class
+
+```mermaid
+---
+config:
+  class:
+    hierarchicalNamespaces: false
+---
+classDiagram
+    namespace Earth.Volcano.Summit {
+        class Crater {
+            +erupt()
+        }
+    }
+    namespace Earth.Volcano.Slope {
+        class LavaFlow {
+            +buildLand()
+        }
+    }
+    namespace Earth {
+        class Hotspot {
+            +meltRock()
+        }
+    }
+    Hotspot --> Crater : feeds
+    Hotspot --> LavaFlow : feeds
+```
+
+## Entity relationship
+
+```mermaid
+erDiagram
+    subgraph title1
+        CUSTOMER
+        CUSTOMER {
+            string name
+            string custNumber
+            string sector
+        }
+    end
+    subgraph title2
+        CAR ||--o{ NAMED-DRIVER : allows
+        subgraph title3
+            PERSON
+            PERSON {
+                string firstName
+                string lastName
+                int age
+            }
+        end
+    end
+```
+
+## Event modeling
+
+```mermaid
+eventmodeling
+
+timeframe 01 ui CartUI
+timeframe 02 command AddItem [[AddItem01]]
+timeframe 03 event ItemAdded [[ItemAdded]]
+timeframe 04 command AddItem [[AddItem02]]
+timeframe 05 event ItemAdded [[ItemAdded]]
+
+data AddItem01 {
+  description: 'john'
+  image: 'avatar_john'
+  price: 20.4
+}
+
+data AddItem02 {
+  description: 'jack'
+  image: 'avatar_jack'
+  price: 12.5
+}
+
+data ItemAdded {
+  description: string
+  image: string
+  price: number
+}
+```
+
+## Flowchart
+
+```mermaid
+flowchart LR
+    subgraph subgraph1
+        direction TB
+        top1[top] --> bottom1[bottom]
+    end
+    subgraph subgraph2
+        direction TB
+        top2[top] --> bottom2[bottom]
+    end
+    %% ^ These subgraphs are identical, except for the links to them:
+
+    %% Link *to* subgraph1: subgraph1 direction is maintained
+    outside --> subgraph1
+    %% Link *within* subgraph2:
+    %% subgraph2 inherits the direction of the top-level graph (LR)
+    outside ---> top2
+```
+
+## Gantt
+
+```mermaid
+gantt
+    title Git Issues - days since last update
+    dateFormat X
+    axisFormat %s
+    section Issue19062
+    71   : 0, 71
+    section Issue19401
+    36   : 0, 36
+    section Issue193
+    34   : 0, 34
+    section Issue7441
+    9    : 0, 9
+    section Issue1300
+    5    : 0, 5
+```
+
+## Git graph
+
+```mermaid
+    gitGraph
+        commit id: "ZERO"
+        branch develop
+        branch release
+        commit id:"A"
+        checkout main
+        commit id:"ONE"
+        checkout develop
+        commit id:"B"
+        checkout main
+        merge develop id:"MERGE"
+        commit id:"TWO"
+        checkout release
+        cherry-pick id:"MERGE" parent:"B"
+        commit id:"THREE"
+        checkout develop
+        commit id:"C"
+```
+
+## Kanban
+
+```mermaid
+kanban
+todo[Todo]
+  id3[Update Database Function]@{ ticket: MC-2037, assigned: 'knsv', priority: 'High' }
+```
+
+## Mindmap
+
+```mermaid
+mindmap
+  root((Hawaiʻi))
+    History
+      Old legends
+      ::icon(fa fa-book)
+      Voyaging
+        Polynesian navigators who sailed by the stars
+    Nature
+      Mountains<br/>and volcanoes
+      Ocean life
+        Reef
+            Sea turtles
+            Monk seals
+            Parrotfish
+    Culture
+      Hula and lei
+      ʻUkulele
+```
+
+## Packet
+
+```mermaid
+---
+title: "TCP Packet"
+---
+packet
+0-15: "Source Port"
+16-31: "Destination Port"
+32-63: "Sequence Number"
+64-95: "Acknowledgment Number"
+96-99: "Data Offset"
+100-105: "Reserved"
+106: "URG"
+107: "ACK"
+108: "PSH"
+109: "RST"
+110: "SYN"
+111: "FIN"
+112-127: "Window"
+128-143: "Checksum"
+144-159: "Urgent Pointer"
+160-191: "(Options and Padding)"
+192-255: "Data (variable length)"
+```
+
+## Quadrant chart
+
+```mermaid
+quadrantChart
+    title Reach and engagement of campaigns
+    x-axis Low Reach --> High Reach
+    y-axis Low Engagement --> High Engagement
+    quadrant-1 We should expand
+    quadrant-2 Need to promote
+    quadrant-3 Re-evaluate
+    quadrant-4 May be improved
+    Campaign A: [0.3, 0.6]
+    Campaign B: [0.45, 0.23]
+    Campaign C: [0.57, 0.69]
+    Campaign D: [0.78, 0.34]
+    Campaign E: [0.40, 0.34]
+    Campaign F: [0.35, 0.78]
+```
+
+## Requirement
+
+```mermaid
+---
+config:
+  theme: default
+  look: classic
+  layout: dagre
+---
+requirementDiagram
+  requirement checkout_req {
+    id: 1
+    text: Orders must be payable online.
+    risk: high
+    verifymethod: test
+  }
+  functionalRequirement payment_req {
+    id: 1.1
+    text: Card payments must be authorized.
+    risk: high
+    verifymethod: test
+  }
+  element checkout_service {
+    type: service
+  }
+  checkout_req - contains -> payment_req
+  checkout_service - satisfies -> payment_req
+```
+
+## Sankey
+
+```mermaid
+---
+config:
+  sankey:
+    showValues: false
+    nodeWidth: 15
+    nodePadding: 20
+---
+sankey
+
+Electricity grid,Heating and cooling - homes,113.726
+Electricity grid,Industry,342.165
+Electricity grid,Losses,56.691
+```
+
+## Sequence
+
+```mermaid
+---
+config:
+  theme: default
+  look: classic
+---
+sequenceDiagram
+  autonumber
+  actor Customer
+  participant Web as Web app
+  participant API as API gateway
+  participant Bank
+  Customer->>Web: Place order
+  Web->>API: POST /orders
+  activate API
+  API->>Bank: Authorize payment
+  Bank-->>API: Approved
+  API-->>Web: 201 Created
+  deactivate API
+  Web-->>Customer: Order confirmed
+  Note over Customer,Bank: One order, one transaction
+```
+
+## State
+
+```mermaid
+---
+config:
+  theme: default
+  look: classic
+  layout: dagre
+---
+stateDiagram-v2
+  [*] --> Draft
+  Draft --> Submitted : submit
+  state Review {
+    [*] --> Screening
+    Screening --> Decision
+  }
+  Submitted --> Review
+  Review --> Published : approved
+  Review --> Draft : rejected
+  Published --> [*]
+```
+
+## Timeline
+
+```mermaid
+timeline
+    title Timeline of the Hawaiian Islands
+    section Older islands
+        Kauaʻi : 5 million years old, Canyons, Sea <br>cliffs
+        Oʻahu : 3 million years old, Diamond Head, Surf breaks
+        Molokaʻi : 2 million years old, Fishponds, Tall cliffs
+    section Younger islands
+        Maui : 1 million years old, Haleakalā, Whale watching
+        Hawaiʻi : Still growing, Mauna Kea, Kīlauea
+```
+
+## User journey
+
+```mermaid
+journey
+    title My working day
+    section Go to work
+      Make tea: 5: Me
+      Go upstairs: 3: Me
+      Do work: 1: Me, Cat
+    section Go home
+      Go downstairs: 5: Me
+      Sit down: 5: Me
+```
+
+## Agentflow
+
+```mermaid
+agentflow-beta TB
+  flow intake["Intake"]
+    receive["Receive request"]@{ shape: input }
+  end
+
+  flow processing["Processing"]
+    validate["Validate"]@{ shape: task }
+    enrich["Enrich"]@{ shape: task }
+    validate --> enrich
+  end
+  processing@{ view: "collapsed" }
+
+  flow output["Output"]
+    publish["Publish"]@{ shape: action }
+  end
+
+  receive --> validate
+  enrich --> publish
+```
+
+## Architecture
+
+```mermaid
+architecture-beta
+    service left_disk(disk)[Disk]
+    service top_disk(disk)[Disk]
+    service bottom_disk(disk)[Disk]
+    service top_gateway(internet)[Gateway]
+    service bottom_gateway(internet)[Gateway]
+    junction junctionCenter
+    junction junctionRight
+
+    left_disk:R -- L:junctionCenter
+    top_disk:B -- T:junctionCenter
+    bottom_disk:T -- B:junctionCenter
+    junctionCenter:R -- L:junctionRight
+    top_gateway:B -- T:junctionRight
+    bottom_gateway:T -- B:junctionRight
+```
+
+## Cynefin
+
+```mermaid
+cynefin-beta
+  title Strategy Categorization
+
+  complex
+    "Market research"
+
+  complicated
+    "Competitive analysis"
+
+  clear
+    "Standard pricing"
+
+  chaotic
+    "Crisis management"
+
+  complex --> complicated : "Pattern identified"
+  complicated --> clear : "Best practice codified"
+  clear --> chaotic : "Complacency"
+  chaotic --> complex : "Stabilized"
+```
+
+## Ishikawa
+
+```mermaid
+ishikawa-beta
+    Blurry Photo
+    Process
+        Out of focus
+        Shutter speed too slow
+        Protective film not removed
+        Beautification filter applied
+    User
+        Shaky hands
+    Equipment
+        LENS
+            Inappropriate lens
+            Damaged lens
+            Dirty lens
+        SENSOR
+            Damaged sensor
+            Dirty sensor
+    Environment
+        Subject moved too quickly
+        Too dark
+```
+
+## Radar
+
+```mermaid
+radar-beta
+  title Restaurant Comparison
+  axis food["Food Quality"], service["Service"], price["Price"]
+  axis ambiance["Ambiance"]
+
+  curve a["Restaurant A"]{4, 3, 2, 4}
+  curve b["Restaurant B"]{3, 4, 3, 3}
+  curve c["Restaurant C"]{2, 3, 4, 2}
+  curve d["Restaurant D"]{2, 2, 4, 3}
+
+  graticule polygon
+  max 5
+```
+
+## Railroad
+
+```mermaid
+railroad-ebnf-beta
+title "Arithmetic Expression Grammar"
+
+expression = term ( ( "+" | "-" ) term )* ;
+term = factor ( ( "*" | "/" ) factor )* ;
+factor = number | "(" expression ")" ;
+number = digit+ ;
+digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+```
+
+## Swimlane
+
+```mermaid
+swimlane-beta LR
+  subgraph Customer
+    request[Request service]
+    receive[Receive update]
+  end
+
+  subgraph Support
+    triage[Triage request]
+    answer[Send answer]
+  end
+
+  subgraph Engineering
+    investigate[Investigate issue]
+    fix[Prepare fix]
+  end
+
+  request --> triage
+  triage -->|Known issue| answer
+  triage -->|Needs code change| investigate
+  investigate --> fix --> answer
+  answer --> receive
+```
+
+## Tree view
+
+```mermaid
+---
+config:
+  treeView:
+    showIcons: true
+    defaultIconPack: material-icon-theme
+    filenameIcons:
+      Dockerfile: docker
+    extensionIcons:
+      .ts: typescript
+      .tsx: react-ts
+      .txt: none
+---
+treeView-beta
+    src/
+        App.tsx
+        utils.ts
+    Dockerfile
+    notes.txt
+    README.md
+```
+
+## Treemap
+
+```mermaid
+---
+config:
+  treemap:
+    valueFormat: '$0,0'
+---
+treemap-beta
+"Budget"
+    "Operations"
+        "Salaries": 700000
+        "Equipment": 200000
+        "Supplies": 100000
+    "Marketing"
+        "Advertising": 400000
+        "Events": 100000
+```
+
+## Use case
+
+```mermaid
+---
+config:
+  usecase:
+    actorFontSize: 16
+    actorFontFamily: Arial
+    actorFontWeight: bold
+    usecaseFontSize: 14
+    usecaseFontFamily: Georgia
+    usecaseFontWeight: normal
+    nodeSpacing: 60
+    rankSpacing: 70
+    diagramPadding: 24
+    colorScheme: role
+    useMaxWidth: false
+---
+usecase-beta
+direction LR
+actor Customer
+Browse("Browse catalog")
+Customer --> Browse
+```
+
+## Venn
+
+```mermaid
+---
+config:
+  theme: default
+  look: classic
+---
+venn-beta
+  title What makes a good feature
+  set Desirable
+  set Feasible
+  set Viable
+  union Desirable,Feasible["Buildable"]
+  union Feasible,Viable["Sustainable"]
+  union Desirable,Viable["Marketable"]
+  union Desirable,Feasible,Viable["Ship it"]
+```
+
+## Wardley map
+
+```mermaid
+wardley-beta
+title Tea Shop Value Chain
+
+anchor Business [0.95, 0.63]
+component Cup of Tea [0.79, 0.61]
+component Tea [0.63, 0.81]
+component Hot Water [0.52, 0.80]
+component Kettle [0.43, 0.35]
+component Power [0.10, 0.70]
+
+Business -> Cup of Tea
+Cup of Tea -> Tea
+Cup of Tea -> Hot Water
+Hot Water -> Kettle
+Kettle -> Power
+
+evolve Kettle 0.62
+evolve Power 0.89
+
+note "Standardizing power allows Kettles to evolve faster" [0.30, 0.49]
+```

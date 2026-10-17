@@ -21,10 +21,19 @@ Data
 - `Chart({type?: "line"|"bar"|"area"|"pie", data, x, y: "a"|"a b"|string[], height?: 280, stacked?, legend?, title?})`
 - `Sparkline({data: number[]|"x.json", y?, tone?})`
 
-Diagrams (the only way to draw one)
-- In MDX/Markdown, write a ```` ```mermaid ```` fenced block; it renders as a themed, responsive, zoomable SVG. In TSX use `Diagram({code: string, title?})` (or the source as children). Any Mermaid type works: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `erDiagram`, `classDiagram`, `gantt`, `timeline`, `mindmap`, `journey`, `gitGraph`, `architecture-beta`, `block-beta`, `kanban`…
-- Use one whenever a process, dependency, request flow, data model or plan reads faster as a picture. Keep labels short; let the theme supply colors (avoid `style`/`classDef` colors).
-- Never hand-draw diagrams with SVG, positioned divs or ASCII art. Data charts are not diagrams: use `Chart` instead of Mermaid `pie`/`xychart` (rejected at write time).
+Diagrams (Mermaid, rendered by Pele; the only way to draw anything that isn't a `Chart`)
+- In MDX/Markdown, write a ```` ```mermaid ```` fenced block; it becomes a themed, responsive, zoomable SVG card. In TSX use `Diagram({code: string, title?})` (or the source as children). Fences are syntax-checked on write.
+- Pick the type by what you're showing (first line of the source):
+  - Process or decision flow: `flowchart TD` (`LR` for short chains); agent or LLM pipeline: `agentflow-beta TB`; handoffs between teams: `swimlane-beta LR`
+  - Who calls whom, in order: `sequenceDiagram`; lifecycle: `stateDiagram-v2`; user steps with sentiment: `journey`
+  - Data model: `erDiagram`; types and code structure: `classDiagram`; requirements traceability: `requirementDiagram`
+  - Systems and services: `architecture-beta`, `C4Context`/`C4Container`/`C4Component`, `block`; network packet or binary layout: `packet`
+  - Plans and status: `gantt` (dated schedule), `timeline` (milestones), `kanban` (work by column), `gitGraph` (branches and releases)
+  - Ideas and hierarchy: `mindmap`, `treeView-beta` (file trees), `ishikawa-beta` (root causes), `cynefin-beta`, `wardley-beta`
+  - Quantities Chart can't show: `quadrantChart` (2x2 prioritization), `sankey` (flows between stages), `radar-beta` (multi-axis comparison), `treemap-beta` (part of whole, nested), `venn-beta` (overlap)
+  - Grammar: `railroad-ebnf-beta`; actors and use cases: `usecase-beta`
+- `Chart` vs Mermaid: line, bar, area and pie charts of numbers always use `Chart` with a data file (Mermaid `pie` and `xychart` are rejected). Everything above uses Mermaid.
+- Keep labels short (2-4 words) and diagrams under ~25 nodes; split bigger ones by section. Let the theme supply colors: no `style`, `classDef` colors, `%%{init}%%` or `theme:` config. Never hand-draw with SVG, positioned divs or ASCII art.
 
 Primitives
 - `Button({variant?: default|secondary|outline|ghost|destructive|link, size?: sm|default|lg|icon|icon-sm})`

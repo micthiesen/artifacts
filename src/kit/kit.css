@@ -109,3 +109,19 @@
   display: block;
   width: 100%;
 }
+/* Pele's zoom buttons cover short diagrams; show them as a compact row only
+   while the pointer or keyboard focus is on the diagram (pinch still zooms). */
+.art-diagram .pele-zoom {
+  flex-direction: row !important;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.art-diagram:hover .pele-zoom,
+.art-diagram:focus-within .pele-zoom {
+  opacity: 1;
+}
+@media print {
+  .art-diagram .pele-zoom {
+    display: none !important;
+  }
+}
