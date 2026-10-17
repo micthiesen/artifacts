@@ -15,7 +15,7 @@ import { mountAccountMenu } from "./account.ts";
 import { initOwnerMenu } from "./owner-menu.ts";
 import { createDrawer } from "./threads.ts";
 import { showSince } from "./since.ts";
-import { mountArchiveBar } from "./archive.ts";
+import { mountArchiveBar, setArchived } from "./archive.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
 const localKey = `art:${boot.artifactId}:local:${boot.viewer.email ?? "anon"}`;
@@ -46,14 +46,30 @@ if (meSlot && boot.viewer.email) {
   const common = { print: printArtifact, watch: { level: boot.watch ?? "participating", set: setWatch } };
   if (boot.viewer.role === "owner") {
     let panel: ReturnType<typeof initOwnerMenu> | null = null;
+    let archivedAt = boot.archivedAt ?? null;
+    const archivedChanged = (at: string | null) => {
+      archivedAt = at;
+      bar.set(at);
+      panel?.reload();
+    };
     const avatar = mountAccountMenu(meSlot, boot.viewer.email, {
       ...common,
       manage: () => panel?.show(),
       copyLink: () => panel!.copyMyLink(),
       copyLabel: "Copy my sign-in link",
+      archive: {
+        archived: () => archivedAt !== null,
+        toggle: async () => archivedChanged(await setArchived(boot.artifactId, archivedAt === null)),
+      },
     });
-    const bar = mountArchiveBar(boot.artifactId, boot.archivedAt ?? null, true, () => panel?.reload());
-    panel = initOwnerMenu(boot, avatar, (at) => bar.set(at));
+    const bar = mountArchiveBar(boot.artifactId, archivedAt, true, (at) => {
+      archivedAt = at;
+      panel?.reload();
+    });
+    panel = initOwnerMenu(boot, avatar, (at) => {
+      archivedAt = at;
+      bar.set(at);
+    });
   } else {
     mountAccountMenu(meSlot, boot.viewer.email, { ...common, copyLink: async () => location.href, copyLabel: "Copy page link" });
   }

@@ -19,6 +19,8 @@ export type AccountMenuOptions = {
   /** Returns a link to copy; owners get a presigned sign-in link, others the page URL. */
   copyLink?: () => Promise<string>;
   copyLabel?: string;
+  /** Owner on an artifact page: archive or unarchive it. */
+  archive?: { archived: () => boolean; toggle: () => Promise<void> };
 };
 
 export function mountAccountMenu(slot: HTMLElement, email: string, options: AccountMenuOptions = {}): HTMLButtonElement {
@@ -80,6 +82,22 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
       print();
     });
   }
+  let paintArchive = () => {};
+  if (options.archive) {
+    const archive = options.archive;
+    const el = item("", async () => {
+      try {
+        await archive.toggle();
+        setOpen(false);
+        button.focus();
+      } catch {
+        el.textContent = "Couldn't update";
+        setTimeout(paintArchive, 1600);
+      }
+    });
+    paintArchive = () => (el.textContent = archive.archived() ? "Unarchive" : "Archive");
+    paintArchive();
+  }
   if (options.watch) {
     const watch = options.watch;
     const group = document.createElement("div");
@@ -137,6 +155,7 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
   menu.append(form);
 
   function setOpen(open: boolean) {
+    if (open) paintArchive();
     menu.hidden = !open;
     button.setAttribute("aria-expanded", String(open));
     if (open) menu.querySelector<HTMLElement>("[role=menuitem], [role=menuitemradio]")?.focus();
