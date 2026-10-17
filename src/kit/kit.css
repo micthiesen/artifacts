@@ -109,6 +109,11 @@
   display: block;
   width: 100%;
 }
+/* Diagrams narrower than the card sit centered in it. */
+.art-diagram svg.pele {
+  display: block;
+  margin-inline: auto;
+}
 /* Pele's zoom buttons cover short diagrams; show them as a compact row only
    while the pointer or keyboard focus is on the diagram (pinch still zooms). */
 .art-diagram .pele-zoom {
