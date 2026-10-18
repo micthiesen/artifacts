@@ -564,7 +564,7 @@ ${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_P
 </section>
 <section class="pricing-notes muted">
 <p><strong>No lock-in.</strong> Admins can download everything at any time, and the <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
-<p><strong>Cancel any time</strong> from your workspace's settings. The workspace moves to Free and keeps everything.</p>
+<p><strong>Cancel any time</strong> from your workspace's settings. Team stays until the end of the period you paid for, then the workspace moves to Free and keeps everything.</p>
 <p>Payments are handled by Creem, our merchant of record: they're the seller on your invoice and handle sales tax and VAT. Prices are in US dollars, plus tax where it applies. See the <a href="/terms">terms</a> for refunds.</p>
 </section>
 <footer class="splash-foot muted"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>
@@ -642,7 +642,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <h2>Plans and prices</h2>
 <p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>
 <h2>Payments and refunds</h2>
-<p>When paid plans are offered, they're sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their terms cover the purchase itself. A paid plan renews each period until a workspace admin cancels it from the workspace's settings. If you were charged by mistake, or ask within 14 days of your first payment, we'll refund it in full: email us.</p>
+<p>When paid plans are offered, they're sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their terms cover the purchase itself. A paid plan renews each period until a workspace admin cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If you were charged by mistake, or ask within 14 days of your first payment, we'll refund it in full: email us.</p>
 <h2>The source code</h2>
 <p>The software behind ${PRODUCT} is published under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>, which covers the code itself. These terms cover the hosted service.</p>
 <h2>The service</h2>

@@ -93,12 +93,17 @@ export async function verifyWebhook(secret: string, rawBody: string, signature: 
 }
 
 /**
- * The plan a subscription status pays for. Failed payments (past_due, unpaid,
- * expired) keep Team while Creem retries, and a cancellation scheduled for the
- * period's end keeps it until then; canceled and paused don't pay.
+ * The plan a subscription pays for, and until when. Failed payments (past_due,
+ * unpaid, expired) keep Team while Creem retries; a canceled subscription
+ * keeps Team until the end of the period already paid for; paused doesn't pay.
  */
-export function planFor(status: string): PlanId {
-  return ["active", "trialing", "paid", "scheduled_cancel", "past_due", "unpaid", "expired"].includes(status) ? "team" : "free";
+export function planFor(status: string, periodEnd: string | null = null, now = Date.now()): { plan: PlanId; until: string | null } {
+  if (["active", "trialing", "paid", "past_due", "unpaid", "expired"].includes(status)) return { plan: "team", until: null };
+  // Canceled from Creem's portal means "at the end of the period" (it says so, and sends canceled with the
+  // period's end): what's paid for stays Team until then. Same for a scheduled cancel.
+  const paidUntil = periodEnd && Date.parse(periodEnd) > now ? periodEnd : null;
+  if ((status === "canceled" || status === "scheduled_cancel") && paidUntil) return { plan: "team", until: paidUntil };
+  return { plan: "free", until: null };
 }
 
 /** A provider event as it affects one workspace. */
@@ -140,7 +145,6 @@ export function readEvent(payload: unknown): BillingUpdate | null {
   const meta = { ...(e.object.metadata ?? {}), ...(sub.metadata ?? {}) };
   const customer = typeof sub.customer === "string" ? sub.customer : (sub.customer?.id ?? null);
   const status = sub.status ?? "";
-  // A paused subscription isn't paying; resuming it sends an active one back.
   const ended = status === "canceled" || status === "paused" || e.eventType === "subscription.canceled";
   const plan: PlanId | null = ended ? "free" : ["active", "trialing", "paid"].includes(status) ? "team" : null;
   return {

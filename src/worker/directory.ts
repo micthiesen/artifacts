@@ -283,7 +283,7 @@ export class Directory extends DurableObject {
    * before), and events arriving out of order or from an old, replaced
    * subscription can't leave the workspace on the wrong plan.
    */
-  applyBilling(u: BillingUpdate, provider: string): { slug: string; plan: PlanId } | null {
+  applyBilling(u: BillingUpdate, provider: string): { slug: string; plan: PlanId; until: string | null } | null {
     const bySub = u.subscriptionId ? (this.sql.exec(`SELECT slug FROM billing WHERE subscription_id = ?`, u.subscriptionId).toArray()[0]?.slug as string | undefined) : undefined;
     const slug = bySub ?? (u.workspace && this.workspace(u.workspace) ? u.workspace : null);
     if (!slug) return null;
@@ -294,10 +294,10 @@ export class Directory extends DurableObject {
       this.sql.exec(`DELETE FROM billing_events WHERE at < ?`, Date.now() - 90 * 86_400_000);
       const other = row && row.subscription_id && u.subscriptionId && row.subscription_id !== u.subscriptionId;
       const newer = !row || (row.event_at as number) <= u.at;
-      // A different subscription only takes over by starting to pay; an old one's later events change nothing.
-      const takesOver = !other || planFor(u.status) === "team";
+      // A different subscription only takes over by actively paying; an old one's later events change nothing.
+      const takesOver = !other || u.plan === "team";
       // A workspace with no subscription yet only gets one by paying (an operator-set plan isn't touched otherwise).
-      const starts = row || planFor(u.status) === "team";
+      const starts = row || u.plan === "team";
       if (newer && takesOver && starts) {
         if (other) console.error(`billing: ${slug} moved from subscription ${row!.subscription_id} to ${u.subscriptionId}; check the old one is canceled`);
         this.sql.exec(
@@ -317,14 +317,14 @@ export class Directory extends DurableObject {
         this.markDirty();
       }
     }
-    const current = this.sql.exec(`SELECT status FROM billing WHERE slug = ?`, slug).toArray()[0];
-    return current ? { slug, plan: planFor(current.status as string) } : null;
+    const current = this.sql.exec(`SELECT status, period_end FROM billing WHERE slug = ?`, slug).toArray()[0];
+    return current ? { slug, ...planFor(current.status as string, (current.period_end as string | null) ?? null) } : null;
   }
 
   /** The plan a workspace's stored subscription pays for, or null when it has none (the operator sets its plan). */
   billingPlan(slug: string): PlanId | null {
-    const row = this.sql.exec(`SELECT status FROM billing WHERE slug = ?`, slug).toArray()[0];
-    return row ? planFor(row.status as string) : null;
+    const row = this.sql.exec(`SELECT status, period_end FROM billing WHERE slug = ?`, slug).toArray()[0];
+    return row ? planFor(row.status as string, (row.period_end as string | null) ?? null).plan : null;
   }
 
   async setSuspended(slug: string, suspended: boolean) {

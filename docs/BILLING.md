@@ -33,7 +33,9 @@ webhook and no billing in settings; the operator sets plans by hand.
     touched by stray events.
   - `checkout.completed`, `subscription.active`, `.paid`, `.trialing` (status
     active or trialing): **Team**.
-  - `subscription.canceled` and `.paused`: **Free**.
+  - `subscription.canceled`: Team until the end of the period already paid
+    for, then Free on its own (Creem's portal cancels at period end but sends
+    `canceled` straight away, with the period's end); `.paused`: **Free**.
   - `subscription.past_due`, `.unpaid`, `.expired`: Team stays while Creem
     retries the payment; `.scheduled_cancel`: Team stays until the period
     ends, then `.canceled` arrives.
@@ -67,12 +69,9 @@ webhook and no billing in settings; the operator sets plans by hand.
    and that a real sandbox checkout link comes back. Then do it by hand:
    make a workspace at `https://dev.artifacts.boo/workspaces`, press Upgrade,
    pay with Creem's test card (4111 1111 1111 1111, any future date and CVC; 4507 9900 0000 0028 is declined),
-   and watch settings say Team. Then cancel from Manage billing and note
-   what Creem's portal does: if it schedules the cancellation for the end of
-   the period, settings says so and the workspace stays Team until then; if
-   it cancels at once, the workspace goes to Free at once. The pricing page
-   and terms only promise "cancel any time" either way. Destroy the stage
-   afterwards.
+   and watch settings say Team. Then cancel from Manage billing: settings
+   says Team until the end of the paid period, then Free. (Verified in the
+   sandbox on 2026-10-18.) Destroy the stage afterwards.
 6. **Live:** repeat steps 2 to 4 in live mode, with the webhook at
    `https://artifacts.boo/api/billing/webhook`. Put the live values in
    `.env` (`BILLING=on`, `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`,

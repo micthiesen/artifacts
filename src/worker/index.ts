@@ -618,13 +618,15 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
   if (!applied) return Response.json({ ok: true, ignored: true });
   // Two webhooks at once can finish in either order, so settle on what the record says now.
   let plan = applied.plan;
+  let until = applied.until;
   for (let i = 0; i < 3; i++) {
-    await workspaceHub(env, applied.slug).setPlan(plan);
+    await workspaceHub(env, applied.slug).setPlan(plan, until);
     const now = await directory(env).billingPlan(applied.slug);
     if (!now || now === plan) break;
     plan = now;
+    until = null;
   }
-  return Response.json({ ok: true, workspace: applied.slug, plan });
+  return Response.json({ ok: true, workspace: applied.slug, plan, ...(until ? { until } : {}) });
 }
 
 /**

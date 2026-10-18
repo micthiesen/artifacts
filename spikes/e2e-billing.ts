@@ -45,8 +45,11 @@ const after = await settings();
 check("settings shows a manageable subscription", after.billing?.subscription?.manageable === true && after.billing?.subscription?.status === "active", after.billing);
 await send(ev("subscription.past_due", sub("past_due")));
 check("a failed payment keeps Team while it's retried", (await settings()).plan.id === "team");
-await send(ev("subscription.canceled", sub("canceled")));
-check("cancellation moves it back to Free", (await settings()).plan.id === "free");
+const canceled = await send(ev("subscription.canceled", sub("canceled")));
+const midPeriod = await settings();
+check("canceling keeps Team until the paid period ends", canceled.body?.plan === "team" && midPeriod.plan.id === "team" && Boolean(midPeriod.plan.until), { canceled: canceled.body, plan: midPeriod.plan });
+await send(ev("subscription.canceled", { ...sub("canceled"), current_period_end_date: new Date(Date.now() - 1000).toISOString() }));
+check("once the period is over, it's Free", (await settings()).plan.id === "free");
 
 // A real sandbox checkout, when the stage has Creem test keys.
 const checkout = await fetch(`${origin}/api/settings/billing/checkout`, { method: "POST", headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" }, body: "{}" });

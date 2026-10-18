@@ -425,6 +425,9 @@ export class Workspace extends DurableObject {
 
   private planId(): PlanId {
     const p = this.setting("plan");
+    // A paid-up plan that was canceled lapses to Free on its own once its period ends.
+    const until = this.setting("plan_until");
+    if (until && Date.parse(until) <= Date.now()) return "free";
     return isPlan(p) ? p : DEFAULT_PLAN;
   }
 
@@ -432,13 +435,16 @@ export class Workspace extends DurableObject {
   plan() {
     const id = this.planId();
     const { artifacts, members } = this.stats();
-    return { id, label: PLANS[id].label, limits: PLANS[id].limits, usage: { artifacts, members, bytes: this.storedBytes() } };
+    const until = id === "team" ? this.setting("plan_until") : null;
+    return { id, label: PLANS[id].label, limits: PLANS[id].limits, usage: { artifacts, members, bytes: this.storedBytes() }, until };
   }
 
   /** Operator only (no billing yet). */
-  async setPlan(id: PlanId) {
+  /** `until`: the plan lapses to Free at that time (a canceled subscription's paid period); null for no end. */
+  async setPlan(id: PlanId, until: string | null = null) {
     if (!isPlan(id)) throw new HubError(`unknown plan ${id}`);
     this.setSetting("plan", id);
+    this.setSetting("plan_until", id === "team" ? until : null);
     await this.directory().recordStats(this.info().slug, this.stats());
     return this.plan();
   }

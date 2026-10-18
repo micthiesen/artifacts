@@ -181,8 +181,8 @@ test("webhooks move the workspace between plans, and repeats or late events chan
   const settings = (await (await send("/api/settings", { as: ADMIN })).json()) as { billing: { subscription: { status: string; manageable: boolean } } };
   expect(settings.billing.subscription).toMatchObject({ status: "scheduled_cancel", manageable: true });
 
-  // An older event arriving late can't undo a newer one.
-  const canceled = event("subscription.canceled", sub("canceled", {}));
+  // An older event arriving late can't undo a newer one. (Canceled with its period over: Free now.)
+  const canceled = event("subscription.canceled", { ...sub("canceled", {}), current_period_end_date: "2020-01-01T00:00:00.000Z" });
   const stale = event("subscription.paid", sub("active", {}), 1_000);
   await webhook(canceled);
   expect(h.hub.plan().id).toBe("free");
@@ -251,4 +251,25 @@ test("a paying workspace can't be deleted by accident, and a deleted one's subsc
   // (The forced HTTP delete also tears the workspace object down, which this harness can't; the record goes either way.)
   await h.directory.removeWorkspace("acme");
   expect(h.directory.billing("acme")).toBeNull();
+});
+
+test("canceling keeps Team until the paid period ends, then it lapses to Free by itself", async () => {
+  Object.assign(env, KEYS);
+  await webhook(checkoutCompleted());
+  const end = new Date(Date.now() + 20 * 86_400_000).toISOString();
+  // What Creem's portal sends: canceled, with the period's end still ahead.
+  const r = await (await webhook(event("subscription.canceled", { ...sub("canceled", {}), current_period_end_date: end }))).json();
+  expect(r).toEqual({ ok: true, workspace: "acme", plan: "team", until: end });
+  expect(h.hub.plan()).toMatchObject({ id: "team", until: end });
+  // When the period is over, the plan reads as Free without anything else happening.
+  const realNow = Date.now;
+  Date.now = () => Date.parse(end) + 1000;
+  try {
+    expect(h.hub.plan().id).toBe("free");
+  } finally {
+    Date.now = realNow;
+  }
+  // Resubscribing clears the end.
+  await webhook(event("subscription.active", sub("active", {})));
+  expect(h.hub.plan()).toMatchObject({ id: "team", until: null });
 });
