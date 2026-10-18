@@ -89,13 +89,13 @@ test("sharing emails each person: a link if they're new, the page if they've sig
   h.env.MAIL_FROM = "sign-in@mail.test";
   await h.directory.verifyLogin(OLU, await h.directory.startLogin(OLU));
   const id = (await call(MIA, "artifact_create", { title: "Plan", files })).data.id as string;
-  const r = await call(MIA, "artifact_share", { id, add: [{ email: "new@client.test", role: "view" }, { email: OLU, role: "view" }] });
-  expect(r.data.links["new@client.test"]).toContain("/s/");
+  const r = await call(MIA, "artifact_share", { id, add: [{ email: "new@client.co", role: "view" }, { email: OLU, role: "view" }] });
+  expect(r.data.links["new@client.co"]).toContain("/s/");
   expect(r.data.links[OLU]).toBe(`https://acme.artifacts.test/a/${id}`);
-  expect(sent.map((m) => m.to).sort()).toEqual(["new@client.test", OLU].sort());
+  expect(sent.map((m) => m.to).sort()).toEqual(["new@client.co", OLU].sort());
   expect(sent[0].subject).toContain("“Plan”");
   // notify: false sends nothing.
-  await call(MIA, "artifact_share", { id, add: [{ email: "quiet@client.test", role: "view" }], notify: false });
+  await call(MIA, "artifact_share", { id, add: [{ email: "quiet@client.co", role: "view" }], notify: false });
   expect(sent.length).toBe(2);
 });
 

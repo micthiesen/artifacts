@@ -3,12 +3,23 @@
 
 type MailEnv = { EMAIL?: SendEmail; MAIL_FROM: string };
 
+/** Addresses no real person can hold (RFC 2606 / 6761), used by end-to-end checks. */
+export function isTestAddress(email: string): boolean {
+  return /^[^\s@]+@([a-z0-9-]+\.)*(example\.(com|org|net)|[a-z0-9-]+\.(test|invalid|example))$/.test(email);
+}
+
+/** Mail to test addresses is dropped: it could only bounce, and bounces cost the sender its reputation. */
+function deliverable(to: string): boolean {
+  return !isTestAddress(to.toLowerCase());
+}
+
 function escape(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
 async function send(env: MailEnv, to: string, subject: string, lines: string[], link?: { href: string; label: string }) {
   if (!env.EMAIL) throw new Error("no EMAIL binding");
+  if (!deliverable(to)) return;
   const text = [...lines, ...(link ? ["", `${link.label}: ${link.href}`] : [])].join("\n\n");
   const html = `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;color:#222;max-width:32rem">${lines
     .map((l) => `<p>${escape(l)}</p>`)
@@ -23,6 +34,7 @@ async function send(env: MailEnv, to: string, subject: string, lines: string[], 
 export async function sendCode(env: MailEnv, to: string, code: string) {
   const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
   if (!env.EMAIL) throw new Error("no EMAIL binding");
+  if (!deliverable(to)) return;
   await env.EMAIL.send({
     from: { name: "Artifacts", email: env.MAIL_FROM },
     to,

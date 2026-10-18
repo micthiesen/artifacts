@@ -23,7 +23,7 @@ beforeEach(async () => {
     EMAIL: { send: async (m: { to: string; subject: string; text: string }) => void mail.push(m) },
     CONSENT_SECRET: "test-consent-secret-that-is-long-enough",
     OPERATOR_TOKEN: "op-token",
-    OPERATOR_EMAILS: "op@artifacts.test",
+    OPERATOR_EMAILS: "op@corp.com",
     APEX_HOST: "artifacts.test",
     WORKSPACE_SUFFIX: ".artifacts.test",
     MAIL_FROM: "sign-in@mail.artifacts.test",
@@ -175,7 +175,7 @@ test("the operator API needs the operator token or an operator's session", async
   expect((await fetchAs(`${APEX}/api/admin/workspaces`)).status).toBe(403);
   const list = await fetchAs(`${APEX}/api/admin/workspaces`, { headers: { Authorization: "Bearer op-token" } });
   expect(((await list.json()) as any).workspaces.map((w: any) => w.slug)).toEqual(["acme"]);
-  const { cookie } = await signIn("op@artifacts.test");
+  const { cookie } = await signIn("op@corp.com");
   expect((await fetchAs(`${APEX}/api/admin/workspaces`, { cookie })).status).toBe(200);
   expect((await fetchAs(`${APEX}/admin`, { cookie })).status).toBe(200);
   const { cookie: other } = await signIn(MIA);

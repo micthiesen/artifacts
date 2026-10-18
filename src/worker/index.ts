@@ -22,7 +22,8 @@ import {
   type Brand,
 } from "./pages.ts";
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
-import { sendCode, sendInvite, sendShare } from "./mail.ts";
+import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
+export { isTestAddress };
 import {
   b64url,
   clearSessionCookie,
@@ -669,11 +670,6 @@ function operatorEmails(env: Env): Set<string> {
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean),
   );
-}
-
-/** Addresses no real person can hold (RFC 2606 / 6761), for end-to-end checks. */
-export function isTestAddress(email: string): boolean {
-  return /^[^\s@]+@([a-z0-9-]+\.)*(example\.(com|org|net)|[a-z0-9-]+\.(test|invalid|example))$/.test(email);
 }
 
 /** A same-site path to go to next. Anything a browser could read as another origin becomes "/". */
