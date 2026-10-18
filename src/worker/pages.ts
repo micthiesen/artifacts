@@ -38,6 +38,10 @@ const PAGE_CSP =
 const DARK_HEAD = `<meta name="color-scheme" content="dark">
 <style>html{background:oklch(0.16 0.017 275)}</style>`;
 
+// no-transform stops Cloudflare injecting its Web Analytics beacon, which the
+// CSP above would block anyway (a console error on every page).
+const NO_STORE = "no-store, no-transform";
+
 function page(title: string, body: string, init: ResponseInit = {}): Response {
   const html = `<!doctype html>
 <html lang="en">
@@ -62,7 +66,7 @@ ${DARK_HEAD}
   headers.set("Content-Security-Policy", PAGE_CSP);
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("Cache-Control", "no-store");
+  headers.set("Cache-Control", NO_STORE);
   return new Response(html, { ...init, headers });
 }
 
@@ -197,7 +201,7 @@ export function previewPage(p: { url: string; origin: string; title?: string; de
 <link rel="apple-touch-icon" href="${asset("/static/icons/apple-touch-icon.png")}">
 </head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(description)}</p></body></html>`;
   return new Response(html, {
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300", "X-Robots-Tag": "noindex, nofollow" },
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300, no-transform", "X-Robots-Tag": "noindex, nofollow" },
   });
 }
 
@@ -285,7 +289,7 @@ ${DARK_HEAD}
       "Content-Security-Policy": frameCsp(origin, !check),
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
-      "Cache-Control": "private, no-store",
+      "Cache-Control": `private, ${NO_STORE}`,
     },
   });
 }
