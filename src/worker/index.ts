@@ -887,7 +887,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
  * Owner menu API (session cookie, same-origin JSON), for the artifact's owner and workspace admins:
  * - GET  /api/a/<id>               overview: meta, shares, history, errors, sources, assets, approved hosts
  * - POST /api/a/<id>/<tool>        one of the owner-menu MCP tools, with the same arguments
- * - POST /api/hosts {host, allowed} approve or revoke a live-data host (any member)
+ * - POST /api/hosts {host, allowed} approve or revoke a live-data host (workspace admins)
  */
 async function ownerApi(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer, slug: string): Promise<Response> {
   if (!viewer.email) return Response.json({ error: "sign in first" }, { status: 401 });
@@ -1013,9 +1013,12 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
  * - POST   /api/admin/workspaces/<slug>/stats            refresh its stats now
  * - GET    /api/admin/workspaces/<slug>/export?table=&after=   one page of one table
  * - POST   /api/admin/workspaces/<slug>/import {step: "begin"|"rows"|"end", table?, rows?}
- * - GET    /api/admin/workspaces/<slug>/backups          dates with a complete backup
- * - POST   /api/admin/workspaces/<slug>/backup           back up now
- * - POST   /api/admin/workspaces/<slug>/restore {date}   replace everything with that backup
+ * - GET    /api/admin/workspaces/<slug>/backups          complete backup runs, newest first
+ * - POST   /api/admin/workspaces/<slug>/backup           queue a backup now
+ * - DELETE /api/admin/workspaces/<slug>/job              cancel the running job (nothing live changes)
+ * - POST   /api/admin/test-code {email}                  a sign-in code for a test address
+ * - GET    /api/admin/signins?email=                     recent code sends and failures, for support
+ * - POST   /api/admin/workspaces/<slug>/restore {run}    back up, then replace everything with that run
  * - the same export, import, backups, backup and restore under /api/admin/directory/ for the directory
  * - POST   /api/admin/workspaces/<slug>/tokens {email}   an agent token for a member
  * - POST   /api/admin/session {email, host}              a session cookie value for the apex or a workspace host

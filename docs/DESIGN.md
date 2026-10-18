@@ -36,8 +36,9 @@ Routing reads the list of workspaces from KV, which the directory republishes
 on every change, so an unknown subdomain is answered without the directory. A small global directory records which
 workspaces exist, who belongs to which,
 and per-person settings that should follow someone everywhere (display name,
-notification channels). It is consulted at sign-in, when a workspace is
-created and when notifications go out, never on ordinary page loads.
+notification channels). It is consulted at sign-in, when a workspace changes,
+for display names when a live page connects, and when notifications go out;
+routing and ordinary page loads don't touch it.
 
 The apex domain is the front door: a splash page, sign-in, the list of your
 workspaces, your notification settings and the operator console.

@@ -43,7 +43,8 @@ wildcard DNS record, so deploy prod first.
 - **Backups:** each workspace backs itself up to R2 at 10:00 UTC on days it changed, keeping 30 runs, as a resumable job. The operator console starts a backup, or a restore (which backs up first and takes the workspace offline until it's loaded), and shows each job's progress.
 - **Off-Cloudflare copy:** `bun scripts/export.ts <slug|directory>` writes `exports/<slug>-<time>.json`; `bun scripts/import.ts <slug|directory> <file>` replaces that data with it (the workspace is offline while it loads).
 - **Fixing a workspace:** from `/admin`, add or replace its admins (say, a mistyped first admin) without a role inside it.
-- **Schema changes:** add a numbered migration (`src/worker/migrate.ts`); each workspace applies it the first time it wakes after the deploy.
+- **Schema changes:** add a numbered migration (`src/worker/migrate.ts`); each workspace applies it the first time it wakes after the deploy. Migrations only go forward: once objects have migrated, older code refuses to run against them, so fix forward rather than rolling back.
+- **Test addresses:** mail to reserved test domains (example.com, .test, .invalid) is never sent; the end-to-end checks use them, and the operator API gives them sign-in codes and sessions directly.
 
 ## Checks
 
