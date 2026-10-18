@@ -7,6 +7,9 @@ import { migrate, type Migration } from "./migrate.ts";
 import type { ChannelType } from "./notify.ts";
 import { DIRECTORY_TABLES } from "./tables.ts";
 import type { PlanId } from "./plans.ts";
+import { planFor, type BillingUpdate } from "./billing.ts";
+
+export type BillingRecord = { provider: string; customerId: string | null; subscriptionId: string | null; status: string; periodEnd: string | null; updatedAt: string };
 import {
   backupRuns,
   createShadows,
@@ -56,7 +59,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "billing" | "applyBilling" | "billingPlan" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -159,6 +162,16 @@ const MIGRATIONS: Migration[] = [
     `),
   // Self-serve workspaces: who made one and which terms they agreed to.
   (sql) => sql.exec(`ALTER TABLE workspaces ADD COLUMN created_by TEXT; ALTER TABLE workspaces ADD COLUMN terms_accepted TEXT;`),
+  // Each paying workspace's subscription, as the payment provider last told us,
+  // and the provider events already applied (so a retried webhook does nothing).
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE billing (
+        slug TEXT PRIMARY KEY, provider TEXT NOT NULL, customer_id TEXT, subscription_id TEXT, status TEXT NOT NULL,
+        period_end TEXT, event_at INTEGER NOT NULL, updated_at TEXT NOT NULL);
+      CREATE INDEX billing_by_subscription ON billing (subscription_id);
+      CREATE TABLE billing_events (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+    `),
 ];
 
 export class Directory extends DurableObject {
@@ -245,6 +258,75 @@ export class Directory extends DurableObject {
       .map((r) => ({ ...toWorkspace(r), admins: admins.get(r.slug as string) ?? [] }));
   }
 
+  // ---- billing -------------------------------------------------------------------
+
+  /** A workspace's subscription, if it ever had one. */
+  billing(slug: string): BillingRecord | null {
+    const r = this.sql.exec(`SELECT * FROM billing WHERE slug = ?`, slug).toArray()[0];
+    return r
+      ? {
+          provider: r.provider as string,
+          customerId: (r.customer_id as string | null) ?? null,
+          subscriptionId: (r.subscription_id as string | null) ?? null,
+          status: r.status as string,
+          periodEnd: (r.period_end as string | null) ?? null,
+          updatedAt: r.updated_at as string,
+        }
+      : null;
+  }
+
+  /**
+   * Record a provider event and return the workspace with the plan its stored
+   * subscription pays for, or null when it concerns no known workspace. The
+   * plan always comes from the stored record, never the event alone, so a
+   * repeated delivery re-applies it (healing a plan change that failed
+   * before), and events arriving out of order or from an old, replaced
+   * subscription can't leave the workspace on the wrong plan.
+   */
+  applyBilling(u: BillingUpdate, provider: string): { slug: string; plan: PlanId } | null {
+    const bySub = u.subscriptionId ? (this.sql.exec(`SELECT slug FROM billing WHERE subscription_id = ?`, u.subscriptionId).toArray()[0]?.slug as string | undefined) : undefined;
+    const slug = bySub ?? (u.workspace && this.workspace(u.workspace) ? u.workspace : null);
+    if (!slug) return null;
+    const row = this.sql.exec(`SELECT * FROM billing WHERE slug = ?`, slug).toArray()[0];
+    const seen = this.sql.exec(`SELECT 1 FROM billing_events WHERE id = ?`, u.eventId).toArray().length > 0;
+    if (!seen) {
+      this.sql.exec(`INSERT INTO billing_events (id, at) VALUES (?, ?)`, u.eventId, Date.now());
+      this.sql.exec(`DELETE FROM billing_events WHERE at < ?`, Date.now() - 90 * 86_400_000);
+      const other = row && row.subscription_id && u.subscriptionId && row.subscription_id !== u.subscriptionId;
+      const newer = !row || (row.event_at as number) <= u.at;
+      // A different subscription only takes over by starting to pay; an old one's later events change nothing.
+      const takesOver = !other || planFor(u.status) === "team";
+      // A workspace with no subscription yet only gets one by paying (an operator-set plan isn't touched otherwise).
+      const starts = row || planFor(u.status) === "team";
+      if (newer && takesOver && starts) {
+        if (other) console.error(`billing: ${slug} moved from subscription ${row!.subscription_id} to ${u.subscriptionId}; check the old one is canceled`);
+        this.sql.exec(
+          `INSERT INTO billing (slug, provider, customer_id, subscription_id, status, period_end, event_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (slug) DO UPDATE SET provider = excluded.provider, customer_id = COALESCE(excluded.customer_id, customer_id),
+             subscription_id = COALESCE(excluded.subscription_id, subscription_id), status = excluded.status,
+             period_end = COALESCE(excluded.period_end, period_end), event_at = excluded.event_at, updated_at = excluded.updated_at`,
+          slug,
+          provider,
+          u.customerId,
+          u.subscriptionId,
+          u.status,
+          u.periodEnd,
+          u.at,
+          new Date().toISOString(),
+        );
+        this.markDirty();
+      }
+    }
+    const current = this.sql.exec(`SELECT status FROM billing WHERE slug = ?`, slug).toArray()[0];
+    return current ? { slug, plan: planFor(current.status as string) } : null;
+  }
+
+  /** The plan a workspace's stored subscription pays for, or null when it has none (the operator sets its plan). */
+  billingPlan(slug: string): PlanId | null {
+    const row = this.sql.exec(`SELECT status FROM billing WHERE slug = ?`, slug).toArray()[0];
+    return row ? planFor(row.status as string) : null;
+  }
+
   async setSuspended(slug: string, suspended: boolean) {
     this.sql.exec(`UPDATE workspaces SET suspended = ? WHERE slug = ?`, suspended ? 1 : 0, slug);
     this.markDirty();
@@ -255,6 +337,8 @@ export class Directory extends DurableObject {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(`DELETE FROM memberships WHERE slug = ?`, slug);
       this.sql.exec(`DELETE FROM visits WHERE slug = ?`, slug);
+      // A workspace made later with the same address must not inherit this one's subscription.
+      this.sql.exec(`DELETE FROM billing WHERE slug = ?`, slug);
       this.sql.exec(`DELETE FROM workspaces WHERE slug = ?`, slug);
     });
     this.markDirty();

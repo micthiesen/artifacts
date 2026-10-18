@@ -6,6 +6,7 @@ import type { WorkspaceRole } from "./directory.ts";
 import type { FrameBoot, Role, ShellBoot } from "../shared/protocol.ts";
 import { PRODUCT } from "../shared/brand.ts";
 import { PLANS } from "./plans.ts";
+import { TEAM_PRICE } from "./billing.ts";
 import demos from "./demos.json";
 import demoLinks from "../../demo/links.json";
 
@@ -288,7 +289,7 @@ export const DESCRIPTION = "Collaborative documents and little apps your agent c
  * run it. Someone signed in also gets their account menu and a way to their
  * workspaces (/workspaces).
  */
-export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }): Response {
+export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }, pricing = false): Response {
   const card = (title: string, body: string, points: string[]) =>
     `<div class="splash-card"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(body)}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
   const host = brand.apex.replace(/^https?:\/\//, "") || PRODUCT;
@@ -354,7 +355,7 @@ cd artifacts.boo &amp;&amp; bun install
 bun run deploy</code></pre></div>
 </section>
 
-<footer class="splash-foot muted">${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/docs/AUTOMATIONS.md">Automations</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
+<footer class="splash-foot muted">${pricing ? `<a href="/pricing">Pricing</a> · ` : ""}${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/docs/AUTOMATIONS.md">Automations</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
 </main>`,
     {},
     `<meta name="description" content="${escapeHtml(DESCRIPTION)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}/">\n`,
@@ -534,6 +535,43 @@ export type PolicyKind = "privacy" | "terms" | "security";
 
 export const POLICY_UPDATED = "2026-10-18";
 
+/** Plans and prices (only while billing is on). A workspace pays; people you share with never do. */
+export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: string; operator: boolean }): Response {
+  const free = PLANS.free.limits;
+  const team = PLANS.team.limits;
+  const gb = (b: number) => (b >= 1024 ** 3 ? `${b / 1024 ** 3} GB` : `${Math.round(b / 1024 / 1024)} MB`);
+  const plan = (name: string, price: string, blurb: string, points: string[], cta: string) =>
+    `<div class="splash-card pricing-card"><h3>${name}</h3><p class="pricing-price">${price}</p><p class="muted">${blurb}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul>${cta}</div>`;
+  const account = viewer
+    ? `<a class="button small secondary" href="/workspaces">Your workspaces</a>${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}`
+    : `<a class="button small secondary" href="/login">Sign in</a>`;
+  return page(
+    `Pricing · ${PRODUCT}`,
+    `${topBar(brand, account)}<main class="splash pricing">
+<section class="splash-hero"><h1>Pricing</h1>
+<p class="splash-lede muted">A workspace pays, once, however many people read its artifacts. Guests, the people you share with, never need an account or a plan.</p></section>
+<section class="splash-grid pricing-grid">
+${plan("Free", `$0 <span class="muted">/ workspace</span>`, "For trying it out, or a small personal workspace.", [
+  `${free.artifacts} artifacts and ${free.members} members`,
+  `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves a day`,
+  "Unlimited guests, approvals, forms, comments and MCP events",
+], selfServe ? `<a class="button secondary" href="/workspaces">Start free</a>` : `<p class="muted small">New workspaces are by invitation for now.</p>`)}
+${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_PRICE.period}</span>`, "For a team that publishes and decides with its agents every day.", [
+  "Unlimited artifacts and members",
+  `${gb(team.bytes!)} of storage, ${team.changesPerDay!.toLocaleString("en-US")} saves a day`,
+  "Everything in Free",
+], `<a class="button" href="/workspaces">Upgrade in settings</a>`)}
+</section>
+<section class="pricing-notes muted">
+<p><strong>No lock-in.</strong> Admins can download everything at any time, and the <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
+<p><strong>Cancel any time</strong> from your workspace's settings. The workspace moves to Free and keeps everything.</p>
+<p>Payments are handled by Creem, our merchant of record: they're the seller on your invoice and handle sales tax and VAT. Prices are in US dollars, plus tax where it applies. See the <a href="/terms">terms</a> for refunds.</p>
+</section>
+<footer class="splash-foot muted"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>
+</main>`,
+  );
+}
+
 /** Privacy, terms, and security and data: what this hosted instance does with your data and expects of you. */
 export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Response {
   const mail = contact ? `<a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a>` : "the operator";
@@ -549,6 +587,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <li><strong>Passkeys</strong>, if you save any: each one's public key, a name for it (such as "iCloud Keychain"), and when it was added and last used. The private key never leaves your device or password manager.</li>
 <li><strong>Artifacts</strong>: the files your agent writes (up to 50 versions each), images and data files, and live data fetched from hosts a workspace admin approved.</li>
 <li><strong>What people do on an artifact</strong>: comments, votes, approvals, form responses, checklists, notes and other shared state; which version you last saw and which comments you've read; an activity log (the latest 5,000 events per artifact).</li>
+<li><strong>Billing</strong>, for a workspace on a paid plan: the payment provider's customer and subscription ids, the subscription's status and when the paid period ends. Card details go to the provider, never to us.</li>
 <li><strong>Workspace membership</strong>: who belongs to which workspace and in what role, and when members last signed in; for a workspace someone made themselves, who made it and which version of the terms they agreed to.</li>
 <li><strong>Agent access</strong>: OAuth grants and personal agent tokens, stored only as hashes, with when each was last used.</li>
 <li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
@@ -569,6 +608,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <h2>Who else handles it</h2>
 <ul>
 <li><strong>Cloudflare</strong> hosts everything: compute, storage (Durable Objects, R2, KV), email sending, the headless browser for render checks, analytics and logs. Data lives on Cloudflare's network; a workspace's database is placed near where it was first used.</li>
+<li><strong>Creem</strong> (payments, for paid plans): the merchant of record, which processes payments and handles tax; it receives the billing details you give at checkout.</li>
 <li><strong>Services you choose</strong>: if you add Pushover, ntfy, a webhook or browser push, notifications go to that service. Live data sources are fetched from the hosts your workspace approved.</li>
 </ul>
 <h2>How long we keep it</h2>
@@ -601,6 +641,8 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <p>Workspace admins can download everything in their workspace at any time, from its settings, in a documented format. If you stop using ${PRODUCT}, you keep your data.</p>
 <h2>Plans and prices</h2>
 <p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>
+<h2>Payments and refunds</h2>
+<p>When paid plans are offered, they're sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their terms cover the purchase itself. A paid plan renews each period until a workspace admin cancels it from the workspace's settings. If you were charged by mistake, or ask within 14 days of your first payment, we'll refund it in full: email us.</p>
 <h2>The source code</h2>
 <p>The software behind ${PRODUCT} is published under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>, which covers the code itself. These terms cover the hosted service.</p>
 <h2>The service</h2>

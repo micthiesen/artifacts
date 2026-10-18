@@ -104,7 +104,7 @@ test("signed out, the apex shows the splash page, with the examples and the word
   expect(res.headers.get("X-Robots-Tag")).toBe("all");
   expect((await fetchAs(`${APEX}/privacy`)).headers.get("X-Robots-Tag")).toBe("all");
   expect((await fetchAs(`${APEX}/login`)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
-  expect(await (await fetchAs(`${APEX}/robots.txt`)).text()).toBe("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /terms\nAllow: /security\nDisallow: /\n");
+  expect(await (await fetchAs(`${APEX}/robots.txt`)).text()).toBe("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /terms\nAllow: /security\nAllow: /pricing\nDisallow: /\n");
   expect(await (await fetchAs(`${ACME}/robots.txt`)).text()).toBe("User-agent: *\nDisallow: /\n");
 });
 

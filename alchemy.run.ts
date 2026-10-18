@@ -55,6 +55,11 @@ export default Alchemy.Stack(
     const pushoverToken = yield* optional("PUSHOVER_TOKEN");
     // "on" opens self-serve workspace signup; off unless set in .env.
     const selfServe = yield* optional("SELF_SERVE");
+    // Billing (docs/BILLING.md): off unless BILLING=on, with the Creem keys.
+    const billing = yield* optional("BILLING");
+    const creemKey = yield* optional("CREEM_API_KEY");
+    const creemSecret = yield* optional("CREEM_WEBHOOK_SECRET");
+    const creemProduct = yield* optional("CREEM_PRODUCT_ID");
 
     const worker = yield* Cloudflare.Worker("Artifacts", {
       name,
@@ -92,6 +97,10 @@ export default Alchemy.Stack(
         VAPID_SUBJECT: `mailto:${operators.split(",")[0].trim()}`,
         ...(pushoverToken ? { PUSHOVER_TOKEN: Redacted.make(pushoverToken) } : {}),
         ...(selfServe ? { SELF_SERVE: selfServe } : {}),
+        ...(billing ? { BILLING: billing } : {}),
+        ...(creemKey ? { CREEM_API_KEY: Redacted.make(creemKey) } : {}),
+        ...(creemSecret ? { CREEM_WEBHOOK_SECRET: Redacted.make(creemSecret) } : {}),
+        ...(creemProduct ? { CREEM_PRODUCT_ID: creemProduct } : {}),
       },
     });
 

@@ -1,0 +1,254 @@
+// Billing through Creem: off by default; checkout and portal calls; signed
+// webhooks moving a workspace between Team and Free, safely under repeats
+// and out-of-order delivery. Payload shapes follow Creem's webhook docs.
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { ADMIN, createHub, FakeKV, type Harness } from "./support/do-harness.ts";
+import { readEvent, verifyWebhook } from "../src/worker/billing.ts";
+
+const { default: worker } = await import("../src/worker/index.ts");
+
+let h: Harness;
+let env: Record<string, unknown>;
+let calls: { url: string; headers: Record<string, string>; body: any }[] = [];
+let creemAnswer: (url: string) => Response = () => Response.json({});
+const realFetch = globalThis.fetch;
+const APEX = "https://artifacts.test";
+const ACME = "https://acme.artifacts.test";
+const MEMBER = "member@example.com";
+const SECRET = "whsec_test_creem_secret";
+const ctx = { waitUntil() {}, passThroughOnException() {}, props: {} } as unknown as ExecutionContext;
+
+const KEYS = { BILLING: "on", CREEM_API_KEY: "creem_test_abc", CREEM_WEBHOOK_SECRET: SECRET, CREEM_PRODUCT_ID: "prod_team" };
+
+beforeEach(async () => {
+  h = await createHub();
+  await h.hub.setMember(MEMBER, "member", ADMIN);
+  await h.hub.setPlan("free");
+  calls = [];
+  creemAnswer = () => Response.json({});
+  env = {
+    ...h.env,
+    WORKSPACE: { getByName: (slug: string) => (slug === "acme" ? h.hub : null) },
+    OAUTH_KV: new FakeKV(),
+    EMAIL: { send: async () => {} },
+    CONSENT_SECRET: "test-consent-secret-that-is-long-enough",
+    OPERATOR_TOKEN: "op-token",
+    OPERATOR_EMAILS: "op@corp.com",
+    APEX_HOST: "artifacts.test",
+    WORKSPACE_SUFFIX: ".artifacts.test",
+    MAIL_FROM: "sign-in@mail.artifacts.test",
+  };
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = String(url);
+    calls.push({ url: u, headers: (init?.headers ?? {}) as Record<string, string>, body: init?.body ? JSON.parse(String(init.body)) : null });
+    return creemAnswer(u);
+  }) as typeof fetch;
+});
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+
+async function send(path: string, init: RequestInit & { as?: string; host?: string } = {}) {
+  const headers = new Headers(init.headers);
+  if (init.as) {
+    const res = await worker.fetch(
+      new Request(`${APEX}/api/admin/session`, { method: "POST", headers: { Authorization: "Bearer op-token", "Content-Type": "application/json" }, body: JSON.stringify({ email: init.as, host: new URL(init.host ?? ACME).hostname }) }),
+      env as never,
+      ctx,
+    );
+    headers.set("Cookie", ((await res.json()) as { cookie: string }).cookie);
+    headers.set("Origin", init.host ?? ACME);
+  }
+  return worker.fetch(new Request(`${init.host ?? ACME}${path}`, { ...init, headers }), env as never, ctx);
+}
+
+async function sign(body: string, secret = SECRET) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return Array.from(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body))), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function webhook(payload: unknown, signature?: string) {
+  const body = JSON.stringify(payload);
+  return send("/api/billing/webhook", { host: APEX, method: "POST", body, headers: { "creem-signature": signature ?? (await sign(body)), "Content-Type": "application/json" } });
+}
+
+const sub = (status: string, metadata: Record<string, unknown> = { workspace: "acme" }) => ({
+  id: "sub_1",
+  object: "subscription",
+  product: { id: "prod_team", status: "active" },
+  customer: { id: "cust_1", email: "admin@example.com" },
+  status,
+  current_period_end_date: "2026-11-18T00:00:00.000Z",
+  metadata,
+});
+let n = 0;
+const event = (eventType: string, object: unknown, created_at = 1_800_000_000_000 + ++n * 1000) => ({ id: `evt_${n}_${eventType}`, eventType, created_at, object });
+const checkoutCompleted = () =>
+  event("checkout.completed", {
+    id: "ch_1",
+    object: "checkout",
+    request_id: "acme-1",
+    status: "completed",
+    metadata: { workspace: "acme" },
+    customer: { id: "cust_1" },
+    subscription: { ...sub("active"), customer: "cust_1" },
+  });
+
+test("signatures are hex HMAC-SHA256 of the raw body", async () => {
+  const body = '{"a":1}';
+  expect(await verifyWebhook(SECRET, body, await sign(body))).toBe(true);
+  expect(await verifyWebhook(SECRET, body, (await sign(body)).toUpperCase())).toBe(true);
+  expect(await verifyWebhook(SECRET, '{"a":2}', await sign(body))).toBe(false);
+  expect(await verifyWebhook(SECRET, body, null)).toBe(false);
+});
+
+test("events map to plans: paid and active are Team, canceled and paused are Free, failed payments keep Team", () => {
+  expect(readEvent(checkoutCompleted())).toMatchObject({ workspace: "acme", customerId: "cust_1", subscriptionId: "sub_1", plan: "team" });
+  expect(readEvent(event("subscription.paid", sub("active")))?.plan).toBe("team");
+  expect(readEvent(event("subscription.trialing", sub("trialing")))?.plan).toBe("team");
+  expect(readEvent(event("subscription.scheduled_cancel", sub("scheduled_cancel")))).toMatchObject({ plan: null, status: "scheduled_cancel" });
+  for (const s of ["past_due", "unpaid"]) expect(readEvent(event(`subscription.${s}`, sub(s)))?.plan).toBeNull();
+  expect(readEvent(event("subscription.expired", sub("active")))?.plan).toBe("team");
+  expect(readEvent(event("subscription.canceled", sub("canceled")))?.plan).toBe("free");
+  expect(readEvent(event("subscription.paused", sub("paused")))?.plan).toBe("free");
+  expect(readEvent(event("refund.created", { id: "ref_1", object: "refund" }))).toBeNull();
+  expect(readEvent({ nonsense: true })).toBeNull();
+  // Without an id and a time it can't be ordered or de-duplicated.
+  expect(readEvent({ eventType: "subscription.paid", object: sub("active") })).toBeNull();
+});
+
+test("off by default: no pricing page, no webhook, nothing in settings", async () => {
+  expect((await send("/pricing", { host: APEX })).status).toBe(404);
+  expect((await webhook(checkoutCompleted())).status).toBe(404);
+  const settings = (await (await send("/api/settings", { as: ADMIN })).json()) as { billing: unknown };
+  expect(settings.billing).toBeNull();
+  expect((await (await send("/", { host: APEX })).text())).not.toContain('href="/pricing"');
+});
+
+test("on without keys: the pricing page shows, but nobody can check out yet", async () => {
+  env.BILLING = "on";
+  const pricing = await send("/pricing", { host: APEX });
+  expect(pricing.status).toBe(200);
+  const html = await pricing.text();
+  expect(html).toContain("$25");
+  expect(html).toContain("merchant of record");
+  expect(await (await send("/", { host: APEX })).text()).toContain('href="/pricing"');
+  const settings = (await (await send("/api/settings", { as: ADMIN })).json()) as { billing: { ready: boolean } };
+  expect(settings.billing.ready).toBe(false);
+  const checkout = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  expect(checkout.status).toBe(503);
+  expect(calls).toEqual([]);
+});
+
+test("checkout: admins only; Creem gets the product, the admin's email and the workspace; test keys use the sandbox", async () => {
+  Object.assign(env, KEYS);
+  creemAnswer = () => Response.json({ id: "ch_1", checkout_url: "https://checkout.creem.io/ch_1" });
+  const post = (as: string) => send("/api/settings/billing/checkout", { as, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  expect((await post(MEMBER)).status).toBe(403);
+  const r = await post(ADMIN);
+  expect(await r.json()).toEqual({ url: "https://checkout.creem.io/ch_1" });
+  expect(calls).toHaveLength(1);
+  expect(calls[0].url).toBe("https://test-api.creem.io/v1/checkouts");
+  expect(calls[0].headers["x-api-key"]).toBe("creem_test_abc");
+  expect(calls[0].body).toMatchObject({ product_id: "prod_team", customer: { email: ADMIN }, success_url: `${ACME}/settings?billing=done`, metadata: { workspace: "acme" } });
+  // Live keys use the live API; a provider error is a clean 503.
+  env.CREEM_API_KEY = "creem_live_xyz";
+  creemAnswer = () => new Response("down", { status: 500 });
+  const failed = await post(ADMIN);
+  expect(failed.status).toBe(503);
+  expect(calls.at(-1)!.url).toBe("https://api.creem.io/v1/checkouts");
+});
+
+test("webhooks move the workspace between plans, and repeats or late events change nothing", async () => {
+  Object.assign(env, KEYS);
+  expect(h.hub.plan().id).toBe("free");
+  // Wrong signature: refused, nothing changes.
+  expect((await webhook(checkoutCompleted(), "deadbeef")).status).toBe(401);
+  expect(h.hub.plan().id).toBe("free");
+
+  const paid = checkoutCompleted();
+  expect(await (await webhook(paid)).json()).toEqual({ ok: true, workspace: "acme", plan: "team" });
+  expect(h.hub.plan().id).toBe("team");
+  expect(h.directory.billing("acme")).toMatchObject({ provider: "creem", customerId: "cust_1", subscriptionId: "sub_1", status: "active" });
+  // The same delivery again changes nothing: it re-applies what the record says.
+  expect(await (await webhook(paid)).json()).toEqual({ ok: true, workspace: "acme", plan: "team" });
+
+  // Later events find the workspace by subscription even without metadata.
+  const scheduled = event("subscription.scheduled_cancel", sub("scheduled_cancel", {}));
+  await webhook(scheduled);
+  expect(h.hub.plan().id).toBe("team");
+  expect(h.directory.billing("acme")?.status).toBe("scheduled_cancel");
+  const settings = (await (await send("/api/settings", { as: ADMIN })).json()) as { billing: { subscription: { status: string; manageable: boolean } } };
+  expect(settings.billing.subscription).toMatchObject({ status: "scheduled_cancel", manageable: true });
+
+  // An older event arriving late can't undo a newer one.
+  const canceled = event("subscription.canceled", sub("canceled", {}));
+  const stale = event("subscription.paid", sub("active", {}), 1_000);
+  await webhook(canceled);
+  expect(h.hub.plan().id).toBe("free");
+  await webhook(stale);
+  expect(h.hub.plan().id).toBe("free");
+
+  // Events for a workspace we don't know are acknowledged and ignored.
+  const elsewhere = event("subscription.paid", { ...sub("active", { workspace: "nope" }), id: "sub_other" });
+  expect(await (await webhook(elsewhere)).json()).toMatchObject({ ignored: true });
+});
+
+test("the portal link is for workspaces with a subscription, from Creem", async () => {
+  Object.assign(env, KEYS);
+  const portal = () => send("/api/settings/billing/portal", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  expect((await portal()).status).toBe(400);
+  await webhook(checkoutCompleted());
+  creemAnswer = () => Response.json({ customer_portal_link: "https://creem.io/portal/cust_1" });
+  expect(await (await portal()).json()).toEqual({ url: "https://creem.io/portal/cust_1" });
+  expect(calls.at(-1)).toMatchObject({ url: "https://test-api.creem.io/v1/customers/billing", body: { customer_id: "cust_1" } });
+  // Already on Team: no second checkout.
+  const again = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  expect(again.status).toBe(400);
+});
+
+test("a retry heals a plan change that failed the first time", async () => {
+  Object.assign(env, KEYS);
+  const real = h.hub.setPlan.bind(h.hub);
+  let fail = true;
+  h.hub.setPlan = (async (plan: never) => {
+    if (fail) throw new Error("hub overloaded");
+    return real(plan);
+  }) as never;
+  const paid = checkoutCompleted();
+  await expect(webhook(paid)).rejects.toThrow("hub overloaded");
+  expect(h.hub.plan().id).toBe("free");
+  fail = false;
+  // Creem delivers the same event again.
+  await webhook(paid);
+  expect(h.hub.plan().id).toBe("team");
+});
+
+test("an old subscription's late events can't downgrade a newer one; a new paying one takes over", async () => {
+  Object.assign(env, KEYS);
+  await webhook(checkoutCompleted());
+  const second = { ...sub("active"), id: "sub_2", customer: { id: "cust_1" } };
+  await webhook(event("subscription.paid", second));
+  expect(h.directory.billing("acme")?.subscriptionId).toBe("sub_2");
+  // sub_1 is canceled afterwards: the workspace pays through sub_2, so it stays Team.
+  await webhook(event("subscription.canceled", sub("canceled")));
+  expect(h.hub.plan().id).toBe("team");
+  expect(h.directory.billing("acme")).toMatchObject({ subscriptionId: "sub_2", status: "active" });
+});
+
+test("an operator-set Team isn't touched by events for a subscription it never had", async () => {
+  Object.assign(env, KEYS);
+  await h.hub.setPlan("team");
+  expect(await (await webhook(event("subscription.canceled", sub("canceled")))).json()).toEqual({ ok: true, ignored: true });
+  expect(h.hub.plan().id).toBe("team");
+});
+
+test("a paying workspace can't be deleted by accident, and a deleted one's subscription isn't inherited", async () => {
+  Object.assign(env, KEYS);
+  await webhook(checkoutCompleted());
+  const del = () => worker.fetch(new Request(`${APEX}/api/admin/workspaces/acme`, { method: "DELETE", headers: { Authorization: "Bearer op-token" } }), env as never, ctx);
+  expect((await del()).status).toBe(409);
+  // (The forced HTTP delete also tears the workspace object down, which this harness can't; the record goes either way.)
+  await h.directory.removeWorkspace("acme");
+  expect(h.directory.billing("acme")).toBeNull();
+});

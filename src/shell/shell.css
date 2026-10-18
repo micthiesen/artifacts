@@ -770,3 +770,14 @@ div.thread-anchor { cursor: default; }
 /* Notification selects never widen the page on a phone. */
 .profile select { max-width: 100%; min-width: 0; }
 .watches { table-layout: fixed; }
+.pricing-grid { margin-top: 2rem; }
+.pricing-card { display: flex; flex-direction: column; }
+.pricing-card ul { flex: 1; margin-bottom: 1.2rem; }
+.pricing-card .button { align-self: flex-start; }
+.splash-card > p.pricing-price { margin: .1rem 0 .6rem; font-size: 30px; line-height: 1.2; font-weight: 650; letter-spacing: -.02em; color: var(--fg); }
+.pricing-price .muted { font-size: 14px; font-weight: 400; letter-spacing: 0; }
+.pricing-notes { max-width: 52rem; margin-top: 2.5rem; font-size: 14.5px; line-height: 1.6; }
+.pricing-notes p { margin: 0 0 .8rem; }
+/* Disabled buttons read as unavailable, not just faded: the accent gradient goes grey. */
+.button:disabled, .button[disabled] { filter: grayscale(1); opacity: .5; cursor: not-allowed; }
+.billing-note { margin-top: .9rem; }

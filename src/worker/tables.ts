@@ -9,4 +9,4 @@ export const DATA_TABLES = [
 // and contents written meanwhile are then still included.
 
 /** The directory's tables worth keeping (sign-in codes, used passkey challenges and their rate limits are not). */
-export const DIRECTORY_TABLES = ["workspaces", "memberships", "users", "channels", "visits", "passkeys"];
+export const DIRECTORY_TABLES = ["workspaces", "memberships", "users", "channels", "visits", "passkeys", "billing"];

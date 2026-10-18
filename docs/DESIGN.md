@@ -164,7 +164,9 @@ then that is deliberately not built.
 
 The hosted service is free in early access; the terms promise admins 30
 days' notice before anything costs money, and guests never need a plan.
-Pricing plans are kept privately.
+Pricing plans are kept privately. Billing is built and off (`docs/BILLING.md`):
+Creem, a merchant of record, sells Team per workspace, and its signed
+webhooks set the workspace's plan.
 
 A workspace has a plan (`src/worker/plans.ts`). Team caps only what one
 Durable Object can hold (5 GB of content, leaving room for history and the

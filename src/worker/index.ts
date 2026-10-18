@@ -25,12 +25,14 @@ import {
   splashPage,
   workspacesPage,
   POLICY_UPDATED,
+  pricingPage,
   type Brand,
 } from "./pages.ts";
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { publicMessage } from "./errors.ts";
 import { isPlan } from "./plans.ts";
+import { BillingError, billingOn, billingReady, portalLink, readEvent, startCheckout, TEAM_PRICE, verifyWebhook } from "./billing.ts";
 import { checkLayout } from "./layout.ts";
 import { exportRun, latestManifest } from "./snapshot.ts";
 import { DATA_TABLES } from "./tables.ts";
@@ -81,6 +83,11 @@ export type Env = {
   WORKSPACE_SUFFIX: string;
   /** "on" lets anyone signed in make a Free workspace from /workspaces. Off unless set. */
   SELF_SERVE?: string;
+  /** Billing through Creem (src/worker/billing.ts): BILLING=on plus the keys. */
+  BILLING?: string;
+  CREEM_API_KEY?: string;
+  CREEM_WEBHOOK_SECRET?: string;
+  CREEM_PRODUCT_ID?: string;
   /** Sender address for sign-in codes. */
   MAIL_FROM: string;
   /** Pushover application token shared by every user's Pushover channel. */
@@ -501,7 +508,7 @@ async function noteSignIn(env: Env, slug: string, email: string, join = true) {
 
 // ---- apex: front door, sign-in, account and operator -------------------------------------
 
-const INDEXABLE = ["/", "/privacy", "/terms", "/security"];
+const INDEXABLE = ["/", "/privacy", "/terms", "/security", "/pricing"];
 
 /** Opt a public apex page out of the default noindex (see the fetch handler). */
 function indexable(response: Response): Response {
@@ -523,7 +530,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   const operator = viewer.email !== null && operatorEmails(env).has(viewer.email);
 
   // The front page is the same for everyone; signed in, it links to /workspaces.
-  if (path === "/") return indexable(splashPage(brand, undefined, viewer.email ? { email: viewer.email, operator } : undefined));
+  if (path === "/") return indexable(splashPage(brand, undefined, viewer.email ? { email: viewer.email, operator } : undefined, billingOn(env)));
   if (path === "/workspaces") {
     if (!viewer.email) return Response.redirect(`${url.origin}/login?return=/workspaces`, 302);
     const selfServe = env.SELF_SERVE === "on";
@@ -551,6 +558,9 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   if (path === "/privacy" || path === "/terms" || path === "/security") {
     return indexable(policyPage(path.slice(1) as PolicyKind, brand, (env.OPERATOR_EMAILS ?? "").split(",")[0].trim()));
   }
+  // Billing: the pricing page and the payment provider's webhook, only while billing is on.
+  if (path === "/pricing" && billingOn(env)) return indexable(pricingPage(brand, env.SELF_SERVE === "on", viewer.email ? { email: viewer.email, operator } : undefined));
+  if (path === "/api/billing/webhook" && request.method === "POST") return billingWebhook(request, env);
   if (path === "/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
     return new Response(null, { status: 303, headers: { Location: "/", "Set-Cookie": clearSessionCookie() } });
@@ -573,6 +583,48 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   }
   if (path.startsWith("/api/admin/")) return operatorApi(request, url, env, viewer, ctx);
   return messagePage("Not found", "There's nothing here.", 404, undefined, brand);
+}
+
+/** What settings shows an admin about paying: the price, whether checkout works yet, and the subscription. */
+async function billingState(env: Env, slug: string) {
+  const record = await directory(env).billing(slug);
+  return {
+    ready: billingReady(env),
+    price: TEAM_PRICE,
+    subscription: record ? { status: record.status, periodEnd: record.periodEnd, manageable: Boolean(record.customerId) } : null,
+  };
+}
+
+/**
+ * The payment provider's webhook: verified by its signature, recorded in the
+ * directory (repeats and late, older events do nothing), and the workspace
+ * moved to the plan the subscription now pays for.
+ */
+async function billingWebhook(request: Request, env: Env): Promise<Response> {
+  if (!billingOn(env) || !env.CREEM_WEBHOOK_SECRET) return new Response("not found", { status: 404 });
+  const raw = await request.text();
+  if (!(await verifyWebhook(env.CREEM_WEBHOOK_SECRET, raw, request.headers.get("creem-signature")))) {
+    return Response.json({ error: "bad signature" }, { status: 401 });
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return Response.json({ error: "bad JSON" }, { status: 400 });
+  }
+  const update = readEvent(payload);
+  if (!update) return Response.json({ ignored: true });
+  const applied = await directory(env).applyBilling(update, "creem");
+  if (!applied) return Response.json({ ok: true, ignored: true });
+  // Two webhooks at once can finish in either order, so settle on what the record says now.
+  let plan = applied.plan;
+  for (let i = 0; i < 3; i++) {
+    await workspaceHub(env, applied.slug).setPlan(plan);
+    const now = await directory(env).billingPlan(applied.slug);
+    if (!now || now === plan) break;
+    plan = now;
+  }
+  return Response.json({ ok: true, workspace: applied.slug, plan });
 }
 
 /**
@@ -950,7 +1002,30 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         hosts: await hub.allowedHosts(),
         joinDomains: await hub.joinDomains(),
         plan: await hub.plan(),
+        billing: billingOn(env) && admin ? await billingState(env, slug) : null,
       });
+    }
+    // Billing (admins): start paying for Team, or open the provider's portal to manage it.
+    if (path === "/api/settings/billing/checkout" && request.method === "POST") {
+      if (!admin) return adminOnly();
+      if ((await hub.plan()).id === "team") return Response.json({ error: "This workspace is already on Team." }, { status: 400 });
+      try {
+        return Response.json({ url: await startCheckout(env, { workspace: slug, email, successUrl: `${url.origin}/settings?billing=done` }) });
+      } catch (err) {
+        if (err instanceof BillingError) return Response.json({ error: err.message }, { status: 503 });
+        throw err;
+      }
+    }
+    if (path === "/api/settings/billing/portal" && request.method === "POST") {
+      if (!admin) return adminOnly();
+      const record = await directory(env).billing(slug);
+      if (!record?.customerId) return Response.json({ error: "This workspace has no subscription to manage." }, { status: 400 });
+      try {
+        return Response.json({ url: await portalLink(env, record.customerId) });
+      } catch (err) {
+        if (err instanceof BillingError) return Response.json({ error: err.message }, { status: 503 });
+        throw err;
+      }
     }
     // Export: the latest backup, streamed as JSON Lines (docs/EXPORT.md). Admins only: it's everything.
     if (path === "/api/settings/export" && request.method === "GET") {
@@ -1271,6 +1346,10 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
     // Deleting again finishes a delete that failed partway, even after the directory forgot the workspace.
     if (!action && request.method === "DELETE") {
       if (!validSlug(slug)) return Response.json({ error: `no workspace ${slug}` }, { status: 404 });
+      // A paying workspace would keep being charged: cancel its subscription first (or force).
+      if ((await dir.billingPlan(slug)) === "team" && url.searchParams.get("force") !== "1") {
+        return Response.json({ error: `${slug} has a live subscription; cancel it in Creem first, or delete with ?force=1` }, { status: 409 });
+      }
       for (const m of await hub.members().catch(() => [])) {
         await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email, hub).catch((err) => console.error("revoking grants failed", err));
       }

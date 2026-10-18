@@ -23,6 +23,7 @@ links, OAuth consent, Web Push keys).
 | `OPERATOR_EMAILS` | Comma-separated emails that see the operator console at `/admin` |
 | `OPERATOR_TOKEN` | A random string; the operator API's bearer token for local scripts |
 | `PUSHOVER_TOKEN` | Optional: one Pushover application token shared by every user's Pushover channel |
+| `BILLING`, `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, `CREEM_PRODUCT_ID` | Optional: paid plans through Creem. Off unless `BILLING=on`; see docs/BILLING.md for turning it on |
 | `SELF_SERVE` | Optional: `on` lets anyone signed in make one Free workspace from "Your workspaces". Off unless set. Free workspaces are capped at 300 saved changes a day (each runs a render check), which bounds what one can cost |
 
 ## Deploy and first workspace

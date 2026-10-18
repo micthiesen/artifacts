@@ -15,6 +15,12 @@ type Settings = {
   hosts: string[];
   /** Email domains whose people join as members when they first sign in. */
   joinDomains: string[];
+  /** Admins, while billing is on: the price, whether checkout works, and the subscription. */
+  billing: {
+    ready: boolean;
+    price: { amount: number; currency: string; period: string };
+    subscription: { status: string; periodEnd: string | null; manageable: boolean } | null;
+  } | null;
   plan: {
     id: string;
     label: string;
@@ -120,6 +126,46 @@ async function act(fn: () => Promise<unknown>, ok?: string | (() => string)) {
   }
 }
 
+/** Admins, while billing is on: upgrade to Team, or manage the subscription with the payment provider. */
+function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement {
+  const sub = billing.subscription;
+  const team = data.plan.id === "team";
+  const until = sub?.periodEnd ? new Date(sub.periodEnd).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : null;
+  const go = (path: string) =>
+    act(async () => {
+      const r = await api<{ url: string }>(path, { body: {} });
+      location.href = r.url;
+    });
+  const state = !team
+    ? `This workspace is on Free. Team is $${billing.price.amount} a ${billing.price.period} for the whole workspace: unlimited artifacts and members, and more storage. Guests are always free.`
+    : sub && ["active", "trialing", "paid"].includes(sub.status)
+      ? `Team, paid${until ? ` through ${until}` : ""}.`
+      : sub?.status === "scheduled_cancel"
+        ? `Team until ${until ?? "the end of the paid period"}, then Free: the subscription is canceled.`
+        : sub && ["past_due", "unpaid", "expired"].includes(sub.status)
+          ? "Team, but the last payment didn't go through. Update the card to keep it."
+          : "Team, arranged with us directly.";
+  const actions = h("div", { class: "row" });
+  if (!team) {
+    const b = btn("Upgrade to Team", () => go("/api/settings/billing/checkout"));
+    if (!billing.ready) {
+      b.setAttribute("disabled", "");
+      b.setAttribute("aria-describedby", "billing-not-ready");
+    }
+    actions.append(b);
+  }
+  if (sub?.manageable) actions.append(btn("Manage billing", () => go("/api/settings/billing/portal"), "button small secondary"));
+  return h(
+    "section",
+    { class: "card-section" },
+    h("h2", {}, "Plan and billing"),
+    h("p", { class: "muted" }, state),
+    ...(!billing.ready && !team ? [h("p", { class: "muted small", id: "billing-not-ready" }, "Payments aren't set up yet.")] : []),
+    actions,
+    h("p", { class: "muted small billing-note" }, "Payments are handled by Creem, who is the seller on the invoice and handles sales tax and VAT."),
+  );
+}
+
 /** Admins: download everything as of the latest backup, or ask for a fresh one. Filled in once the status loads. */
 function exportSection(): HTMLElement {
   const status = h("p", { class: "muted small" }, "Checking for a backup…");
@@ -181,6 +227,12 @@ function exportSection(): HTMLElement {
     (err: Error) => (status.textContent = err.message),
   );
   return section;
+}
+
+// Back from checkout: the plan changes once the payment provider tells us, usually within a few seconds.
+if (new URLSearchParams(location.search).get("billing") === "done") {
+  notice = { tone: "ok", text: "Thanks! Your workspace moves to Team as soon as the payment is confirmed. Reload in a moment if it hasn't yet." };
+  history.replaceState(null, "", location.pathname);
 }
 
 async function load() {
@@ -438,6 +490,7 @@ function render() {
         h("div", { class: "row" }, name, btn("Rename", () => act(() => api("/api/settings/name", { body: { name: name.value } }), "Renamed."))),
       ),
     );
+    if (data.billing) sections.push(billingSection(data.billing));
     sections.push(exportSection());
   }
   main.replaceChildren(...sections);

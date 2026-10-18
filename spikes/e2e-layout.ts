@@ -32,6 +32,8 @@ const pages: [string, string, string | undefined][] = [
   ["artifact (owner)", `${origin}/a/${id}`, ownerHere],
   ["artifact (guest)", `${origin}/a/${id}`, guestHere],
 ];
+// The pricing page exists only while billing is on.
+if ((await fetch(`${apex}/pricing`)).status === 200) pages.push(["pricing", `${apex}/pricing`, undefined]);
 for (const [name, url, cookie] of pages) {
   const r = await operator("/layout", { url, ...(cookie ? { cookie } : {}) });
   const detail = r.error ?? `${r.scrollWidth}px wide at ${r.width}px: ${r.offenders?.map((o: any) => `${o.el} → ${o.right}px “${o.text}”`).join("; ")}`;
