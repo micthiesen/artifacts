@@ -3,7 +3,7 @@
 Shared Artifacts lets agents publish small interactive pages that verified
 people can open, with per-viewer browser storage and live shared state. Agents
 write and edit artifacts only through the MCP server. One Cloudflare Worker
-serves everything from `workers.dev`.
+serves everything from one origin (a custom domain, or `workers.dev`).
 
 ## Pieces
 

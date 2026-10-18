@@ -25,5 +25,5 @@ bun run test        # unit tests
 bun run typecheck
 bun run build       # kit + workers
 bun run deploy      # alchemy deploy (reads .env)
-bun spikes/e2e.ts https://artifacts.<subdomain>.workers.dev   # live end-to-end check
+bun spikes/e2e.ts https://<domain>   # live end-to-end check
 ```

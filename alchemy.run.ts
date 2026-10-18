@@ -15,14 +15,19 @@ export default Alchemy.Stack(
   Effect.gen(function* () {
     const stage = yield* Alchemy.Stage;
     const name = stage === "prod" ? "artifacts" : `artifacts-${stage}`;
-    const subdomain = yield* Config.String("WORKERS_SUBDOMAIN");
-    const mainOrigin = `https://${name}.${subdomain}.workers.dev`;
+    // With DOMAIN set, prod serves at the apex (stages at `<stage>.<domain>`) and
+    // workers.dev is turned off; otherwise both Workers live on workers.dev.
+    const domain = yield* Config.String("DOMAIN").pipe(Config.withDefault(""));
+    const subdomain = domain ? "" : yield* Config.String("WORKERS_SUBDOMAIN");
+    const mainHost = domain ? (stage === "prod" ? domain : `${stage}.${domain}`) : `${name}.${subdomain}.workers.dev`;
+    const mainOrigin = `https://${mainHost}`;
+    const hosting = (host: string) => (domain ? { domain: host, workersDev: false } : {});
     const accessTeam = yield* Config.String("ACCESS_TEAM_DOMAIN").pipe(Config.withDefault(""));
 
     let authUrl = "";
     if (accessTeam) {
       const authName = `${name}-auth`;
-      const authHost = `${authName}.${subdomain}.workers.dev`;
+      const authHost = domain ? `auth.${mainHost}` : `${authName}.${subdomain}.workers.dev`;
       const otp = Cloudflare.Access.getIdentityProvider({ type: "onetimepin" });
       // Anyone can prove an email with a one-time PIN; the main Worker's
       // per-artifact share list decides what they can open.
@@ -40,6 +45,7 @@ export default Alchemy.Stack(
         bundle: false,
         compatibility: { date: "2026-10-01" },
         access: signIn,
+        ...hosting(authHost),
         env: {
           LOGIN_SECRET: yield* Config.Redacted("LOGIN_SECRET"),
           ACCESS_TEAM_DOMAIN: accessTeam,
@@ -78,6 +84,7 @@ export default Alchemy.Stack(
       bundle: false,
       compatibility: { date: "2026-10-01" },
       assets: "./dist/kit",
+      ...hosting(mainHost),
       // Live data sources refresh on this schedule (each source has its own interval).
       crons: ["*/15 * * * *"],
       env: {

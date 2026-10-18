@@ -1,5 +1,5 @@
 // End-to-end check against a deployed Worker.
-// Usage: bun spikes/e2e.ts https://artifacts.<sub>.workers.dev
+// Usage: bun spikes/e2e.ts https://<domain>
 // Reads MCP_TOKEN, SESSION_SECRET and OWNER_EMAILS from .env (bun loads it).
 import { signToken } from "../src/worker/session.ts";
 

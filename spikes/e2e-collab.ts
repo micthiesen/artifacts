@@ -1,6 +1,6 @@
 // End-to-end check of comments, activity, visits, previews and notifications
 // against a deployed Worker. Sends one real notification through ntfy.sh.
-// Usage: bun spikes/e2e-collab.ts https://artifacts.<sub>.workers.dev
+// Usage: bun spikes/e2e-collab.ts https://<domain>
 // Reads MCP_TOKEN, SESSION_SECRET, LOGIN_SECRET and OWNER_EMAILS from .env.
 import { signToken } from "../src/worker/session.ts";
 
