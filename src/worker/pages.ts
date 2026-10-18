@@ -138,24 +138,20 @@ type ListedArtifact = ArtifactMeta & { role: Role; unseen?: boolean; unread?: nu
  * their owners are done with, hidden from the main list but still readable.
  */
 export function indexPage(
-  viewer: { email: string | null; member: WorkspaceRole | null },
+  viewer: { email: string; member: WorkspaceRole | null },
   all: ListedArtifact[],
   brand: Brand,
   summaries?: Record<string, ShareSummary>,
   archived = false,
 ): Response {
-  const account = viewer.email
-    ? `${avatar(viewer.email, brand, "workspace", { member: Boolean(viewer.member) })}${ACCOUNT_SCRIPT}`
-    : `<a class="button small" href="/login?return=${archived ? "/archived" : "/"}">Sign in</a>`;
+  const account = `${avatar(viewer.email, brand, "workspace", { member: Boolean(viewer.member) })}${ACCOUNT_SCRIPT}`;
   const artifacts = all.filter((a) => Boolean(a.archivedAt) === archived);
   if (archived) artifacts.sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
   const archivedCount = archived ? 0 : all.length - artifacts.length;
   // Always present (hidden at zero) so archiving the first row can reveal it.
   const archivedLink = `<p class="archived-link"${archivedCount ? "" : " hidden"}><a href="/archived">${ICON_ARCHIVE}Archived · <span data-archived-count>${archivedCount}</span></a></p>`;
   let body: string;
-  if (!viewer.email) {
-    body = `<section class="empty"><h1>${escapeHtml(brand.name)}</h1><p class="muted">Sign in with your email to see the artifacts shared with you here.</p><p><a class="button" href="/login?return=/">Sign in</a></p></section>`;
-  } else if (archived) {
+  if (archived) {
     body = `<p class="back-link"><a href="/">← All artifacts</a></p><h1 class="page-title">Archived</h1><p class="muted page-lede">Hidden from the main list. They still open at their links, with history and comments.</p>${
       list(artifacts, summaries, true)
     }<p class="muted archive-empty" data-list-empty${artifacts.length ? " hidden" : ""}>Nothing archived.</p>`;
@@ -170,8 +166,7 @@ export function indexPage(
   const script = `<script type="module" src="${asset("/static/home.js")}"></script>`;
   const title = archived ? `Archived · ${brand.name}` : brand.name;
   // Policies live on the apex; signed-out visitors may want them before signing in.
-  const foot = viewer.email ? "" : POLICY_FOOTER.replace(/href="\//g, `href="${escapeHtml(brand.apex)}/`);
-  return page(title, `${topBar(brand, account)}<main class="content">${body}</main>${foot}${script}`);
+  return page(title, `${topBar(brand, account)}<main class="content">${body}</main>${script}`);
 }
 
 function list(artifacts: ListedArtifact[], summaries: Record<string, ShareSummary> | undefined, archived: boolean): string {

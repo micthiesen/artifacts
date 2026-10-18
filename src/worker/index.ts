@@ -339,7 +339,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (presigned) return presignedSignIn(request, presigned[1], url, env, hub, slug, brand, session);
 
   if (path === "/" || path === "/archived") {
-    if (!viewer.email) return indexPage({ email: null, member: null }, [], brand);
+    // Signed in on the apex already, this comes straight back signed in here.
+    if (!viewer.email) return signIn(path);
     const data = await hub.indexData(viewer.email);
     return indexPage({ email: viewer.email, member: data.member }, data.artifacts, brand, data.summaries, path === "/archived");
   }

@@ -127,7 +127,9 @@ test("email sign-in hands the browser to the workspace, which sets its own sessi
 
   // Each host's session is its own: the apex cookie means nothing on the workspace and vice versa.
   expect(await (await fetchAs(`${ACME}/`, { cookie: acmeCookie })).text()).toContain("Nothing here yet");
-  expect(await (await fetchAs(`${ACME}/`, { cookie: apexCookie })).text()).toContain("Sign in with your email");
+  // Without its own session, a workspace's front page goes straight to the hand-off, like every other page.
+  expect((await fetchAs(`${ACME}/`, { cookie: apexCookie })).headers.get("Location")).toBe(`${ACME}/login?return=%2F`);
+  expect((await fetchAs(`${ACME}/archived`)).headers.get("Location")).toBe(`${ACME}/login?return=%2Farchived`);
   // The apex front page is the splash for everyone; signed in, it links to your workspaces.
   const front = await (await fetchAs(`${APEX}/`, { cookie: apexCookie })).text();
   expect(front).toContain("Collaborative documents");
@@ -239,7 +241,7 @@ test("a presigned link opens its artifact and nothing else, even for an owner", 
   const cookie = cookieOf(opened);
   const page = await (await fetchAs(`${ACME}/a/${id}`, { cookie })).text();
   expect(page).toContain('"role":"edit"');
-  expect(await (await fetchAs(`${ACME}/`, { cookie })).text()).toContain("Sign in with your email");
+  expect((await fetchAs(`${ACME}/`, { cookie })).headers.get("Location")).toBe(`${ACME}/login?return=%2F`);
   expect((await fetchAs(`${ACME}/api/settings`, { cookie })).status).toBe(401);
   expect((await fetchAs(`${ACME}/api/a/${id}`, { cookie })).status).toBe(401);
   // Links from another workspace don't work here.
