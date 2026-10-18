@@ -24,7 +24,7 @@ type Settings = {
   plan: {
     id: string;
     label: string;
-    limits: { artifacts: number | null; bytes: number | null; members: number | null; changesPerDay: number | null };
+    limits: { artifacts: number | null; bytes: number | null; members: number | null; changesPerDay: number | null; emailsPerDay: number };
     usage: { artifacts: number; bytes: number; members: number };
   };
 };

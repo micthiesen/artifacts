@@ -595,7 +595,8 @@ export class Workspace extends DurableObject {
     const used = JSON.parse(this.setting("mail_sent") ?? "{}") as { day?: string; n?: number; by?: Record<string, number> };
     const today = used.day === day ? used : { day, n: 0, by: {} };
     const mine = by ? (today.by?.[by] ?? 0) : 0;
-    if ((today.n ?? 0) + n > MAIL_PER_DAY || (by && mine + n > SHARE_MAIL_PER_PERSON)) return false;
+    const cap = Math.min(MAIL_PER_DAY, PLANS[this.planId()].limits.emailsPerDay);
+    if ((today.n ?? 0) + n > cap || (by && mine + n > SHARE_MAIL_PER_PERSON)) return false;
     this.setSetting("mail_sent", JSON.stringify({ day, n: (today.n ?? 0) + n, by: by ? { ...today.by, [by]: mine + n } : today.by }));
     return true;
   }

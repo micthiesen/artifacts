@@ -553,7 +553,7 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
 <section class="splash-grid pricing-grid">
 ${plan("Free", `$0 <span class="muted">/ workspace</span>`, "For trying it out, or a small personal workspace.", [
   `${free.artifacts} artifacts and ${free.members} members`,
-  `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves a day`,
+  `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves and ${free.emailsPerDay} emails a day`,
   "Unlimited guests, approvals, forms, comments and MCP events",
 ], selfServe ? `<a class="button secondary" href="/workspaces">Start free</a>` : `<p class="muted small">New workspaces are by invitation for now.</p>`)}
 ${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_PRICE.period}</span>`, "For a team that publishes and decides with its agents every day.", [

@@ -174,3 +174,12 @@ test("one self-serve workspace per person, however they tag their address", asyn
   expect(await again.text()).toContain("already made a workspace");
   expect(h.directory.workspace("pat-two")).toBeNull();
 });
+
+test("Free sends at most 50 emails a day; Team keeps the workspace-wide 1,000", async () => {
+  await h.hub.setPlan("free");
+  let sent = 0;
+  while (h.hub.allowMail(1) && sent < 2000) sent++;
+  expect(sent).toBe(PLANS.free.limits.emailsPerDay);
+  await h.hub.setPlan("team");
+  expect(h.hub.allowMail(1)).toBe(true);
+});

@@ -171,8 +171,9 @@ webhooks set the workspace's plan.
 A workspace has a plan (`src/worker/plans.ts`). Team caps only what one
 Durable Object can hold (5 GB of content, leaving room for history and the
 activity log under its 10 GB) and saves a day (5,000, which bounds render
-checks); Free also caps artifacts and members, with less storage and fewer
-saves. Whatever the plan, writes stop at 9.5 GB of database in use. The workspace enforces them on
+checks); Free also caps artifacts and members, with less storage, fewer
+saves and 50 emails a day (invitations, shares and notifications; Team
+keeps the 1,000 every workspace has). Whatever the plan, writes stop at 9.5 GB of database in use. The workspace enforces them on
 writes and new members; deleting is always allowed, so a full workspace can
 make room, and someone joining by email domain past the member limit stays
 a guest. Existing and operator-made workspaces are on Team; the operator
