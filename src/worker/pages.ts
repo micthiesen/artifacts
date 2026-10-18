@@ -343,7 +343,7 @@ cd artifacts.boo &amp;&amp; bun install
 bun run deploy</code></pre></div>
 </section>
 
-<footer class="splash-foot muted"><a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
+<footer class="splash-foot muted"><a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
 </main>`,
     {},
     `<meta name="description" content="${escapeHtml(DESCRIPTION)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}/">\n`,
