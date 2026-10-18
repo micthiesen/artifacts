@@ -360,8 +360,9 @@ export function initOwnerMenu(
           "ul",
           { class: "om-list" },
           ...shares.map((s) => {
-            const isDomain = s.email.startsWith("@");
-            const label = isDomain ? `Everyone at ${s.email.slice(1)}` : s.email;
+            const isWorkspace = s.email === "workspace";
+            const isDomain = isWorkspace || s.email.startsWith("@");
+            const label = isWorkspace ? "Everyone in the workspace" : isDomain ? `Everyone at ${s.email.slice(1)}` : s.email;
             return h(
               "li",
               { class: "om-row om-share" },
@@ -403,7 +404,7 @@ export function initOwnerMenu(
       type: "text",
       inputmode: "email",
       autocomplete: "off",
-      placeholder: "name@example.com or @example.com",
+      placeholder: "name@example.com, @example.com or workspace",
       "data-key": "add-email",
       required: true,
     }), "");

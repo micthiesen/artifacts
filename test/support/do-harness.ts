@@ -5,9 +5,12 @@
 // src/worker/hub.ts statically in a test that uses this harness (type imports are fine).
 import { Database } from "bun:sqlite";
 import { mock } from "bun:test";
-import type { ArtifactHub } from "../../src/worker/hub.ts";
+import type { Workspace } from "../../src/worker/hub.ts";
+import type { Directory } from "../../src/worker/directory.ts";
 
 mock.module("cloudflare:workers", () => ({
+  // The OAuth library checks handlers against this.
+  WorkerEntrypoint: class {},
   DurableObject: class {
     ctx: unknown;
     env: unknown;
@@ -75,6 +78,11 @@ function fromRow(row: Record<string, unknown>): Record<string, SqlValue> {
 
 export class FakeSqlStorage {
   readonly db = new Database(":memory:");
+  get databaseSize(): number {
+    const page = this.db.query("PRAGMA page_size").get() as { page_size: number };
+    const count = this.db.query("PRAGMA page_count").get() as { page_count: number };
+    return page.page_size * count.page_count;
+  }
   exec(query: string, ...bindings: unknown[]): FakeCursor {
     if (bindings.length === 0) {
       const stmt = this.db.prepare(query);
@@ -213,14 +221,17 @@ async function withUpgradeableResponse<T>(fn: () => Promise<T>): Promise<T> {
 export type HarnessEnv = {
   SESSION_SECRET: string;
   LOGIN_SECRET: string;
-  MCP_TOKEN: string;
-  OWNER_EMAILS: string;
   BROWSER?: unknown;
   [k: string]: unknown;
 };
 
+/** The workspace's first admin; tests that care about roles use other people. */
+export const ADMIN = "admin@example.com";
+
 export type Harness = {
-  hub: ArtifactHub;
+  hub: Workspace;
+  /** The global directory the workspace reports to (names, channels, memberships). */
+  directory: Directory;
   ctx: FakeCtx;
   env: HarnessEnv;
   /** Every connection opened via connect(), in order. */
@@ -240,18 +251,21 @@ export type Connection = {
 };
 
 export async function createHub(env: Partial<HarnessEnv> = {}): Promise<Harness> {
-  const { ArtifactHub } = await import("../../src/worker/hub.ts");
+  const { Workspace } = await import("../../src/worker/hub.ts");
+  const { Directory } = await import("../../src/worker/directory.ts");
   const ctx = new FakeCtx();
   const fullEnv: HarnessEnv = {
     SESSION_SECRET: "test-session-secret",
     LOGIN_SECRET: "test-login-secret",
-    MCP_TOKEN: "test-mcp-token",
-    OWNER_EMAILS: "owner@example.com",
     BROWSER: undefined, // renderCheck returns {status:"skipped"} without touching the network
     ...env,
   };
-  const hub = new ArtifactHub(ctx as never, fullEnv as never);
-  return { hub, ctx, env: fullEnv, connections: [] };
+  const directory = new Directory(new FakeCtx() as never, fullEnv as never);
+  fullEnv.DIRECTORY = { getByName: () => directory };
+  directory.createWorkspace("acme", "Acme");
+  const hub = new Workspace(ctx as never, fullEnv as never);
+  await hub.provision({ slug: "acme", name: "Acme", admin: ADMIN });
+  return { hub, directory, ctx, env: fullEnv, connections: [] };
 }
 
 /** Open a sync socket through hub.fetch (X-Art-* headers + Upgrade: websocket). */
@@ -286,4 +300,60 @@ export async function advanceAlarm(h: Harness): Promise<boolean> {
   h.ctx.alarm = null;
   await h.hub.alarm();
   return true;
+}
+
+// ---- R2 ---------------------------------------------------------------------------
+
+/** Just enough of an R2 bucket for backups: put, get, head, delete and delimited list. */
+export class FakeR2 {
+  readonly objects = new Map<string, string>();
+  async put(key: string, value: string) {
+    this.objects.set(key, value);
+  }
+  async get(key: string) {
+    const v = this.objects.get(key);
+    return v === undefined ? null : { text: async () => v };
+  }
+  async head(key: string) {
+    return this.objects.has(key) ? { key } : null;
+  }
+  async delete(keys: string | string[]) {
+    for (const k of Array.isArray(keys) ? keys : [keys]) this.objects.delete(k);
+  }
+  async list(opts: { prefix?: string; delimiter?: string; cursor?: string }) {
+    const keys = [...this.objects.keys()].filter((k) => k.startsWith(opts.prefix ?? "")).sort();
+    if (!opts.delimiter) return { objects: keys.map((key) => ({ key })), delimitedPrefixes: [], truncated: false };
+    const prefixes = new Set<string>();
+    const objects: { key: string }[] = [];
+    for (const k of keys) {
+      const rest = k.slice((opts.prefix ?? "").length);
+      const i = rest.indexOf(opts.delimiter);
+      if (i >= 0) prefixes.add((opts.prefix ?? "") + rest.slice(0, i + 1));
+      else objects.push({ key: k });
+    }
+    return { objects, delimitedPrefixes: [...prefixes], truncated: false };
+  }
+}
+
+// ---- KV -----------------------------------------------------------------------------
+
+/** In-memory KV with the calls the OAuth library makes. */
+export class FakeKV {
+  readonly data = new Map<string, string>();
+  async get(key: string, type?: "json" | "text" | { type: "json" | "text" }) {
+    const v = this.data.get(key);
+    if (v === undefined) return null;
+    const t = typeof type === "object" ? type.type : type;
+    return t === "json" ? JSON.parse(v) : v;
+  }
+  async put(key: string, value: string) {
+    this.data.set(key, value);
+  }
+  async delete(key: string) {
+    this.data.delete(key);
+  }
+  async list(opts: { prefix?: string; cursor?: string; limit?: number } = {}) {
+    const keys = [...this.data.keys()].filter((k) => k.startsWith(opts.prefix ?? "")).sort().map((name) => ({ name }));
+    return { keys, list_complete: true, cursor: "" };
+  }
 }

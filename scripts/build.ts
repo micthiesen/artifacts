@@ -18,6 +18,8 @@ await build({ ...common, entryPoints: ["src/shell/shell.ts"], outfile: "dist/kit
 await build({ ...common, entryPoints: ["src/shell/account.ts"], outfile: "dist/kit/static/account.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/home.ts"], outfile: "dist/kit/static/home.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/me.ts"], outfile: "dist/kit/static/me.js", platform: "browser" });
+await build({ ...common, entryPoints: ["src/shell/settings.ts"], outfile: "dist/kit/static/settings.js", platform: "browser" });
+await build({ ...common, entryPoints: ["src/shell/admin.ts"], outfile: "dist/kit/static/admin.js", platform: "browser" });
 // The service worker must be served from the root to control every page.
 await build({ ...common, entryPoints: ["src/shell/sw/sw.ts"], outfile: "dist/kit/sw.js", platform: "browser" });
 await cp("src/shell/shell.css", "dist/kit/static/shell.css");
@@ -63,10 +65,4 @@ await build({
   loader: { ".css": "text", ".md": "text" },
   define: { __ASSET_VERSION__: JSON.stringify(assetVersion) },
 });
-await build({
-  ...common,
-  entryPoints: ["src/auth/index.ts"],
-  outfile: "build/auth/index.js",
-  platform: "neutral",
-});
-console.log(`built build/worker (assets ${assetVersion}), build/auth, dist/kit/static`);
+console.log(`built build/worker (assets ${assetVersion}), dist/kit/static`);

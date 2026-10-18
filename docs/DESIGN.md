@@ -1,91 +1,115 @@
 # Design
 
-Artifacts lets agents publish small interactive pages that verified
-people can open, with per-viewer browser storage and live shared state. Agents
-write and edit artifacts only through the MCP server. One Cloudflare Worker
-serves everything from one origin (a custom domain, or `workers.dev`).
+Artifacts lets agents publish small interactive pages (reports, dashboards,
+polls, checklists, mini apps) that specific people open in a browser, with
+per-viewer storage, live shared state and comments. This document records what
+the system is for and the decisions behind it. The code is the reference for
+how each piece works.
 
-## Pieces
+## Goals
 
-| Piece | Where | Role |
-|---|---|---|
-| Worker `artifacts` | `src/worker/` | Routes, sessions, MCP, compile-on-write, frame documents |
-| Durable Object `ArtifactHub` | `src/worker/hub.ts` | One SQLite instance: artifacts, files, history, ACL, shared state, sync WebSockets |
-| Worker `artifacts-auth` | `src/auth/` | Sits behind Cloudflare Access (email one-time PIN). Turns a verified Access identity into a signed one-time code for the main Worker |
-| Shell | served by the Worker at `/a/<id>` | Parent page: title bar, owns the sync WebSocket and browser storage, bridges them to the frame |
-| Frame | `/frame/<id>?v=<version>&t=<token>` | Sandboxed document (`Content-Security-Policy: sandbox allow-scripts ...`, opaque origin, no network) that renders the artifact |
-| Kit | `src/kit/`, built to `dist/kit/` and served at `/kit/v1/` | React, `@a/ui` components, `@a/hooks`, the frame runtime, `lucide-react`, `recharts`, Pele (Mermaid diagrams, lazy-loaded per diagram type), theme CSS |
+- **One person or a whole team.** The same deployment serves the owner's own
+  workspace and paying teams. Nothing about the owner's daily use gets harder
+  because other workspaces exist.
+- **No fixed cost per workspace.** An idle workspace costs only its stored
+  bytes. Everything runs on one Worker on Workers Paid; there are no servers,
+  databases or per-tenant resources to provision.
+- **No manual operations.** Alchemy creates every Cloudflare resource,
+  including DNS, routes, the email sender and generated secrets. Schema
+  changes ship as code and apply themselves.
+- **Agents write, people read and react.** Agents create and edit artifacts
+  only through MCP. People view, comment, vote and edit shared state in the
+  browser. Owners manage sharing from the page.
 
-## Security model
+## Workspaces
 
-- **Login:** a viewer signs in once through Access (email PIN) on the auth Worker. The main Worker then issues its own `__Host-` session cookie, signed with HMAC. Every request checks the artifact's ACL, so removing an email takes effect on that viewer's next request.
-- **Frames:** each frame gets an opaque origin, through both the CSP `sandbox` directive and the iframe `sandbox` attribute. It can't read the shell's cookies or storage, or another artifact's. The CSP blocks all network access except kit scripts, styles and fonts, so artifact code can't exfiltrate data.
-- **Frame storage:** browser storage and shared state reach the frame only through the shell's postMessage bridge (`src/shared/protocol.ts`). The shell scopes both to one artifact.
-- **Frame URL token:** it carries a short-lived HMAC bound to artifact, version and viewer. Its only power is to fetch that frame document.
-- **MCP:** requires a bearer token. Agent writes are compiled and validated, and are rejected atomically if any file fails.
+A workspace is the unit of tenancy, isolation and (later) billing. Each one is
+its own Durable Object with its own SQLite database, served at
+`<slug>.<domain>`. The hostname picks the database, so a request never
+consults anything global to find its data, and one workspace's load or size
+never affects another's.
 
-## Artifact format
+Each workspace origin is also a separate browser origin, so sessions, storage
+and service workers are separated by the browser as well as by the server.
 
-An artifact is a set of files with exactly one entry: `index.mdx`, `index.md`
-or `app.tsx`. Other `*.tsx` files are importable by relative path, and
-`data/*.json` files are readable with `useData(path)`. Allowed imports:
-`react`, `@a/ui`, `@a/hooks`, `lucide-react`, `recharts`, and relative files.
-MDX files get every `@a/ui` component without imports, through
-`useMDXComponents`.
+A small global directory records which workspaces exist, who belongs to which,
+and per-person settings that should follow someone everywhere (display name,
+notification channels). It is consulted at sign-in, when a workspace is
+created and when notifications go out, never on ordinary page loads.
 
-Compile turns each source file into an ES module and rewrites relative imports
-to `@art/<path>` specifiers. The frame's import map points those at data URLs,
-and points the bare kit specifiers at `/kit/v1/*.js`. Tailwind classes used in
-artifact source are compiled into a per-version stylesheet on top of the kit
-CSS.
+The apex domain is the front door: a splash page, sign-in, the list of your
+workspaces, your notification settings and the operator console.
 
-## Write-time checks
+## People and roles
 
-- **Static, at compile time:** every write is checked before saving. Syntax errors, imports outside the allowlist, named imports a module doesn't export (from the generated `src/worker/kit-exports.json`, which covers lucide icons too), and MDX components the kit doesn't provide all reject the write, with "did you mean" suggestions.
-- **Render check, after saving:**
-  - Cloudflare Browser Run loads the frame top-level in check mode. The runtime boots without a shell and writes `<pre id="art-check">{status, errors, textLength}</pre>`, which the Worker scrapes.
-  - Check-mode frames are the only frames served without the CSP `sandbox` directive: Browser Run doesn't execute module scripts from an opaque origin. They still have `connect-src 'none'`, need a 2-minute token, and the checker's browser has no cookies.
-  - Browser Run's scrape doesn't reliably honour `waitForSelector`, so the check also waits for network idle plus 1.5 s.
-- **Rate limit:** the free plan allows one Browser Run call every 10 s. The hub reserves slots, waits inline when the next slot is under 8 s away, and otherwise queues the check on a Durable Object alarm. Results are stored per version and failures go to `artifact_errors`.
+- **Operator**: whoever runs the deployment (`OPERATOR_EMAILS`). Creates,
+  suspends and deletes workspaces and sees their usage from `/admin` on the
+  apex, and can export, back up and restore any workspace's data. Being
+  operator grants no role inside a workspace: no sign-in as anyone, no agent
+  access. The end-to-end checks' test identities only accept reserved test
+  domains (example.com, .test, .invalid).
+- **Workspace admin**: manages members, agent tokens and approved data hosts,
+  and can manage every artifact in the workspace, so nothing is stranded when
+  someone leaves.
+- **Member**: connects their own agent and creates artifacts. Sees artifacts
+  they own and ones shared with them or with the whole workspace.
+- **Guest**: anyone with a verified email who has been shared on a specific
+  artifact. Guests need no membership, which is how outside clients are
+  invited and why they can stay free when members are billed.
 
-## Assets, live data and the owner menu
+Per artifact, the owner (whose agent created it) and admins manage it; shares
+grant `edit` (shared state) or `view`. An agent acts as the person whose token
+or OAuth grant it uses, with that person's access.
 
-- **Assets:** `artifact_asset` stores files (≤1.5 MB, ≤20 MB per artifact) in the hub's SQLite. Frames get `/asset/<id>/<path>?t=<frame token>` URLs in their boot data, and the frame CSP allows only that path for images and media. Assets are served with a `sandbox` CSP so an SVG opened directly can't run script.
-- **Live data:** `artifact_source` maps a `data/*.json` file to an HTTPS JSON URL with an interval (15 min to 7 days) and an optional dot-path `pick`. A 15-minute Worker cron calls the hub, which fetches due sources (no credentials, 10 s timeout, 1 MB cap) and swaps the file and build in place without a new version or render check. Only hosts the owner approved in the owner menu (`allowed_hosts`) are fetched. Agents can't approve hosts, because the MCP has no tool for it.
-- **Owner menu:** `/api/a/<id>` gives the owner an overview, and `POST /api/a/<id>/<tool>` runs a whitelisted subset of the MCP tools (share, link, rename, revert, delete, source, check), so the UI and agents share one validated code path.
+## Sign-in
 
-## Comments, activity and visits
+People sign in once on the apex with an emailed one-time code; workspaces
+receive a short-lived signed hand-off and set their own session cookie.
+Presigned links sign one person straight into one artifact, and that session
+opens only that artifact; the rest of the workspace needs a real sign-in. Codes are
+rate-limited per address and globally, because anyone can request one.
 
-- **Threads:** `threads` and `comments` tables in the hub. Any signed-in viewer who can open an artifact may comment (view role included); shared state still needs edit access. Writes go over the sync socket (`comment`, `resolve`, `comment:delete`) and are broadcast as `thread` messages. MCP replies are stored with author `"agent"`.
-- **Anchors:** compile gives every top-level MDX block a `data-b` id (heading slug, then `<section>-<n>`; components are wrapped in a `div`) and a content hash, stored per version in `history.blocks`. A thread stores `{block, row, quote: {exact, prefix, suffix}, label}`. The frame runtime (`src/kit/annotate.ts`) re-finds anchors on every render, draws them with the CSS Custom Highlight API (no DOM changes around the text) and reports each as anchored, outdated (block there, text changed) or orphaned. The drawer lives in the shell, so artifact code can't read or forge comments.
-- **Stamped collab keys:** socket writes to `poll/`, `comments/`, `check/` and `notes/` keys are validated and stamped with the verified email: a vote must be your own, and only a comment's author (or an owner) can change or delete it.
-- **Activity log:** `events` (append-only, `seq` cursor, last 5000 per artifact) records versions with notes, threads, replies, resolves and shared-state changes (coalesced per key and person per minute). `artifact_activity` reads it with a cursor; there is no server-side model.
-- **Visits:** opening an artifact records the version in `seen`. The next visit gets the versions since, the blocks whose hash changed and removed headings, for the shell's "Updated since you last looked" bar. `read_seq` drives unread counts on the index. A commit broadcasts `{t:"version"}` so open pages show an "Updated" pill.
+Agents connect with OAuth (each workspace is its own authorization server and
+MCP resource) or with a personal token created on the workspace's settings
+page, for clients that can't run a browser sign-in. Both identify a person.
 
-## Notifications
+## Isolation
 
-- **Who:** owners default to every comment on their artifacts; everyone else to replies in their threads and @mentions. Per-artifact levels (`watches`: all, participating, mute) are set from the avatar menu or `/me`. Page updates reach "all" watchers other than owners. Nobody is notified about their own actions or while they have the artifact open.
-- **When:** events add rows to `outbox`; one Durable Object alarm (shared with the render-check queue) fires 45 s after a comment or 10 min after an update (coalescing bursts, at most 30 min), groups rows per person and artifact into one message and sends at most 40 per run (free-plan subrequest limit), re-arming if more remain. No cron.
-- **Channels** (`channels`, managed at `/me`): Web Push (VAPID keys in the Worker env; iOS needs the site added to the Home Screen), Pushover (one operator app token, `PUSHOVER_TOKEN`; users paste their user key, validated on save), ntfy (random private topic; ntfy.sh rate-limits anonymous publishing from shared Worker IPs, so users add an ntfy.sh access token or their own server), and webhooks (HMAC-signed JSON; Discord webhook URLs get Discord's format). Adapters are hand-written `fetch` calls in `src/worker/notify.ts`; Web Push encryption (RFC 8291) is in `webpush.ts`. A channel is paused after 5 failures and deleted when a push endpoint returns 404/410.
+Artifact code is untrusted. It renders in a sandboxed, opaque-origin frame
+with no network access; storage, shared state and comments reach it only
+through the shell's postMessage bridge, and the shell scopes all of them to
+one artifact. Comments live in the shell, so artifact code can't read or
+forge them. Every write from a person is checked against their role on the
+server, and collab keys (votes, comments, checklists) are stamped with the
+verified email.
 
-## Link previews and print
+## Data and schema changes
 
-- **Previews:** requests from link-preview fetchers (Slackbot, Discordbot, iMessage's facebookexternalhit, …) get a 200 card before any sign-in redirect. Private artifacts get a generic card; owners can opt in per artifact (`preview`), and public artifacts always get the title, description and the latest render-check screenshot at a signed `/og/<id>.jpg` URL. Presigned `/s/` links are never redeemed by a fetcher.
-- **Print:** the avatar menu asks the frame to print its own document (`allow-modals` is in the sandbox). `src/kit/print.ts` expands tabs, accordions and limited tables first; `print.css` switches to a light palette and hides interactive UI.
+- **Migrate forward, never carry compatibility.** Each Durable Object keeps a
+  numbered list of migrations and runs the pending ones when it first wakes
+  after a deploy. Old shapes are converted, not supported alongside new ones.
+- **Store each file version once.** History records which content each path
+  had; identical content is shared across versions, so long edit histories
+  cost little.
+- **Binary as binary.** Assets and screenshots are stored as blobs.
+- **Backups stream.** Each workspace writes its own nightly backup to R2 in
+  bounded pages (assets as raw objects), only when something changed, so
+  backup size is never limited by Worker memory. Restores run server-side.
+  Durable Object point-in-time restore was tried and dropped: on 2026-10-16,
+  bookmark restores on a test stage didn't land at the requested times.
 
-## Backups
+## Expected limits
 
-`GET /admin/export` (bearer MCP token) returns every table as JSON (including notification channel configs, so treat exports as secrets) (`bun scripts/export.ts` saves it locally), and `POST /admin/import` loads one back, replacing everything in one transaction (`bun scripts/import.ts`). With an R2 bucket bound, the 10:00 UTC cron also writes a dated copy there and keeps 30. A point-in-time restore endpoint was tried and removed: on 2026-10-16, Durable Object bookmark restores on a test stage didn't land at the requested times, especially after an earlier restore.
+A workspace holds up to 10 GB of SQLite, roughly tens of thousands of typical
+artifacts, and comfortably serves hundreds of concurrently active viewers.
+The number of workspaces is unbounded. If one artifact ever needs thousands of
+simultaneous writers, its live state moves to its own Durable Object; until
+then that is deliberately not built.
 
-## Presigned links
+## Deliberately not built yet
 
-`artifact_link` and `artifact_share` return `/s/<code>` links. Each code is an HMAC token (`LOGIN_SECRET`) naming an email and an artifact, valid for 7 days by default and 30 at most. Opening a link re-checks that the email is the owner or on the share list, sets a normal session cookie and redirects to the artifact. Email sign-in through Access is the fallback once a link expires.
-
-## Shared state
-
-Shared state is a key-value map per artifact. The last write per key wins, in
-the order the server receives writes, and the server numbers each write with a
-`seq`. To avoid lost concurrent adds in a list, use one key per item, such as
-`todo/<uuid>`. The shell keeps a WebSocket to the hub, which uses WebSocket
-hibernation. View-role viewers and anonymous public viewers can read shared
-state but not write it.
+Billing, self-serve workspace signup, SSO/SCIM, custom domains per workspace,
+custom roles and groups (sharing with `@domain` or the whole workspace covers
+most of it), audit-log export (the activity log already records the events)
+and R2 storage for large assets (only needed once files over the 2 MB SQLite
+row limit are).

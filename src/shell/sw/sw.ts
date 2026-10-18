@@ -29,12 +29,15 @@ sw.addEventListener("push", (event: PushEvent) => {
 sw.addEventListener("notificationclick", (event: NotificationEvent) => {
   event.notification.close();
   const url = new URL((event.notification.data as { url?: string } | null)?.url ?? "/", sw.location.origin);
-  // Only open pages on this origin.
-  const target = url.origin === sw.location.origin ? url.href : sw.location.origin;
+  // Push is set up on the apex; notifications open workspace pages. Only open
+  // https pages on this site's own domain.
+  const ours = url.protocol === "https:" && (url.hostname === sw.location.hostname || url.hostname.endsWith(`.${sw.location.hostname}`));
+  const target = ours ? url.href : sw.location.origin;
   event.waitUntil(
     (async () => {
       const windows = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
-      const same = windows.find((w) => new URL(w.url).pathname === new URL(target).pathname);
+      const page = (u: string) => new URL(u).origin + new URL(u).pathname;
+      const same = windows.find((w) => page(w.url) === page(target));
       if (same) {
         await same.focus();
         if (same.url !== target) await same.navigate(target).catch(() => undefined);

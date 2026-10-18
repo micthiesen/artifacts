@@ -1,8 +1,10 @@
 # Artifacts guide
 
-An artifact is a small set of files rendered as a page at `/a/<id>`. Only the
-owner and people it's shared with can open it. They sign in with a one-time
-email code, so they need no account.
+An artifact is a small set of files rendered as a page at `/a/<id>` in your
+workspace. You act as the user who connected you: what you create is theirs,
+and you can see and change what they can. Only its owner, workspace admins and
+people it's shared with can open it. They sign in with a one-time email code,
+so they need no account.
 
 ## Files
 
@@ -18,7 +20,7 @@ email code, so they need no account.
   - Mermaid for everything else: flows, sequences, states, data models, architecture, plans and schedules (gantt, timeline, kanban), org and mind maps, and the quantitative shapes `Chart` lacks (quadrant, sankey, radar, treemap, venn). Write a ```` ```mermaid ```` fenced block in MDX or Markdown, or `<Diagram code={...} />` in TSX. It renders as themed, responsive SVG; syntax errors come back from the write with a line number. Mermaid `pie` and `xychart` are rejected: use `Chart`.
   - The full list of Mermaid types and when to pick each is in the kit reference below.
 - **Images and files:** upload them with `artifact_asset` (path `assets/<name>`), then use `![alt](assets/logo.png)` in MDX or `useAsset("assets/logo.png")` in code.
-- **Live data:** `artifact_source` keeps a `data/*.json` file updated from a public HTTPS JSON URL every 15 minutes or more. Nothing is fetched until the user approves the URL's host in the artifact's owner menu; tell them when that's needed.
+- **Live data:** `artifact_source` keeps a `data/*.json` file updated from a public HTTPS JSON URL every 15 minutes or more. Nothing is fetched until a person approves the URL's host in the artifact's Manage panel or workspace settings; tell the user when that's needed.
 - **Styling:** Tailwind classes work. Use the theme tokens (`bg-muted`, `text-muted-foreground`, `border`, `text-primary`, `bg-card`) rather than raw colors so artifacts match the (dark-only) theme.
 
 ## Storage
@@ -47,6 +49,6 @@ email code, so they need no account.
 ## Sharing
 
 - **People:** `artifact_share` adds people by email with role `view` or `edit`, removes people, or sets `public: true` for a read-only link anyone can open.
-- **Domains:** share with `"@example.com"` to let everyone with a verified email at that domain in. A person's own entry overrides the domain role. Make an `artifact_link` per person, or they sign in with their email.
+- **Domains and the workspace:** share with `"@example.com"` to let everyone with a verified email at that domain in, or with `"workspace"` for every member of this workspace. A person's own entry overrides the domain role, which overrides the workspace role. Make an `artifact_link` per person, or they sign in with their email.
 - **Link previews:** links pasted into Slack, iMessage and similar apps show a generic card for private artifacts. `artifact_update` with `preview: true` shows the title, description and a screenshot instead; only do that when the user asks.
-- **Links:** to hand the user an artifact, give them an `artifact_link` URL (it defaults to the owner and opens with no login). `artifact_share` returns a sign-in link for each person it adds. Each link signs in as one email, so a link goes only to its own person.
+- **Links:** to hand the user an artifact, give them an `artifact_link` URL (it defaults to the user you act for and opens with no login). `artifact_share` returns a sign-in link for each person it adds. Each link signs in as one email, so a link goes only to its own person.

@@ -162,6 +162,10 @@ export type ShellBoot = {
   watch?: WatchLevel;
   /** Set when the owner archived the artifact. */
   archivedAt?: string;
+  /** Origin of the apex, where account settings live. */
+  apex: string;
+  /** The viewer is a member of this workspace (not just a guest). */
+  member: boolean;
 };
 
 export type WatchLevel = "all" | "participating" | "mute";

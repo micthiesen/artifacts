@@ -550,3 +550,68 @@ div.thread-anchor { cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .list li, .row-action, .toast { transition: none; animation: none; }
 }
+
+/* Settings and operator pages share the profile layout. */
+.profile input[type=email] {
+  height: 2.25rem; min-width: 0; flex: 1 1 auto; padding: 0 .7rem; border: 1px solid var(--input); border-radius: .55rem;
+  background: color-mix(in oklab, var(--bg) 60%, transparent); color: var(--fg); font: inherit; font-size: 14px;
+}
+.profile .row + .row { margin-top: .5rem; }
+.profile .row select { flex: 0 0 auto; width: auto; }
+.content.wide { max-width: 56rem; }
+.card-section .subhead { margin: 1.1rem 0 .4rem; font-size: 14px; font-weight: 600; }
+.card-section .channel-actions { flex-wrap: wrap; align-items: center; }
+
+/* Sign-in and consent. */
+.code-input { font-variant-numeric: tabular-nums; letter-spacing: .25em; font-size: 18px; max-width: 12rem; }
+.resend { margin-top: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; font-size: 14px; }
+.consent-actions { display: flex; gap: .5rem; margin-top: 1.25rem; }
+.consent p { line-height: 1.6; }
+
+/* Splash: the apex for people who aren't signed in. Audience: developers. */
+.bar .bar-link { color: var(--muted-fg); font-size: 14px; margin-right: .25rem; }
+.bar .bar-link:hover { color: var(--fg); text-decoration: none; }
+.splash { max-width: 68rem; margin: 0 auto; padding: 4.5rem 1.25rem 3rem; }
+.splash-hero { max-width: 44rem; }
+.splash-notice { display: inline-block; margin: 0 0 1.25rem; padding: .35rem .7rem; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--muted-fg); }
+.splash-kicker {
+  margin: 0 0 .9rem; font-size: 12.5px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase;
+  background: var(--signal); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.splash h1 { font-size: clamp(2rem, 4.4vw, 3rem); line-height: 1.08; letter-spacing: -.035em; margin: 0 0 1.1rem; text-wrap: balance; }
+.splash h2 { font-size: 1.35rem; letter-spacing: -.02em; margin: 0 0 .75rem; }
+.splash-lede { font-size: 17px; line-height: 1.6; margin: 0 0 1.75rem; max-width: 38rem; }
+.splash-actions { margin: 0; display: flex; flex-wrap: wrap; gap: .6rem; }
+.splash-actions .button { height: 2.85rem; padding: 0 1.3rem; font-size: 15.5px; }
+.splash-split, .splash-self { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2rem; align-items: center; margin-top: 4rem; }
+.splash-self { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding-top: 3rem; border-top: 1px solid var(--border); }
+.splash-code { border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: oklch(0.13 0.016 275); box-shadow: var(--shadow-card); overflow: hidden; min-width: 0; }
+.splash-code-head { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem .9rem; border-bottom: 1px solid var(--border); font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg); }
+.splash-code pre { margin: 0; padding: .9rem 1rem 1.1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.splash-code code { font: 13px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg); }
+.splash-list ul, .splash-card ul, .splash-facts { margin: 0; padding: 0; list-style: none; display: grid; gap: .7rem; }
+.splash-list li, .splash-card li, .splash-facts li { position: relative; padding-left: 1.1rem; font-size: 14.5px; line-height: 1.55; color: var(--muted-fg); }
+.splash-list li::before, .splash-card li::before, .splash-facts li::before {
+  content: ""; position: absolute; left: 0; top: .6em; width: .4rem; height: .4rem; border-radius: 999px; background: var(--signal);
+}
+.splash-list strong, .splash-facts strong { color: var(--fg); font-weight: 600; }
+.splash li code { font-size: 12.5px; color: var(--accent-fg); }
+.splash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: .9rem; margin-top: 4rem; }
+.splash-card {
+  position: relative; padding: 1.2rem 1.2rem 1.3rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px);
+  background: var(--card); box-shadow: var(--shadow-card); overflow: hidden;
+}
+.splash-card::before {
+  content: ""; position: absolute; left: 1.2rem; right: 1.2rem; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--signal-from) 70%, transparent), color-mix(in oklab, var(--signal-to) 60%, transparent), transparent);
+}
+.splash-card h3 { margin: 0 0 .35rem; font-size: 16px; letter-spacing: -.01em; }
+.splash-card > p { margin: 0 0 .9rem; font-size: 14px; line-height: 1.55; }
+.splash-self p { line-height: 1.6; margin: 0 0 1.1rem; }
+.splash-foot { margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border); font-size: 13.5px; }
+.splash-foot a { color: var(--muted-fg); }
+@media (max-width: 760px) {
+  .splash { padding-top: 2.5rem; }
+  .splash-split, .splash-self { grid-template-columns: minmax(0, 1fr); margin-top: 2.75rem; }
+  .splash-grid { margin-top: 2.75rem; }
+}

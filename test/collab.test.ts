@@ -12,7 +12,7 @@ const realFetch = globalThis.fetch;
 let sent: { url: string; init: RequestInit }[] = [];
 
 async function make() {
-  const r = await h.hub.create({ title: "Plan", files });
+  const r = await h.hub.create({ title: "Plan", files, owner: OWNER });
   if (!r.ok) throw new Error(JSON.stringify(r.errors));
   h.hub.share(r.id, { add: [{ email: DANA, role: "view" }, { email: SAM, role: "edit" }] });
   return r.id;
@@ -23,7 +23,7 @@ function last(conn: { socket: { messages: unknown[] } }) {
 }
 
 function ntfy(email: string) {
-  return h.hub.addChannel(email, "ntfy", { server: "https://ntfy.sh", topic: `topic-${email.split("@")[0]}` }, "ntfy");
+  return h.directory.addChannel(email, "ntfy", { server: "https://ntfy.sh", topic: `topic-${email.split("@")[0]}` }, "ntfy");
 }
 
 /** Run every queued notification now and return what was sent, by ntfy topic. */
@@ -34,7 +34,7 @@ async function deliver() {
 }
 
 beforeEach(async () => {
-  h = await createHub({ OWNER_EMAILS: OWNER });
+  h = await createHub();
   sent = [];
   globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
     sent.push({ url: String(url), init: init ?? {} });
@@ -137,7 +137,7 @@ test("visits report what changed since last time, and unread comments", async ()
   await h.hub.editText(id, "index.mdx", [{ oldText: "We pay $10 a month.", newText: "We pay $12 a month." }], undefined, { note: "New price" });
   await h.hub.editText(id, "index.mdx", [{ oldText: "## Risks\n\nNone yet.\n", newText: "" }], undefined, { note: "Dropped risks" });
   h.hub.addComment(id, SAM, { text: "Looks good" });
-  const listed = h.hub.list({ email: DANA, owner: false })[0];
+  const listed = h.hub.list(DANA)[0];
   expect(listed).toMatchObject({ unseen: true, unread: 1 });
 
   const v = h.hub.visit(id, DANA);
@@ -145,12 +145,12 @@ test("visits report what changed since last time, and unread comments", async ()
   expect(v.since!.versions.map((x) => x.note)).toEqual(["Dropped risks", "New price"]);
   // Still shown on a reload right after, but the artifact counts as seen.
   expect(h.hub.visit(id, DANA).since?.fromVersion).toBe(1);
-  expect(h.hub.list({ email: DANA, owner: false })[0]).toMatchObject({ unseen: false, unread: 1 });
+  expect(h.hub.list(DANA)[0]).toMatchObject({ unseen: false, unread: 1 });
 });
 
 test("previews are generic unless opted in or public", async () => {
   const id = await make();
-  expect(h.hub.previewInfo(id)).toMatchObject({ rich: false, image: null });
+  expect(h.hub.previewInfo(id)).toMatchObject({ rich: false, image: false });
   h.hub.updateMeta(id, { preview: true });
   expect(h.hub.previewInfo(id)).toMatchObject({ rich: true, title: "Plan" });
   h.hub.updateMeta(id, { preview: false });
@@ -196,7 +196,7 @@ test("comment notifications follow watch levels, mentions and presence", async (
 test("several comments become one message", async () => {
   const id = await make();
   await ntfy(OWNER);
-  h.hub.setName(DANA, "Dana Lee");
+  h.directory.setName(DANA, "Dana Lee");
   h.hub.addComment(id, DANA, { text: "one" }, ORIGIN);
   h.hub.addComment(id, SAM, { text: "two" }, ORIGIN);
   h.hub.addComment(id, DANA, { text: "three" }, ORIGIN);
@@ -205,7 +205,7 @@ test("several comments become one message", async () => {
   expect(out[0].body).toBe("3 new comments from Dana Lee and sam");
 });
 
-test("updates reach 'all' watchers who aren't owners; addressed threads notify their author", async () => {
+test("updates reach 'all' watchers except the person whose agent made them; addressed threads notify their author", async () => {
   const id = await make();
   await ntfy(OWNER);
   await ntfy(DANA);
@@ -214,8 +214,8 @@ test("updates reach 'all' watchers who aren't owners; addressed threads notify t
   h.hub.setWatch(OWNER, id, "all");
   const t = h.hub.addComment(id, DANA, { text: "Typo in intro" }, ORIGIN);
   await deliver();
-  await h.hub.editText(id, "index.mdx", [{ oldText: "Intro text", newText: "Intro" }], undefined, { note: "Fixed typo", resolves: [t.id], origin: ORIGIN });
-  await h.hub.editText(id, "index.mdx", [{ oldText: "None yet.", newText: "Vendor lock-in." }], undefined, { note: "Added a risk", origin: ORIGIN });
+  await h.hub.editText(id, "index.mdx", [{ oldText: "Intro text", newText: "Intro" }], undefined, { note: "Fixed typo", resolves: [t.id], origin: ORIGIN, onBehalf: OWNER });
+  await h.hub.editText(id, "index.mdx", [{ oldText: "None yet.", newText: "Vendor lock-in." }], undefined, { note: "Added a risk", origin: ORIGIN, onBehalf: OWNER });
   const out = await deliver();
   const byTopic = Object.fromEntries(out.map((o) => [o.topic, o.body]));
   expect(byTopic["topic-sam"]).toBe("Updated to v3: Fixed typo; Added a risk");
@@ -231,21 +231,21 @@ test("failing channels are paused after repeated errors; gone push endpoints are
     h.hub.addComment(id, DANA, { text: `c${i}` }, ORIGIN);
     await h.hub.deliverDue(Date.now() + 3_600_000);
   }
-  const ch = h.hub.profile(OWNER).channels.find((c) => c.id === channel)!;
+  const ch = h.directory.profile(OWNER).channels.find((c) => c.id === channel)!;
   expect(ch.disabled).toBe(true);
   expect(ch.lastError).toBeTruthy();
-  h.hub.recordChannelResult(channel, { ok: false, error: "gone", gone: true });
-  expect(h.hub.profile(OWNER).channels).toEqual([]);
+  h.directory.recordChannelResult(channel, { ok: false, error: "gone", gone: true });
+  expect(h.directory.profile(OWNER).channels).toEqual([]);
 });
 
 test("profile lists watches with defaults", async () => {
   const id = await make();
-  expect(h.hub.profile(DANA).watches).toEqual([{ id, title: "Plan", level: "participating", custom: false }]);
-  expect(h.hub.profile(OWNER).watches[0].level).toBe("all");
+  expect(h.hub.watches(DANA)).toEqual([{ id, title: "Plan", level: "participating", custom: false }]);
+  expect(h.hub.watches(OWNER)[0].level).toBe("all");
   h.hub.setWatch(DANA, id, "all");
-  expect(h.hub.profile(DANA).watches[0]).toMatchObject({ level: "all", custom: true });
+  expect(h.hub.watches(DANA)[0]).toMatchObject({ level: "all", custom: true });
   h.hub.setWatch(DANA, id, null);
-  expect(h.hub.profile(DANA).watches[0]).toMatchObject({ level: "participating", custom: false });
+  expect(h.hub.watches(DANA)[0]).toMatchObject({ level: "participating", custom: false });
 });
 
 test("deleting an artifact removes its threads, events and watches", async () => {
@@ -254,16 +254,16 @@ test("deleting an artifact removes its threads, events and watches", async () =>
   h.hub.setWatch(DANA, id, "all");
   h.hub.delete(id);
   expect(h.hub.activity({}).events).toEqual([]);
-  expect(h.hub.profile(DANA).watches).toEqual([]);
+  expect(h.hub.watches(DANA)).toEqual([]);
 });
 
-test("agent replies notify participants but not owners", async () => {
+test("agent replies notify participants but not the person the agent acts for", async () => {
   const id = await make();
   await ntfy(OWNER);
   await ntfy(DANA);
   const t = h.hub.addComment(id, DANA, { text: "Question" }, ORIGIN);
   await deliver();
-  h.hub.addComment(id, "agent", { thread: t.id, text: "Answer" }, ORIGIN);
+  h.hub.addComment(id, "agent", { thread: t.id, text: "Answer", onBehalf: OWNER }, ORIGIN);
   const out = await deliver();
   expect(out.map((o) => o.topic)).toEqual(["topic-dana"]);
   expect(out[0].body).toBe("Agent replied: “Answer”");
@@ -286,7 +286,7 @@ test("anonymous sockets get no threads; view role sees no share list", async () 
 test("a view-role reply doesn't reopen someone else's resolved thread", async () => {
   const id = await make();
   const t = h.hub.addComment(id, SAM, { text: "done?" }, ORIGIN, undefined, "edit");
-  h.hub.resolveThread(id, SAM, t.id, true, "edit");
+  h.hub.resolveThread(id, SAM, t.id, true, { role: "edit" });
   const after = h.hub.addComment(id, DANA, { thread: t.id, text: "." }, ORIGIN, undefined, "view");
   expect(after.resolved).not.toBeNull();
   const reopened = h.hub.addComment(id, SAM, { thread: t.id, text: "more" }, ORIGIN, undefined, "edit");
@@ -296,7 +296,7 @@ test("a view-role reply doesn't reopen someone else's resolved thread", async ()
 test("activity for one quiet artifact still returns its recent events; coalesced edits advance the cursor", async () => {
   const id = await make();
   h.hub.addComment(id, DANA, { text: "old comment" }, ORIGIN);
-  const other = await h.hub.create({ title: "Other", files });
+  const other = await h.hub.create({ title: "Other", files, owner: OWNER });
   if (!other.ok) throw new Error("create");
   for (let i = 0; i < 5; i++) h.hub.addComment(other.id, DANA, { text: `noise ${i}` }, ORIGIN);
   expect(h.hub.activity({ id, limit: 3 }).events.map((e) => e.type)).toEqual(["version", "thread"]);

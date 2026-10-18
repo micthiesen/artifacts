@@ -1,8 +1,9 @@
-// Stateless MCP server (Streamable HTTP, JSON responses only). Every tool acts
-// as the owner; the bearer token is the only credential.
-import type { ArtifactHub, HubApi, SourceInfo } from "./hub.ts";
+// Stateless MCP server (Streamable HTTP, JSON responses only). An agent acts as
+// the workspace member whose OAuth grant or agent token it presented, with that
+// person's access to each artifact.
+import type { HubApi, SourceInfo, Workspace } from "./hub.ts";
 import type { Thread } from "../shared/protocol.ts";
-import { domainOf, isValidPrincipal, sharePrincipal } from "./principal.ts";
+import { isValidPrincipal, sharePrincipal } from "./principal.ts";
 import { describeCheck, type RenderCheck } from "./check.ts";
 import { signToken } from "./session.ts";
 import type { Env } from "./index.ts";
@@ -17,7 +18,18 @@ const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 const INSTRUCTIONS = `This server publishes small interactive pages (reports, dashboards, polls, checklists, mini apps) that verified people can open in a browser, with per-viewer browser storage and live shared state. Use these artifact_* tools, not Executor's built-in create-artifact, whenever you make an artifact. Call artifact_guide once before writing your first artifact in a session. Change existing artifacts with artifact_edit, artifact_patch_data or artifact_write_files; never recreate one to change it. Every write reports a render check; fix a failed one (or wait for a queued one with artifact_check) before giving the user a link. Hand the user an artifact_link URL (it opens with no login). Readers can comment; use artifact_activity to pick up their feedback and pass note and resolves on the edit that addresses it.`;
 
 type Hub = HubApi;
-type Ctx = { hub: Hub; origin: string; env: Env; /** Owner-menu calls act as the signed-in owner; MCP calls as "agent". */ actor?: string };
+export type Ctx = {
+  hub: Hub;
+  origin: string;
+  env: Env;
+  /** Workspace slug, bound into presigned links. */
+  slug: string;
+  /** The person acting: the agent's member, or the signed-in owner in the owner menu. */
+  person: string;
+  /** How writes are attributed: "agent" for MCP, the person's email for the owner menu. */
+  actor: string;
+};
+type Role = "view" | "edit" | "owner";
 type Json = Record<string, unknown>;
 
 type Tool = {
@@ -26,6 +38,8 @@ type Tool = {
   description: string;
   inputSchema: Json;
   annotations?: Json;
+  /** Role the person needs on args.id. Omitted for tools without an artifact. A function picks it from the arguments. */
+  need?: Role | ((args: Json, ctx: Ctx) => Role | null);
   run: (args: Json, ctx: Ctx) => Promise<ToolResult>;
 };
 
@@ -52,7 +66,8 @@ function changeOptions(args: Json, ctx: Ctx) {
   return {
     note: typeof args.note === "string" ? args.note.trim().slice(0, 200) : undefined,
     resolves: Array.isArray(args.resolves) ? args.resolves.map(String) : undefined,
-    actor: ctx.actor ?? "agent",
+    actor: ctx.actor,
+    onBehalf: ctx.actor === "agent" ? ctx.person : undefined,
     origin: ctx.origin,
   };
 }
@@ -69,7 +84,8 @@ const shareList = {
     properties: {
       email: {
         type: "string",
-        description: 'A person ("sam@example.com"), or "@example.com" for everyone with a verified email at that domain.',
+        description:
+          'A person ("sam@example.com"), "@example.com" for everyone with a verified email at that domain, or "workspace" for every member of this workspace.',
       },
       role: { type: "string", enum: ["view", "edit"], description: "edit may change shared state; view is read-only." },
     },
@@ -94,18 +110,14 @@ function guessType(path: string): string {
 const LINK_DEFAULT_DAYS = 7;
 const LINK_MAX_DAYS = 30;
 
-function ownerList(env: Env): string[] {
-  return (env.OWNER_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-}
-
 /** Presigned sign-in link: opens the artifact as `email`, within that email's access. */
 async function signInLink(ctx: Ctx, artifactId: string, email: string, days = LINK_DEFAULT_DAYS): Promise<string> {
   const ttl = Math.round(Math.min(Math.max(days, 1 / 24), LINK_MAX_DAYS) * 86400);
-  const code = await signToken(ctx.env.LOGIN_SECRET, "link", ttl, { e: email.toLowerCase(), a: artifactId });
+  const code = await signToken(ctx.env.LOGIN_SECRET, "link", ttl, { e: email.toLowerCase(), a: artifactId, w: ctx.slug });
   return `${ctx.origin}/s/${code}`;
 }
 
-async function writeResult(r: Awaited<ReturnType<ArtifactHub["create"]>>, ctx: Ctx, withScreenshot = false): Promise<ToolResult> {
+async function writeResult(r: Awaited<ReturnType<Workspace["create"]>>, ctx: Ctx, withScreenshot = false): Promise<ToolResult> {
   const { origin } = ctx;
   if (!r.ok) {
     const lines = r.errors.map((e) => `- ${e.path ? `${e.path}${"line" in e && e.line ? `:${e.line}` : ""}: ` : ""}${e.message}`);
@@ -156,10 +168,10 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
-    run: async (args, { hub, origin }) => {
+    run: async (args, { hub, origin, person }) => {
       const q = typeof args.query === "string" ? args.query.toLowerCase() : "";
       const archived = args.archived === true;
-      const all = await hub.list({ email: null, owner: true });
+      const all = await hub.list(person);
       const rows = all
         .filter((a) => Boolean(a.archivedAt) === archived)
         .filter((a) => !q || `${a.title} ${a.description}`.toLowerCase().includes(q))
@@ -169,6 +181,7 @@ export const TOOLS: Tool[] = [
           description: a.description,
           version: a.version,
           public: a.public,
+          role: a.role,
           updatedAt: a.updatedAt,
           archivedAt: a.archivedAt,
           url: url(origin, a.id),
@@ -205,7 +218,8 @@ export const TOOLS: Tool[] = [
         title: String(args.title),
         description: typeof args.description === "string" ? args.description : "",
         files: args.files as Record<string, string>,
-        actor: ctx.actor ?? "agent",
+        owner: ctx.person,
+        actor: ctx.actor,
       });
       if (r.ok && (Array.isArray(args.share) || typeof args.public === "boolean")) {
         await hub.share(r.id, { add: (args.share as never) ?? [], public: args.public as boolean | undefined });
@@ -230,6 +244,7 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
+    need: "view",
     run: async (args, { hub, origin }) => {
       const artifactId = String(args.id);
       const meta = await hub.meta(artifactId);
@@ -273,6 +288,7 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
+    need: "view",
     run: async (args, { hub }) => {
       const matches = await hub.grep(String(args.id), String(args.pattern), args.path as string | undefined);
       return {
@@ -307,6 +323,7 @@ export const TOOLS: Tool[] = [
       required: ["id", "path", "edits"],
       additionalProperties: false,
     },
+    need: "owner",
     run: async (args, ctx) =>
       writeResult(
         await ctx.hub.editText(String(args.id), String(args.path), args.edits as never, args.baseVersion as number | undefined, changeOptions(args, ctx)),
@@ -343,6 +360,7 @@ export const TOOLS: Tool[] = [
       required: ["id", "path", "ops"],
       additionalProperties: false,
     },
+    need: "owner",
     run: async (args, ctx) =>
       writeResult(
         await ctx.hub.patchData(String(args.id), String(args.path), args.ops as never, args.baseVersion as number | undefined, changeOptions(args, ctx)),
@@ -365,6 +383,7 @@ export const TOOLS: Tool[] = [
       required: ["id", "files"],
       additionalProperties: false,
     },
+    need: "owner",
     run: async (args, ctx) =>
       writeResult(
         await ctx.hub.writeFiles(
@@ -393,6 +412,7 @@ export const TOOLS: Tool[] = [
       required: ["id"],
       additionalProperties: false,
     },
+    need: "owner",
     run: async (args, { hub }) => {
       for (const k of ["archived", "preview"]) {
         if (args[k] !== undefined && typeof args[k] !== "boolean") return { isError: true, text: `${k} must be true or false.` };
@@ -423,6 +443,7 @@ export const TOOLS: Tool[] = [
       required: ["id"],
       additionalProperties: false,
     },
+    need: "owner",
     run: async (args, ctx) => {
       const { hub, origin } = ctx;
       for (const entry of [...((args.add as { email: string }[] | undefined) ?? []).map((a) => a.email), ...((args.remove as string[] | undefined) ?? [])]) {
@@ -437,10 +458,10 @@ export const TOOLS: Tool[] = [
       });
       if (!meta) return { isError: true, text: `No artifact ${args.id}` };
       const shares = meta.shares.length ? meta.shares.map((s) => `${s.email} (${s.role})`).join(", ") : "nobody";
-      // Links go to people; a domain share has no single person to sign in as.
+      // Links go to people; a domain or workspace share has no single person to sign in as.
       const added = ((args.add as { email: string }[] | undefined) ?? [])
         .map((a) => sharePrincipal(a.email))
-        .filter((p) => !p.startsWith("@"));
+        .filter((p) => p.includes("@") && !p.startsWith("@"));
       const links: Record<string, string> = {};
       for (const email of added) links[email] = await signInLink(ctx, meta.id, email);
       const linkText = added.length
@@ -456,27 +477,26 @@ export const TOOLS: Tool[] = [
     name: "artifact_link",
     title: "Artifacts: sign-in link",
     description:
-      "Artifacts: make a presigned link that opens an artifact already signed in as one email, with no login step. Defaults to the owner (the user), so use it when handing the user a link. The email must be the owner, shared directly, or at a shared @domain. Valid 7 days by default (max 30); unsharing still revokes it. Anyone holding the link acts as that email, so give each link only to its person.",
+      "Artifacts: make a presigned link that opens an artifact already signed in as one email, with no login step. Defaults to you (the user this agent acts for), so use it when handing the user a link. The email must already have access. Valid 7 days by default (max 30); unsharing still revokes it. Anyone holding the link acts as that email, so give each link only to its person.",
     inputSchema: {
       type: "object",
       properties: {
         id,
-        email: { type: "string", description: "Who the link signs in as. Default: the owner." },
+        email: { type: "string", description: "Who the link signs in as. Default: the user this agent acts for." },
         days: { type: "number", minimum: 0.05, maximum: 30, description: "Validity in days. Default 7." },
       },
       required: ["id"],
       additionalProperties: false,
     },
+    // A link for yourself needs only access; one for someone else is a sharing action.
+    need: (args, ctx) => (typeof args.email === "string" && args.email.trim() && args.email.trim().toLowerCase() !== ctx.person ? "owner" : "view"),
     run: async (args, ctx) => {
       const artifactId = String(args.id);
-      const owners = ownerList(ctx.env);
-      const email = (typeof args.email === "string" && args.email.trim() ? args.email : owners[0] ?? "").trim().toLowerCase();
-      if (!email) return { isError: true, text: "No owner email is configured; pass email." };
-      const meta = await ctx.hub.meta(artifactId);
-      if (!meta) return { isError: true, text: `No artifact ${artifactId}; see artifact_list.` };
-      if (!owners.includes(email) && !meta.shares.some((s) => s.email === email || s.email === domainOf(email))) {
-        return { isError: true, text: `${email} has no access to ${artifactId}. Share it first with artifact_share.` };
-      }
+      const email = (typeof args.email === "string" && args.email.trim() ? args.email : ctx.person).trim().toLowerCase();
+      const role = await ctx.hub.roleFor(artifactId, email);
+      if (!role) return { isError: true, text: `${email} has no access to ${artifactId}. Share it first with artifact_share.` };
+      // Links sign in as their person; never hand out one for someone who manages this artifact.
+      if (role === "owner" && email !== ctx.person) return { isError: true, text: `${email} manages ${artifactId}; they sign in themselves.` };
       const days = typeof args.days === "number" ? args.days : LINK_DEFAULT_DAYS;
       const link = await signInLink(ctx, artifactId, email, days);
       return { text: `Sign-in link for ${email} (valid ${days} days):\n${link}`, structured: { email, link, days } };
@@ -499,6 +519,7 @@ export const TOOLS: Tool[] = [
       required: ["id", "path"],
       additionalProperties: false,
     },
+    need: "owner",
     run: async (args, ctx) => {
       const artifactId = String(args.id);
       const path = String(args.path);
@@ -541,6 +562,7 @@ export const TOOLS: Tool[] = [
       required: ["id"],
       additionalProperties: false,
     },
+    need: "owner",
     run: async (args, ctx) => {
       const artifactId = String(args.id);
       const path = typeof args.path === "string" ? args.path : undefined;
@@ -585,6 +607,7 @@ export const TOOLS: Tool[] = [
       required: ["id"],
       additionalProperties: false,
     },
+    need: (args) => (args.set && typeof args.set === "object" ? "edit" : "view"),
     run: async (args, { hub }) => {
       const artifactId = String(args.id);
       if (args.set && typeof args.set === "object") await hub.setState(artifactId, args.set as never, null);
@@ -609,8 +632,10 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
-    run: async (args, { hub }) => {
+    need: (args) => (typeof args.id === "string" ? "view" : null),
+    run: async (args, { hub, person }) => {
       const r = await hub.activity({
+        email: person,
         id: typeof args.id === "string" ? args.id : undefined,
         since: typeof args.since === "number" ? args.since : undefined,
         limit: typeof args.limit === "number" ? args.limit : undefined,
@@ -646,6 +671,7 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
+    need: "view",
     run: async (args, { hub }) => {
       const all = await hub.threads(String(args.id));
       const threads = args.includeResolved ? all : all.filter((t) => !t.resolved);
@@ -673,9 +699,11 @@ export const TOOLS: Tool[] = [
       required: ["id"],
       additionalProperties: false,
     },
+    need: "view",
     run: async (args, ctx) => {
       const artifactId = String(args.id);
-      const actor = ctx.actor ?? "agent";
+      const actor = ctx.actor;
+      const onBehalf = actor === "agent" ? ctx.person : undefined;
       let thread: Thread | null = null;
       if (typeof args.text === "string" && args.text.trim()) {
         const anchor =
@@ -688,14 +716,14 @@ export const TOOLS: Tool[] = [
         thread = await ctx.hub.addComment(
           artifactId,
           actor,
-          { thread: typeof args.thread === "string" ? args.thread : undefined, anchor, text: args.text },
+          { thread: typeof args.thread === "string" ? args.thread : undefined, anchor, text: args.text, onBehalf },
           ctx.origin,
         );
       }
       if (typeof args.resolve === "boolean") {
         const target = thread?.id ?? (typeof args.thread === "string" ? args.thread : "");
         if (!target) return { isError: true, text: "resolve needs a thread id" };
-        thread = await ctx.hub.resolveThread(artifactId, actor, target, args.resolve, "agent", ctx.origin);
+        thread = await ctx.hub.resolveThread(artifactId, actor, target, args.resolve, { role: "agent", origin: ctx.origin, onBehalf });
       }
       if (!thread) return { isError: true, text: "Nothing to do: pass text and/or resolve." };
       return { text: `${describeThread(thread)}\n${url(ctx.origin, artifactId)}#thread=${thread.id}`, structured: { thread } };
@@ -708,6 +736,7 @@ export const TOOLS: Tool[] = [
       "Artifacts: recent runtime errors reported by viewers' browsers (newest first). Check after a change if someone reports a problem.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { readOnlyHint: true },
+    need: "view",
     run: async (args, { hub }) => {
       const errors = await hub.errors(String(args.id));
       return {
@@ -722,6 +751,7 @@ export const TOOLS: Tool[] = [
     description: "Artifacts: list stored versions (newest first, last 50) with what changed.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { readOnlyHint: true },
+    need: "view",
     run: async (args, { hub }) => {
       const versions = await hub.history(String(args.id));
       return { text: versions.map((v) => `v${v.version} ${v.createdAt} ${v.note}`).join("\n"), structured: { versions } };
@@ -737,8 +767,8 @@ export const TOOLS: Tool[] = [
       required: ["id", "version"],
       additionalProperties: false,
     },
-    run: async (args, ctx) =>
-      writeResult(await ctx.hub.revert(String(args.id), Number(args.version), { actor: ctx.actor ?? "agent", origin: ctx.origin }), ctx),
+    need: "owner",
+    run: async (args, ctx) => writeResult(await ctx.hub.revert(String(args.id), Number(args.version), changeOptions({}, ctx)), ctx),
   },
   {
     name: "artifact_check",
@@ -752,6 +782,7 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
+    need: "view",
     run: async (args, ctx) => {
       const meta = await ctx.hub.meta(String(args.id));
       if (!meta) return { isError: true, text: `No artifact ${args.id}; see artifact_list.` };
@@ -772,6 +803,7 @@ export const TOOLS: Tool[] = [
       "Artifacts: permanently delete an artifact, its history and its shared state. Only when the user explicitly asks to delete; to tidy up finished work, archive it with artifact_update instead.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { destructiveHint: true },
+    need: "owner",
     run: async (args, { hub }) => {
       await hub.delete(String(args.id));
       return { text: `Deleted ${args.id}.` };
@@ -838,16 +870,33 @@ export async function runOwnerTool(name: string, args: Json, ctx: Ctx): Promise<
   const tool = TOOL_MAP.get(name);
   if (!tool || !OWNER_UI_TOOLS.has(name)) return { isError: true, text: `unknown action ${name}` };
   try {
-    const r = await tool.run(args, ctx);
+    const r = await runTool(tool, args, ctx);
     return { ...r, images: undefined };
   } catch (err) {
     return { isError: true, text: (err as Error).message };
   }
 }
 
+const RANK: Record<Role, number> = { view: 0, edit: 1, owner: 2 };
+
+/** Runs a tool after checking the person's role on the artifact it names. */
+async function runTool(tool: Tool, args: Json, ctx: Ctx): Promise<ToolResult> {
+  const need = typeof tool.need === "function" ? tool.need(args, ctx) : tool.need;
+  if (need) {
+    const artifactId = String(args.id ?? "");
+    const role = await ctx.hub.roleFor(artifactId, ctx.person);
+    // Without access the artifact doesn't exist, as far as this person can tell.
+    if (!role) return { isError: true, text: `No artifact ${artifactId}; see artifact_list.` };
+    if (RANK[role] < RANK[need]) {
+      return { isError: true, text: `${ctx.person} has ${role} access to ${artifactId}; this needs ${need === "owner" ? "the owner or a workspace admin" : "edit access"}.` };
+    }
+  }
+  return tool.run(args, ctx);
+}
+
 type RpcRequest = { jsonrpc: "2.0"; id?: string | number | null; method: string; params?: Json };
 
-export async function handleMcp(request: Request, hub: Hub, origin: string, env: Env): Promise<Response> {
+export async function handleMcp(request: Request, ctx: Ctx): Promise<Response> {
   if (request.method !== "POST") {
     return new Response("Use POST for MCP requests.", { status: 405, headers: { Allow: "POST" } });
   }
@@ -858,7 +907,7 @@ export async function handleMcp(request: Request, hub: Hub, origin: string, env:
     return rpcResponse({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
   }
   const batch = Array.isArray(body) ? body : [body];
-  const responses = (await Promise.all(batch.map((msg) => handleMessage(msg, { hub, origin, env })))).filter(Boolean);
+  const responses = (await Promise.all(batch.map((msg) => handleMessage(msg, ctx)))).filter(Boolean);
   if (responses.length === 0) return new Response(null, { status: 202 });
   return rpcResponse(Array.isArray(body) ? responses : responses[0]);
 }
@@ -891,7 +940,7 @@ async function handleMessage(msg: RpcRequest, ctx: Ctx): Promise<Json | null> {
       const tool = TOOL_MAP.get(String(msg.params?.name));
       if (!tool) return fail(-32602, `Unknown tool ${msg.params?.name}`);
       try {
-        const r = await tool.run((msg.params?.arguments as Json) ?? {}, ctx);
+        const r = await runTool(tool, (msg.params?.arguments as Json) ?? {}, ctx);
         return reply({
           content: [
             { type: "text", text: r.text },

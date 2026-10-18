@@ -1,6 +1,8 @@
 // The signed-in viewer's avatar in the top bar opens a small menu: Manage
 // artifact… (owners, on an artifact), Copy my link, Print, notification level
-// for this artifact, Notifications settings, All artifacts, Sign out.
+// for this artifact, then links: in a workspace its notifications, settings
+// (members) and list; everywhere your account and workspaces on the apex; Sign out.
+// The slot's data-apex, data-context and data-member attributes pick the links.
 import type { WatchLevel } from "../shared/protocol.ts";
 
 const LEVELS: [WatchLevel, string][] = [
@@ -131,17 +133,25 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     paint(watch.level);
     menu.append(group);
   }
-  const settings = document.createElement("a");
-  settings.href = "/me";
-  settings.textContent = "Notification settings";
-  settings.setAttribute("role", "menuitem");
-  if (location.pathname !== "/me") menu.append(settings);
-  if (location.pathname !== "/") {
-    const home = document.createElement("a");
-    home.href = "/";
-    home.textContent = "All artifacts";
-    home.setAttribute("role", "menuitem");
-    menu.append(home);
+  const link = (href: string, label: string) => {
+    const here = new URL(href, location.href);
+    if (here.origin === location.origin && here.pathname === location.pathname) return;
+    const a = document.createElement("a");
+    a.href = href;
+    a.textContent = label;
+    a.setAttribute("role", "menuitem");
+    menu.append(a);
+  };
+  const apex = slot.dataset.apex || location.origin;
+  if (slot.dataset.context === "workspace") {
+    link("/me", "Notification levels");
+    if (slot.dataset.member) link("/settings", "Workspace settings");
+    link("/", "All artifacts");
+    link(`${apex}/me`, "Your account");
+    link(`${apex}/`, "Your workspaces");
+  } else {
+    link("/me", "Name and notifications");
+    link("/", "Your workspaces");
   }
   const form = document.createElement("form");
   form.method = "post";

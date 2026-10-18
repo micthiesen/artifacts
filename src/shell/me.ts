@@ -1,17 +1,20 @@
-// Profile page (/me): display name, notification channels and per-artifact
-// notification levels. Everything goes through /api/me.
+// Notification settings (/me). On the apex: your display name and notification
+// channels, which follow you into every workspace. In a workspace: how much you
+// hear about each artifact there. Everything goes through that host's /api/me.
 import type { WatchLevel } from "../shared/protocol.ts";
 
 type Channel = { id: string; type: string; label: string; createdAt: string; lastError: string | null; disabled: boolean };
 type Profile = {
   email: string;
-  name: string | null;
-  owner: boolean;
-  channels: Channel[];
-  watches: { id: string; title: string; level: WatchLevel; custom: boolean }[];
-  defaultLevel: WatchLevel;
-  vapidPublicKey: string | null;
-  pushover: boolean;
+  // Apex (account) only.
+  name?: string | null;
+  channels?: Channel[];
+  workspaces?: { slug: string; name: string; url: string }[];
+  vapidPublicKey?: string | null;
+  pushover?: boolean;
+  // Workspace only.
+  watches?: { id: string; title: string; level: WatchLevel; custom: boolean }[];
+  account?: string;
 };
 
 const main = document.getElementById("profile")!;
@@ -74,7 +77,7 @@ async function act(fn: () => Promise<unknown>, ok?: string) {
 }
 
 function render() {
-  const sections: HTMLElement[] = [h("h1", { class: "page-title" }, "Profile and notifications")];
+  const sections: HTMLElement[] = [h("h1", { class: "page-title" }, "Notifications")];
   if (notice) {
     const n = h("div", { class: `notice ${notice.tone}`, role: "status" }, notice.text);
     if (notice.reveal) {
@@ -88,6 +91,14 @@ function render() {
     sections.push(n);
   }
 
+  if (profile.watches) renderWatches(sections, profile.watches);
+  else renderAccount(sections);
+  main.replaceChildren(...sections);
+  // Notices render at the top; bring them into view after an action lower down.
+  if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function renderAccount(sections: HTMLElement[]) {
   // Name
   const name = h("input", { type: "text", value: profile.name ?? "", placeholder: profile.email.split("@")[0], maxlength: "80", "aria-label": "Display name" }) as HTMLInputElement;
   sections.push(
@@ -102,7 +113,7 @@ function render() {
 
   // Channels
   const list = h("ul", { class: "channels" });
-  for (const c of profile.channels) {
+  for (const c of profile.channels ?? []) {
     const status = c.disabled ? h("span", { class: "chip caution" }, "Paused after errors") : c.lastError ? h("span", { class: "chip caution" }, "Last send failed") : h("span", { class: "chip positive" }, "On");
     const li = h("li", {}, h("span", { class: "channel-label" }, c.label), status);
     if (c.lastError) li.append(h("span", { class: "muted small channel-error" }, c.lastError));
@@ -116,23 +127,46 @@ function render() {
     );
     list.append(li);
   }
-  if (!profile.channels.length) list.append(h("li", { class: "muted" }, "No channels yet. Add one below to get notified."));
+  if (!profile.channels?.length) list.append(h("li", { class: "muted" }, "No channels yet. Add one below to get notified."));
   sections.push(
     h(
       "section",
       { class: "card-section" },
       h("h2", {}, "Where to notify you"),
-      h("p", { class: "muted" }, "Every channel gets every notification. Nothing is sent while you have the artifact open."),
+      h("p", { class: "muted" }, "Every channel gets every notification, from every workspace. Nothing is sent while you have the artifact open."),
       list,
       addChannels(),
     ),
   );
 
-  // Watches
-  const rows = profile.watches.map((w) => {
+  const workspaces = profile.workspaces ?? [];
+  sections.push(
+    h(
+      "section",
+      { class: "card-section" },
+      h("h2", {}, "What to notify you about"),
+      h("p", { class: "muted" }, "Each workspace has its own per-artifact settings. By default you hear about every comment on artifacts you own, and about replies and @mentions everywhere else."),
+      workspaces.length
+        ? h("ul", { class: "channels" }, ...workspaces.map((w) => h("li", {}, h("a", { href: `${w.url}/me` }, w.name))))
+        : h("p", { class: "muted" }, "Open a shared artifact's avatar menu to change how much you hear about it."),
+    ),
+  );
+}
+
+function renderWatches(sections: HTMLElement[], watches: NonNullable<Profile["watches"]>) {
+  sections.push(
+    h(
+      "section",
+      { class: "card-section" },
+      h("h2", {}, "Name and channels"),
+      h("p", { class: "muted" }, "Where notifications go (this browser, Pushover, ntfy, webhooks) and your display name are set once for every workspace."),
+      h("a", { class: "button small", href: profile.account ?? "/" }, "Open your account"),
+    ),
+  );
+  const rows = watches.map((w) => {
     const select = h("select", { "aria-label": `Notifications for ${w.title}` }) as HTMLSelectElement;
     for (const [level, label] of LEVELS) {
-      const o = h("option", { value: level }, label + (level === profile.defaultLevel ? " (default)" : "")) as HTMLOptionElement;
+      const o = h("option", { value: level }, label) as HTMLOptionElement;
       o.selected = level === w.level;
       select.append(o);
     }
@@ -147,16 +181,11 @@ function render() {
       h(
         "p",
         { class: "muted" },
-        profile.owner
-          ? "You own these, so by default you hear about every comment. Choose “Replies and mentions” for quieter artifacts."
-          : "By default you hear about replies to your comments and @mentions. Choose “All activity” to also get every comment and page update.",
+        "By default you hear about every comment on artifacts you own, and about replies to your comments and @mentions on the rest. Choose “All activity” to also get page updates.",
       ),
-      rows.length ? h("table", { class: "watches" }, h("tbody", {}, ...rows)) : h("p", { class: "muted" }, "Nothing is shared with you yet."),
+      rows.length ? h("table", { class: "watches" }, h("tbody", {}, ...rows)) : h("p", { class: "muted" }, "Nothing is shared with you here yet."),
     ),
   );
-  main.replaceChildren(...sections);
-  // Notices render at the top; bring them into view after an action lower down.
-  if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function addChannels(): HTMLElement {
@@ -276,5 +305,5 @@ function fromB64url(s: string): Uint8Array<ArrayBuffer> {
 }
 
 load().catch((err) => {
-  main.replaceChildren(h("h1", { class: "page-title" }, "Profile and notifications"), h("p", { class: "notice error" }, (err as Error).message));
+  main.replaceChildren(h("h1", { class: "page-title" }, "Notifications"), h("p", { class: "notice error" }, (err as Error).message));
 });

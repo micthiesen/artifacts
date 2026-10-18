@@ -1,11 +1,16 @@
+import { createECDH } from "node:crypto";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
+import * as Output from "alchemy/Output";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
-// Secrets and owner emails come from the deployer's environment (see
-// docs/DEPLOY.md); nothing account-specific is committed.
+// Everything this deployment needs, created and kept in sync by Alchemy:
+// the Worker and its Durable Objects, DNS for every workspace subdomain, the
+// sign-in email sender, OAuth storage, backups and generated secrets. The
+// deployer's .env names the domain, who operates it and the operator token
+// local scripts use (docs/DEPLOY.md).
 export default Alchemy.Stack(
   "artifacts",
   {
@@ -14,93 +19,74 @@ export default Alchemy.Stack(
   },
   Effect.gen(function* () {
     const stage = yield* Alchemy.Stage;
-    const name = stage === "prod" ? "artifacts" : `artifacts-${stage}`;
-    // With DOMAIN set, prod serves at the apex (stages at `<stage>.<domain>`) and
-    // workers.dev is turned off; otherwise both Workers live on workers.dev.
-    const domain = yield* Config.String("DOMAIN").pipe(Config.withDefault(""));
-    const subdomain = domain ? "" : yield* Config.String("WORKERS_SUBDOMAIN");
-    const mainHost = domain ? (stage === "prod" ? domain : `${stage}.${domain}`) : `${name}.${subdomain}.workers.dev`;
-    const mainOrigin = `https://${mainHost}`;
-    // `aliases` attach extra hostnames; the main Worker 301s `www.` to the apex itself.
-    const hosting = (host: string, aliases: string[] = []) => (domain ? { domain: { name: host, aliases }, workersDev: false } : {});
-    const accessTeam = yield* Config.String("ACCESS_TEAM_DOMAIN").pipe(Config.withDefault(""));
+    const prod = stage === "prod";
+    const name = prod ? "artifacts" : `artifacts-${stage}`;
+    const domain = yield* Config.String("DOMAIN");
+    const optional = (key: string) => Config.String(key).pipe(Config.withDefault(""));
+    const operators = yield* Config.String("OPERATOR_EMAILS");
 
-    let authUrl = "";
-    if (accessTeam) {
-      const authName = `${name}-auth`;
-      const authHost = domain ? `auth.${mainHost}` : `${authName}.${subdomain}.workers.dev`;
-      const otp = Cloudflare.Access.getIdentityProvider({ type: "onetimepin" });
-      // Anyone can prove an email with a one-time PIN; the main Worker's
-      // per-artifact share list decides what they can open.
-      const signIn = yield* Cloudflare.Access.Application("SignIn", {
-        type: "self_hosted",
-        name: stage === "prod" ? "Artifacts sign-in" : `Artifacts sign-in (${stage})`,
-        policies: [{ decision: "allow", include: ["everyone"] }],
-        allowedIdps: [otp.identityProviderId as unknown as string],
-        autoRedirectToIdentity: true,
-        sessionDuration: "24h",
-      });
-      yield* Cloudflare.Worker("Auth", {
-        name: authName,
-        main: "./build/auth/index.js",
-        bundle: false,
-        compatibility: { date: "2026-10-01" },
-        access: signIn,
-        ...hosting(authHost),
-        env: {
-          LOGIN_SECRET: yield* Config.Redacted("LOGIN_SECRET"),
-          ACCESS_TEAM_DOMAIN: accessTeam,
-          ACCESS_AUD: signIn.aud,
-          MAIN_ORIGIN: mainOrigin,
-        },
-      });
-      authUrl = `https://${authHost}`;
+    // The apex is the front door; workspaces live one label below it, so the
+    // zone's Universal SSL certificate (*.domain) covers them: <slug>.domain in
+    // prod, <slug>--<stage>.domain for other stages.
+    const apexHost = prod ? domain : `${stage}.${domain}`;
+    const workspaceSuffix = prod ? `.${domain}` : `--${stage}.${domain}`;
+    const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+    const zone = yield* Cloudflare.Zone.findZoneByName({ accountId, name: domain }).pipe(Effect.orDie);
+    if (!zone) return yield* Effect.die(new Error(`no zone ${domain} in this account`));
+    if (prod) {
+      // Proxied wildcard so every workspace subdomain reaches the Worker route.
+      yield* Cloudflare.DNS.Record("WorkspacesDns", { zoneId: zone.id, name: `*.${domain}`, type: "AAAA", content: "100::", proxied: true, ttl: 1 });
     }
 
-    // Nightly offsite backups need R2 permission on the deploy token; opt in with R2_BACKUPS=1.
-    const r2Backups = (yield* Config.String("R2_BACKUPS").pipe(Config.withDefault(""))) === "1";
-    const backups: Record<string, Cloudflare.R2.Bucket> = r2Backups ? { BACKUPS: yield* Cloudflare.R2.Bucket("Backups") } : {};
+    const mailHost = prod ? `mail.${domain}` : `mail-${stage}.${domain}`;
+    yield* Cloudflare.Email.SendingSubdomain("Mail", { zoneId: zone.id, name: mailHost });
+    const mailFrom = `sign-in@${mailHost}`;
 
-    // Notifications: Web Push keys (`bun scripts/vapid.ts`) and one Pushover
-    // application token shared by every user's Pushover channel. All optional.
-    const optional = (key: string) => Config.String(key).pipe(Config.withDefault(""));
-    const vapidPublic = yield* optional("VAPID_PUBLIC_KEY");
-    const vapidPrivate = yield* optional("VAPID_PRIVATE_KEY");
+    const secret = (id: string) => Alchemy.Random(id).pipe(Effect.map((r) => r.text));
+    // Web Push keys: a P-256 key pair derived from a generated seed, so it stays
+    // stable across deploys (changing it would invalidate every subscription).
+    const vapidSeed = yield* secret("VapidSeed");
+    const vapid = (part: "public" | "private") =>
+      Output.map(vapidSeed, (seed: Redacted.Redacted<string>) => {
+        const ecdh = createECDH("prime256v1");
+        ecdh.setPrivateKey(Buffer.from(Redacted.value(seed), "hex"));
+        return (part === "public" ? ecdh.getPublicKey() : ecdh.getPrivateKey()).toString("base64url");
+      });
     const pushoverToken = yield* optional("PUSHOVER_TOKEN");
-    const ownerEmails = yield* Config.String("OWNER_EMAILS");
-    const notify: Record<string, string | Redacted.Redacted<string>> = {
-      ...(vapidPublic && vapidPrivate
-        ? {
-            VAPID_PUBLIC_KEY: vapidPublic,
-            VAPID_PRIVATE_KEY: Redacted.make(vapidPrivate),
-            VAPID_SUBJECT: (yield* optional("VAPID_SUBJECT")) || `mailto:${ownerEmails.split(",")[0].trim()}`,
-          }
-        : {}),
-      ...(pushoverToken ? { PUSHOVER_TOKEN: Redacted.make(pushoverToken) } : {}),
-    };
 
     const worker = yield* Cloudflare.Worker("Artifacts", {
       name,
       main: "./build/worker/index.js",
       bundle: false,
-      compatibility: { date: "2026-10-01" },
+      // Client ID Metadata Documents (OAuth) fetch only public addresses.
+      compatibility: { date: "2026-10-01", flags: ["global_fetch_strictly_public"] },
       assets: "./dist/kit",
-      ...hosting(mainHost, stage === "prod" ? [`www.${domain}`] : []),
-      // Live data sources refresh on this schedule (each source has its own interval).
-      crons: ["*/15 * * * *"],
+      domain: { name: apexHost, aliases: prod ? [`www.${domain}`] : [] },
+      workersDev: false,
+      routes: [{ pattern: `*${workspaceSuffix}/*`, zoneId: zone.id }],
       env: {
-        HUB: Cloudflare.DurableObject("ArtifactHub"),
-        ...backups,
-        SESSION_SECRET: yield* Config.Redacted("SESSION_SECRET"),
-        LOGIN_SECRET: yield* Config.Redacted("LOGIN_SECRET"),
-        MCP_TOKEN: yield* Config.Redacted("MCP_TOKEN"),
+        WORKSPACE: Cloudflare.DurableObject("Workspace"),
+        DIRECTORY: Cloudflare.DurableObject("Directory"),
+        OAUTH_KV: yield* Cloudflare.KV.Namespace("OAuth"),
+        BACKUPS: yield* Cloudflare.R2.Bucket("Backups"),
+        EMAIL: yield* Cloudflare.Email.SendEmail("EMAIL", { allowedSenderAddresses: [mailFrom] }),
         BROWSER: Cloudflare.Browser(),
-        OWNER_EMAILS: ownerEmails,
-        AUTH_URL: authUrl,
-        ...notify,
+        SESSION_SECRET: yield* secret("SessionSecret"),
+        LOGIN_SECRET: yield* secret("LoginSecret"),
+        CONSENT_SECRET: yield* secret("ConsentSecret"),
+        // Local operator scripts (export, import, e2e) read it from .env too.
+        OPERATOR_TOKEN: yield* Config.Redacted("OPERATOR_TOKEN"),
+        OPERATOR_EMAILS: operators,
+        APEX_HOST: apexHost,
+        WORKSPACE_SUFFIX: workspaceSuffix,
+        MAIL_FROM: mailFrom,
+        VAPID_PUBLIC_KEY: vapid("public"),
+        VAPID_PRIVATE_KEY: Output.map(vapid("private"), Redacted.make),
+        VAPID_SUBJECT: `mailto:${operators.split(",")[0].trim()}`,
+        ...(pushoverToken ? { PUSHOVER_TOKEN: Redacted.make(pushoverToken) } : {}),
       },
     });
 
-    return { url: worker.url, mcp: `${mainOrigin}/mcp`, auth: authUrl || "not configured" };
+    return { url: worker.url, apex: `https://${apexHost}`, workspaces: `https://<slug>${workspaceSuffix}`, mail: mailFrom };
   }),
 );

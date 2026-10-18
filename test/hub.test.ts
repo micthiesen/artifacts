@@ -2,11 +2,11 @@ import { beforeEach, expect, test } from "bun:test";
 import { advanceAlarm, connect, createHub, type Harness } from "./support/do-harness.ts";
 
 let h: Harness;
-const OWNER = { email: "owner@example.com", owner: true };
+const OWNER = "owner@example.com";
 const files = { "index.mdx": "# Hello\n\nSome text.\n" };
 
 async function make() {
-  const r = await h.hub.create({ title: "Doc", files });
+  const r = await h.hub.create({ title: "Doc", files, owner: OWNER });
   if (!r.ok) throw new Error(JSON.stringify(r.errors));
   return r.id;
 }
@@ -20,7 +20,7 @@ test("create then list as owner", async () => {
   const list = h.hub.list(OWNER);
   expect(list.map((a) => a.id)).toEqual([id]);
   expect(list[0]).toMatchObject({ title: "Doc", version: 1, role: "owner" });
-  expect(h.hub.list({ email: "x@example.com", owner: false })).toEqual([]);
+  expect(h.hub.list("x@example.com")).toEqual([]);
 });
 
 test("editText bumps version and history records notes", async () => {
@@ -41,12 +41,12 @@ test("share and roleFor for exact email and @domain", async () => {
       { email: "@other.com", role: "view" },
     ],
   });
-  expect(h.hub.roleFor(id, "a@corp.com", false)).toBe("edit");
-  expect(h.hub.roleFor(id, "b@other.com", false)).toBe("view");
-  expect(h.hub.roleFor(id, "c@nowhere.com", false)).toBeNull();
-  expect(h.hub.roleFor(id, null, true)).toBe("owner");
+  expect(h.hub.roleFor(id, "a@corp.com")).toBe("edit");
+  expect(h.hub.roleFor(id, "b@other.com")).toBe("view");
+  expect(h.hub.roleFor(id, "c@nowhere.com")).toBeNull();
+  expect(h.hub.roleFor(id, OWNER)).toBe("owner");
   h.hub.share(id, { remove: ["a@corp.com"] });
-  expect(h.hub.roleFor(id, "a@corp.com", false)).toBeNull();
+  expect(h.hub.roleFor(id, "a@corp.com")).toBeNull();
 });
 
 test("setState via socket broadcasts to other sockets; view role is rejected", async () => {
@@ -70,7 +70,7 @@ test("delete removes the artifact and closes sockets", async () => {
   const c = await connect(h, { id, email: "e@corp.com", role: "edit" });
   h.hub.delete(id);
   expect(h.hub.list(OWNER)).toEqual([]);
-  expect(h.hub.roleFor(id, null, true)).toBeNull();
+  expect(h.hub.roleFor(id, OWNER)).toBeNull();
   expect(c.socket.closed?.code).toBe(4004);
 });
 
@@ -92,8 +92,8 @@ test("archive keeps access and updated_at, and unarchives", async () => {
   // Archiving again keeps the original time.
   expect(h.hub.updateMeta(id, { archived: true }).archivedAt).toBe(archived.archivedAt);
   expect(h.hub.list(OWNER)[0].archivedAt).toBe(archived.archivedAt);
-  expect(h.hub.list({ email: "a@corp.com", owner: false })[0].archivedAt).toBe(archived.archivedAt);
-  expect(h.hub.roleFor(id, "a@corp.com", false)).toBe("view");
+  expect(h.hub.list("a@corp.com")[0].archivedAt).toBe(archived.archivedAt);
+  expect(h.hub.roleFor(id, "a@corp.com")).toBe("view");
   expect(h.hub.updateMeta(id, { archived: false }).archivedAt).toBeNull();
 });
 

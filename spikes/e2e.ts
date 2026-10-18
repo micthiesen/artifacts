@@ -1,35 +1,14 @@
-// End-to-end check against a deployed Worker.
-// Usage: bun spikes/e2e.ts https://<domain>
-// Reads MCP_TOKEN, SESSION_SECRET and OWNER_EMAILS from .env (bun loads it).
-import { signToken } from "../src/worker/session.ts";
+// End-to-end check against a deployed Worker, in a throwaway workspace.
+// Usage: bun spikes/e2e.ts   (reads DOMAIN and OPERATOR_TOKEN from .env)
+import { apex, call, check, cookieFor, finish, operator, origin, owner, rpc, setup, slug } from "./e2e-lib.ts";
 
-const origin = (process.argv[2] ?? "").replace(/\/$/, "");
-if (!origin) throw new Error("pass the Worker origin");
-const MCP_TOKEN = process.env.MCP_TOKEN!;
-const owner = process.env.OWNER_EMAILS!.split(",")[0].trim();
-
-let failures = 0;
-function check(name: string, ok: boolean, detail?: unknown) {
-  console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok || detail === undefined ? "" : ` -> ${JSON.stringify(detail).slice(0, 400)}`}`);
-  if (!ok) failures++;
-}
-
-let rpcId = 0;
-async function rpc(method: string, params?: unknown, token = MCP_TOKEN) {
-  const res = await fetch(`${origin}/mcp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
-  });
-  return { status: res.status, body: res.status === 200 ? ((await res.json()) as any) : await res.text() };
-}
-async function call(name: string, args: unknown) {
-  const t = performance.now();
-  const r = await rpc("tools/call", { name, arguments: args });
-  return { ...r.body.result, ms: Math.round(performance.now() - t) };
-}
-
-check("mcp rejects bad token", (await rpc("tools/list", undefined, "nope")).status === 401);
+await setup();
+const unauthorized = await rpc("tools/list", undefined, "nope");
+check("mcp rejects bad token with an OAuth challenge", unauthorized.status === 401 && /resource_metadata=/.test(unauthorized.headers.get("WWW-Authenticate") ?? ""), unauthorized.status);
+const prm = (await (await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`)).json()) as any;
+check("protected resource metadata names this workspace", prm.resource === `${origin}/mcp` && prm.authorization_servers?.[0] === origin, prm);
+const asm = (await (await fetch(`${origin}/.well-known/oauth-authorization-server`)).json()) as any;
+check("authorization server metadata", asm.issuer === origin && asm.registration_endpoint === `${origin}/oauth/register` && asm.authorization_endpoint === `${origin}/authorize`, asm);
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
 check("initialize", init.body.result?.serverInfo?.name === "artifacts", init.body);
 const list = await rpc("tools/list");
@@ -85,13 +64,12 @@ check("read reflects patch", read.content[0].text.includes("$19"), read.content)
 const hist = await call("artifact_history", { id });
 check("history", hist.structuredContent?.versions?.length === 5, hist.structuredContent);
 
-// Viewer side, unauthenticated.
+// Viewer side, unauthenticated: sent to sign in on the apex.
 const anon = await fetch(`${origin}/a/${id}`, { redirect: "manual" });
-check("private artifact hidden from anonymous", anon.status === 401 || anon.status === 302, anon.status);
-
-// Owner session minted with the deploy secret (stands in for an Access login).
-const session = await signToken(process.env.SESSION_SECRET!, "session", 600, { e: owner });
-const cookie = `__Host-art_session=${session}`;
+check("private artifact sends anonymous viewers to sign in", anon.status === 302 && anon.headers.get("Location")?.startsWith(`${origin}/login`) === true, anon.status);
+const bounce = await fetch(`${origin}/login?return=/a/${id}`, { redirect: "manual" });
+check("workspace sign-in goes through the apex", bounce.headers.get("Location")?.startsWith(`${apex}/login?to=`) === true, bounce.headers.get("Location"));
+const cookie = await cookieFor(owner);
 const shell = await fetch(`${origin}/a/${id}`, { headers: { Cookie: cookie } });
 const shellHtml = await shell.text();
 check("owner opens shell", shell.status === 200 && shellHtml.includes("shell-boot"), shell.status);
@@ -155,12 +133,14 @@ await call("artifact_share", { id, public: true });
 check("public link opens anonymously", (await fetch(`${origin}/a/${id}`)).status === 200);
 await call("artifact_share", { id, public: false });
 check("public link revoked", (await fetch(`${origin}/a/${id}`, { redirect: "manual" })).status !== 200);
-const stranger = await signToken(process.env.SESSION_SECRET!, "session", 600, { e: "stranger@example.com" });
-check("unshared email refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: `__Host-art_session=${stranger}` } })).status === 403);
+const stranger = await cookieFor("stranger@example.com");
+check("unshared email refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: stranger } })).status === 403);
 await call("artifact_share", { id, add: [{ email: "stranger@example.com", role: "view" }] });
-check("shared email allowed", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: `__Host-art_session=${stranger}` } })).status === 200);
+check("shared email allowed", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: stranger } })).status === 200);
 await call("artifact_share", { id, remove: ["stranger@example.com"] });
-check("removed email refused immediately", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: `__Host-art_session=${stranger}` } })).status === 403);
+check("removed email refused immediately", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: stranger } })).status === 403);
+const elsewhere = await cookieFor(owner, new URL(apex).hostname);
+check("a session from another host doesn't count here", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: elsewhere }, redirect: "manual" })).status === 302);
 
 // Screenshot, noindex, robots.
 check("create attached a screenshot", (created.content ?? []).some((c: any) => c.type === "image" && c.data?.length > 1000), created.content?.map((c: any) => c.type));
@@ -200,25 +180,24 @@ const overview = await (await fetch(`${origin}/api/a/${id}`, { headers: { Cookie
 check("owner overview", overview.meta?.id === id && Array.isArray(overview.history) && Array.isArray(overview.assets), Object.keys(overview));
 const viaUi = await (await ownerPost(`/api/a/${id}/artifact_update`, { description: "updated from the owner menu" })).json() as any;
 check("owner action runs tool", viaUi.ok === true, viaUi);
-const stranger2 = `__Host-art_session=${await signToken(process.env.SESSION_SECRET!, "session", 600, { e: "stranger@example.com" })}`;
-check("owner API refuses non-owner", (await fetch(`${origin}/api/a/${id}`, { headers: { Cookie: stranger2 } })).status === 403);
+check("owner API refuses non-owner", (await fetch(`${origin}/api/a/${id}`, { headers: { Cookie: stranger } })).status === 403);
 check("owner tools are whitelisted", (await ownerPost(`/api/a/${id}/artifact_write_files`, { files: {} })).status === 400);
 
-// Admin export.
-const exp = await fetch(`${origin}/admin/export`, { headers: { Authorization: `Bearer ${MCP_TOKEN}` } });
-const expJson = await exp.json() as any;
-check("admin export", exp.status === 200 && expJson.tables?.artifacts?.some((a: any) => a.id === id), exp.status);
-check("admin needs token", (await fetch(`${origin}/admin/export`)).status === 401);
+// Operator export and backups.
+const page = await operator(`/workspaces/${slug}/export?table=artifacts&after=0`);
+check("operator export", page.rows?.some((a: any) => a.id === id), page);
+check("operator API needs the token", (await fetch(`${apex}/api/admin/workspaces`)).status === 403);
+const backup = await operator(`/workspaces/${slug}/backup`, {});
+check("backup to R2", typeof backup.prefix === "string" && backup.prefix.startsWith(`${slug}/`), backup);
+const dates = await operator(`/workspaces/${slug}/backups`);
+check("backup listed as complete", dates.dates?.length === 1, dates);
 
-// Sliding sessions: an older (but valid) session cookie gets renewed.
-const oldSession = await signToken(process.env.SESSION_SECRET!, "session", 10 * 86400, { e: owner });
-const renewed = await fetch(`${origin}/`, { headers: { Cookie: `__Host-art_session=${oldSession}` } });
-check("old session is renewed", /Max-Age=2592000/.test(renewed.headers.get("Set-Cookie") ?? ""), renewed.headers.get("Set-Cookie"));
-const freshSession = await signToken(process.env.SESSION_SECRET!, "session", 30 * 86400, { e: owner });
-check("fresh session left alone", !(await fetch(`${origin}/`, { headers: { Cookie: `__Host-art_session=${freshSession}` } })).headers.get("Set-Cookie"));
+// Sliding sessions: a session close to expiry (the test cookies last an hour) gets renewed.
+const renewed = await fetch(`${origin}/`, { headers: { Cookie: cookie } });
+check("short session is renewed", /Max-Age=2592000/.test(renewed.headers.get("Set-Cookie") ?? ""), renewed.headers.get("Set-Cookie"));
 
 // Domain shares.
-const asEmail = async (e: string) => `__Host-art_session=${await signToken(process.env.SESSION_SECRET!, "session", 600, { e })}`;
+const asEmail = (e: string) => cookieFor(e);
 await call("artifact_share", { id, add: [{ email: "@example.org", role: "view" }] });
 check("domain member can open", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.org") } })).status === 200);
 check("other domain refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.net") } })).status === 403);
@@ -236,6 +215,7 @@ const linkUrl = ownerLink.structuredContent?.link as string;
 check("owner link issued", typeof linkUrl === "string" && linkUrl.includes("/s/"), ownerLink.content);
 const opened = await fetch(linkUrl, { redirect: "manual" });
 const linkCookie = (opened.headers.get("Set-Cookie") ?? "").split(";")[0];
+check("links are bound to their workspace", (await fetch(linkUrl.replace(origin, `https://other-${slug}.${new URL(apex).hostname}`), { redirect: "manual" })).status !== 303);
 check("owner link signs in and redirects", opened.status === 303 && opened.headers.get("Location") === `/a/${id}` && linkCookie.startsWith("__Host-art_session="), opened.status);
 check("owner link session opens private artifact", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: linkCookie } })).status === 200);
 const noAccess = await call("artifact_link", { id, email: "nobody@example.com" });
@@ -252,10 +232,6 @@ const tamperedUrl = linkUrl.slice(0, cut) + (linkUrl[cut] === "A" ? "B" : "A") +
 const tampered = await fetch(tamperedUrl, { redirect: "manual" });
 check("tampered link rejected", tampered.status === 400, tampered.status);
 
-if (process.env.KEEP !== "1") {
-  const del = await call("artifact_delete", { id });
-  check("delete", !del.isError, del);
-} else console.log(`kept ${origin}/a/${id}`);
-
-console.log(failures ? `\n${failures} FAILED` : "\nall passed");
-process.exit(failures ? 1 : 0);
+const del = await call("artifact_delete", { id });
+check("delete", !del.isError, del);
+await finish();

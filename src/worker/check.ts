@@ -22,15 +22,16 @@ export type CheckEnv = { BROWSER?: BrowserRunBinding; SESSION_SECRET: string };
 
 export const SCREENSHOT_VIEWPORT = { width: 1024, height: 768 };
 
-/** One Browser Run call. Free plan: at most one every 10 s (the hub schedules). */
+/** One Browser Run call; the workspace queues checks when Browser Run rate-limits. */
 export async function renderCheck(
   env: CheckEnv,
   origin: string,
   id: string,
   version: number,
+  workspace: string,
 ): Promise<CheckOutcome | { rateLimited: true }> {
   if (!env.BROWSER) return { check: { status: "skipped", reason: "no browser binding" } };
-  const token = await signToken(env.SESSION_SECRET, "frame", 120, { id, c: true });
+  const token = await signToken(env.SESSION_SECRET, "frame", 120, { id, w: workspace, c: true });
   const url = `${origin}/frame/${id}?v=${version}&check=1&t=${encodeURIComponent(token)}`;
   const started = Date.now();
   let res: Response;

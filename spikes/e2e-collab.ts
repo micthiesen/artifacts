@@ -1,34 +1,10 @@
 // End-to-end check of comments, activity, visits, previews and notifications
-// against a deployed Worker. Sends one real notification through ntfy.sh.
-// Usage: bun spikes/e2e-collab.ts https://<domain>
-// Reads MCP_TOKEN, SESSION_SECRET, LOGIN_SECRET and OWNER_EMAILS from .env.
-import { signToken } from "../src/worker/session.ts";
+// against a deployed Worker, in a throwaway workspace.
+// Usage: bun spikes/e2e-collab.ts   (reads DOMAIN and OPERATOR_TOKEN from .env)
+import { apex, call, check, cookieFor, finish, origin, owner, setup } from "./e2e-lib.ts";
 
-const origin = (process.argv[2] ?? "").replace(/\/$/, "");
-if (!origin) throw new Error("pass the Worker origin");
-const MCP_TOKEN = process.env.MCP_TOKEN!;
-const owner = process.env.OWNER_EMAILS!.split(",")[0].trim();
+await setup();
 const viewer = `e2e-viewer-${Date.now()}@example.com`;
-
-let failures = 0;
-function check(name: string, ok: boolean, detail?: unknown) {
-  console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok || detail === undefined ? "" : ` -> ${JSON.stringify(detail).slice(0, 500)}`}`);
-  if (!ok) failures++;
-}
-
-let rpcId = 0;
-async function call(name: string, args: unknown) {
-  const res = await fetch(`${origin}/mcp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${MCP_TOKEN}` },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }),
-  });
-  return ((await res.json()) as any).result;
-}
-
-async function cookieFor(email: string) {
-  return `__Host-art_session=${await signToken(process.env.SESSION_SECRET!, "session", 3600, { e: email })}`;
-}
 
 function socket(id: string, cookie: string) {
   const ws = new WebSocket(`${origin.replace(/^http/, "ws")}/a/${id}/sync`, { headers: { Cookie: cookie, Origin: origin } } as never);
@@ -123,16 +99,19 @@ if (ogUrl?.includes("/og/")) {
 const generic2 = await fetch(`${origin}/static/icons/og.png`);
 check("generic og image exists", generic2.ok);
 
-// ---- profile, channels and a real notification ----------------------------------------
-const ownerCookie = await cookieFor(owner);
-const me = await fetch(`${origin}/api/me`, { headers: { Cookie: ownerCookie } });
+// ---- account, channels and a real notification ------------------------------------------
+// Channels belong to the person, on the apex, and serve every workspace.
+const ownerCookie = await cookieFor(owner, new URL(apex).hostname);
+const me = await fetch(`${apex}/api/me`, { headers: { Cookie: ownerCookie } });
 const profile = (await me.json()) as any;
-check("profile api", me.ok && profile.email === owner && typeof profile.vapidPublicKey === "string", profile);
+check("account api", me.ok && profile.email === owner && typeof profile.vapidPublicKey === "string" && profile.workspaces?.[0]?.url === origin, profile);
+const levels = (await (await fetch(`${origin}/api/me`, { headers: { Cookie: await cookieFor(owner) } })).json()) as any;
+check("workspace notification levels", levels.watches?.[0]?.level === "all", levels);
 const post = (path: string, body: unknown, method = "POST") =>
-  fetch(`${origin}${path}`, { method, headers: { Cookie: ownerCookie, Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  fetch(`${apex}${path}`, { method, headers: { Cookie: ownerCookie, Origin: apex, "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const bad = await post("/api/me/channels", { type: "webhook", url: "http://10.0.0.1/hook" });
 check("webhook to a private address is refused", bad.status === 400);
-const crossSite = await fetch(`${origin}/api/me/channels`, { method: "POST", headers: { Cookie: ownerCookie, Origin: "https://evil.example", "Content-Type": "application/json" }, body: "{}" });
+const crossSite = await fetch(`${apex}/api/me/channels`, { method: "POST", headers: { Cookie: ownerCookie, Origin: origin, "Content-Type": "application/json" }, body: "{}" });
 check("cross-site writes refused", crossSite.status === 403);
 // ntfy.sh rate-limits anonymous publishing from shared Worker IPs, so delivery is
 // proven with a webhook that always fails: its recorded error shows the alarm sent it.
@@ -143,7 +122,7 @@ const hook = (await (await post("/api/me/channels", { type: "webhook", url: "htt
 check("webhook channel created with a signing secret", typeof hook.reveal === "string" && hook.reveal.length > 30, hook);
 const test = await post(`/api/me/channels/${hook.id}/test`, {});
 check("test send reports the endpoint's failure", test.status === 400 && /418/.test(await test.text()));
-const channelError = async () => ((await (await fetch(`${origin}/api/me`, { headers: { Cookie: ownerCookie } })).json()) as any).channels.find((c: any) => c.id === hook.id);
+const channelError = async () => ((await (await fetch(`${apex}/api/me`, { headers: { Cookie: ownerCookie } })).json()) as any).channels.find((c: any) => c.id === hook.id);
 // Reset the error with a passing endpoint is not possible in place; remove and re-add instead.
 await post(`/api/me/channels/${hook.id}`, {}, "DELETE");
 const hook2 = (await (await post("/api/me/channels", { type: "webhook", url: "https://httpbin.org/status/418" })).json()) as any;
@@ -165,5 +144,4 @@ await post(`/api/me/channels/${hook.id}`, {}, "DELETE");
 
 // ---- cleanup ------------------------------------------------------------------------
 await call("artifact_delete", { id });
-console.log(failures ? `\n${failures} failed` : "\nall passed");
-process.exit(failures ? 1 : 0);
+await finish();
