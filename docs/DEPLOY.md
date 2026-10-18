@@ -11,7 +11,7 @@ Create `.env` (gitignored) in the repo root:
 
 | Key | Meaning |
 |---|---|
-| `DOMAIN` | Optional: a zone in the account, e.g. `artifacts.boo`. Prod serves at the apex, the sign-in Worker at `auth.<domain>`, other stages at `<stage>.<domain>`, and `workers.dev` is turned off. The deploy token needs Workers Routes and Zone edit on that zone |
+| `DOMAIN` | Optional: a zone in the account, e.g. `artifacts.boo`. Prod serves at the apex (`www.` redirects to it), the sign-in Worker at `auth.<domain>`, other stages at `<stage>.<domain>`, and `workers.dev` is turned off. The deploy token needs Workers Routes and Zone edit on that zone |
 | `WORKERS_SUBDOMAIN` | The account's `workers.dev` subdomain. Only used when `DOMAIN` is unset |
 | `OWNER_EMAILS` | Comma-separated emails with owner access to every artifact |
 | `SESSION_SECRET`, `LOGIN_SECRET`, `MCP_TOKEN` | Random strings, e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'` |

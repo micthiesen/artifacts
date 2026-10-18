@@ -21,7 +21,8 @@ export default Alchemy.Stack(
     const subdomain = domain ? "" : yield* Config.String("WORKERS_SUBDOMAIN");
     const mainHost = domain ? (stage === "prod" ? domain : `${stage}.${domain}`) : `${name}.${subdomain}.workers.dev`;
     const mainOrigin = `https://${mainHost}`;
-    const hosting = (host: string) => (domain ? { domain: host, workersDev: false } : {});
+    // `aliases` attach extra hostnames; the main Worker 301s `www.` to the apex itself.
+    const hosting = (host: string, aliases: string[] = []) => (domain ? { domain: { name: host, aliases }, workersDev: false } : {});
     const accessTeam = yield* Config.String("ACCESS_TEAM_DOMAIN").pipe(Config.withDefault(""));
 
     let authUrl = "";
@@ -84,7 +85,7 @@ export default Alchemy.Stack(
       bundle: false,
       compatibility: { date: "2026-10-01" },
       assets: "./dist/kit",
-      ...hosting(mainHost),
+      ...hosting(mainHost, stage === "prod" ? [`www.${domain}`] : []),
       // Live data sources refresh on this schedule (each source has its own interval).
       crons: ["*/15 * * * *"],
       env: {
