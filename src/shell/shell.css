@@ -154,6 +154,8 @@ a.title:hover { text-decoration: none; }
 /* iOS Safari can size an iframe to its content's width; width 1px + min-width
    100% pins it to the container. */
 .frame-host iframe { width: 1px; min-width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
+.frame-host iframe:not(.loaded) { opacity: 0; }
+.frame-host iframe.loaded { opacity: 1; transition: opacity .12s ease-out; }
 
 /* Index and message pages. */
 .content { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }

@@ -108,6 +108,9 @@ iframe.setAttribute("allow", "clipboard-write");
 iframe.setAttribute("referrerpolicy", "no-referrer");
 iframe.title = boot.title;
 iframe.src = boot.frameUrl;
+// Until its document loads, an iframe shows a blank page that some browsers
+// (Safari especially) paint white; keep it hidden over the dark host until then.
+iframe.addEventListener("load", () => iframe.classList.add("loaded"), { once: true });
 document.getElementById("frame-host")!.append(iframe);
 
 function post(msg: ShellMessage) {
