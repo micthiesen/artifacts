@@ -32,12 +32,19 @@ export function scriptJson(value: unknown): string {
 const PAGE_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
+// Declared inline so the very first paint is dark: without it the browser shows
+// its white default canvas until the stylesheet arrives, and a frame that is
+// still "light" inside the dark shell gets an opaque white backdrop.
+const DARK_HEAD = `<meta name="color-scheme" content="dark">
+<style>html{background:oklch(0.16 0.017 275)}</style>`;
+
 function page(title: string, body: string, init: ResponseInit = {}): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+${DARK_HEAD}
 <meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
 <meta name="theme-color" content="#0b0d15">
@@ -263,6 +270,7 @@ export function frameDocument(origin: string, meta: ArtifactMeta, build: Build, 
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+${DARK_HEAD}
 <link rel="stylesheet" href="${kit("kit.css")}">
 <style>${build.css.replace(/<\/style/gi, "<\\/style")}</style>
 <script type="importmap">${scriptJson({ imports: { ...KIT_IMPORTS, ...build.imports } })}</script>
