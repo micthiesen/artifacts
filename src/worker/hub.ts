@@ -105,7 +105,7 @@ export type Access = { slug: string; name: string; member: WorkspaceRole | null;
 export type AgentToken = { id: string; email: string; label: string; createdAt: string; lastUsedAt: string | null };
 
 export type WriteResult =
-  | { ok: true; id: string; version: number; files: string[] }
+  | { ok: true; id: string; version: number; files: string[]; warnings?: string[] }
   | { ok: false; errors: CompileError[]; version?: number };
 
 export class HubError extends Error {}
@@ -899,7 +899,7 @@ export class Workspace extends DurableObject {
     this.withinPlan("artifacts");
     this.withinPlan("bytes");
     this.withinPlan("changesPerDay");
-    const { build, errors } = await buildArtifact(input.files);
+    const { build, errors, warnings } = await buildArtifact(input.files);
     if (!build) return { ok: false, errors };
     const hashes = await hashFiles(input.files);
     const id = `a${randomId(12)}`;
@@ -917,7 +917,7 @@ export class Workspace extends DurableObject {
       this.commitFiles(id, 1, input.files, hashes, build, "created", now);
       this.logEvent(id, input.actor ?? "agent", "version", { version: 1, note: "created" });
     });
-    return { ok: true, id, version: 1, files: Object.keys(input.files).sort() };
+    return { ok: true, id, version: 1, files: Object.keys(input.files).sort(), ...(warnings?.length ? { warnings } : {}) };
   }
 
   async editText(id: string, path: string, edits: TextEdit[], baseVersion?: number, opts: ChangeOptions = {}): Promise<WriteResult> {
@@ -2370,6 +2370,29 @@ export class Workspace extends DurableObject {
     void this.armAlarm();
   }
 
+  /**
+   * A new version makes decisions on the previous one stale: tell those people
+   * the page changed under their approval (or request for changes), once, so
+   * they can take another look. Batched with page updates, since agents edit
+   * in runs; a later version in the same batch only moves the version on.
+   */
+  private notifyStale(id: string, actor: Actor, previous: number, version: number, note: string, origin?: string, onBehalf?: string) {
+    // Notices still waiting to go out now name the latest version.
+    this.sql.exec(`UPDATE outbox SET data = json_set(data, '$.version', ?, '$.note', ?) WHERE artifact_id = ? AND kind = 'stale'`, version, note, id);
+    const rows = this.sql.exec(`SELECT key, value FROM state WHERE artifact_id = ? AND key LIKE 'approve/%'`, id).toArray();
+    for (const r of rows) {
+      const m = RESPONSE_KEY.exec(r.key as string);
+      const d = JSON.parse(r.value as string) as { decision?: string; version?: number };
+      // Only decisions this change made stale; older ones were told when they went stale.
+      if (!m || d.version !== previous || (d.decision !== "approve" && d.decision !== "changes")) continue;
+      const email = m[3];
+      if (email === actor || email === onBehalf || this.watchLevel(email, id) === "mute" || !this.canOpen(id, email)) continue;
+      const pending = this.sql.exec(`SELECT 1 FROM outbox WHERE email = ? AND artifact_id = ? AND kind = 'stale'`, email, id).toArray().length > 0;
+      if (!pending) this.enqueue(email, id, "stale", { block: m[2], decision: d.decision, seenVersion: previous, version, note, origin }, UPDATE_DELAY_MS);
+    }
+    void this.armAlarm();
+  }
+
   private canOpen(id: string, email: string): boolean {
     return this.roleFor(id, email) !== null;
   }
@@ -2746,7 +2769,7 @@ export class Workspace extends DurableObject {
       }
       throw err;
     }
-    const { build, errors } = await buildArtifact(files);
+    const { build, errors, warnings = [] } = await buildArtifact(files);
     if (!build) return { ok: false, version: current, errors };
     const hashes = await hashFiles(files);
     const next = current + 1;
@@ -2782,7 +2805,8 @@ export class Workspace extends DurableObject {
       this.notifyResolved(id, actor, thread, opts.origin, opts.onBehalf);
     }
     this.notifyUpdate(id, actor, next, note, opts.origin, opts.onBehalf);
-    return { ok: true, id, version: next, files: Object.keys(files).sort() };
+    this.notifyStale(id, actor, current, next, note, opts.origin, opts.onBehalf);
+    return { ok: true, id, version: next, files: Object.keys(files).sort(), ...(warnings.length ? { warnings } : {}) };
   }
 
   private commitFiles(id: string, version: number, files: Record<string, string>, hashes: Record<string, string>, build: Build, note: string, now: string) {

@@ -250,7 +250,41 @@ export function validatePath(path: string): string | null {
 }
 
 /** Compile a whole artifact. Returns errors instead of a build if anything fails. */
-export async function buildArtifact(files: Record<string, string>): Promise<{ build?: Build; errors: CompileError[] }> {
+/** Phones are about 390 px wide; a page's own padding leaves a little less. */
+const PHONE_PX = 360;
+const BREAKPOINT = /^(sm|md|lg|xl|2xl|min-\[[^\]]+\]):/;
+
+/** A Tailwind width class's fixed width in px, if it has one (w-[800px], min-w-[40rem], w-120). */
+function fixedWidth(cls: string): number | null {
+  const m = /^(?:min-)?w-(?:\[(\d+(?:\.\d+)?)(px|rem)\]|(\d+(?:\.\d+)?))$/.exec(cls);
+  if (!m) return null;
+  if (m[3]) return Number(m[3]) * 4; // the spacing scale: w-1 is 0.25rem
+  return Number(m[1]) * (m[2] === "rem" ? 16 : 1);
+}
+
+/**
+ * Widths that won't fit a phone, found while compiling, so the agent hears
+ * about them on save without rendering the page again. Classes behind a
+ * breakpoint (md:w-[800px]) are fine: they only apply on wider screens.
+ */
+export function phoneWidthWarnings(classes: Iterable<string>, sources: Record<string, string>): string[] {
+  const out = new Set<string>();
+  for (const cls of classes) {
+    if (BREAKPOINT.test(cls)) continue;
+    const px = fixedWidth(cls.replace(/^!/, ""));
+    if (px !== null && px > PHONE_PX) out.add(`${cls} is ${Math.round(px)} px wide, wider than a phone (about 390 px): use w-full or max-w-…, or put it behind md:`);
+  }
+  for (const [path, source] of Object.entries(sources)) {
+    // Inline styles: style={{ width: 800 }} or width: "50rem".
+    for (const m of source.matchAll(/\b(?:minWidth|width)\s*:\s*["']?(\d+(?:\.\d+)?)(px|rem)?["']?/g)) {
+      const px = Number(m[1]) * (m[2] === "rem" ? 16 : 1);
+      if (px > PHONE_PX) out.add(`${path}: ${m[0].trim()} is ${Math.round(px)} px wide, wider than a phone: use maxWidth or a percentage`);
+    }
+  }
+  return [...out];
+}
+
+export async function buildArtifact(files: Record<string, string>): Promise<{ build?: Build; errors: CompileError[]; warnings?: string[] }> {
   const errors: CompileError[] = [];
   const paths = Object.keys(files);
   const pathSet = new Set(paths);
@@ -303,7 +337,9 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
   } catch (err) {
     return { errors: [{ path: "", message: `stylesheet: ${(err as Error).message}` }] };
   }
-  return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks, stamp: BUILD_STAMP }, errors: [] };
+  const code = Object.fromEntries(paths.filter((p) => !p.startsWith("data/")).map((p) => [p, files[p]]));
+  const warnings = phoneWidthWarnings(candidates, code);
+  return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks, stamp: BUILD_STAMP }, errors: [], ...(warnings.length ? { warnings } : {}) };
 }
 
 const ARTIFACT_CSS_ENTRY = `@import "tailwindcss/theme.css" layer(theme);

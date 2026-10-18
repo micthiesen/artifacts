@@ -9,6 +9,7 @@ export type OutboxItem =
     }
   | { kind: "resolve"; data: { thread: string; by: string; addressedIn: number | null; origin?: string } }
   | { kind: "update"; data: { version: number; notes: string[]; origin?: string } }
+  | { kind: "stale"; data: { block: string; decision: string; seenVersion: number; version: number; note?: string; origin?: string } }
   | {
       kind: "response";
       data: { component: "approval" | "form"; block: string; by: string; decision?: string; note?: string; changed: boolean; origin?: string };
@@ -75,6 +76,13 @@ export function composeMessage(input: {
     } else {
       lines.push(`${name(r.by)} ${r.changed ? "updated their" : "sent a"} response to the "${r.block}" form`);
     }
+  }
+  // Decisions a new version made stale: one line, whichever way they decided.
+  const stale = items.filter((i): i is Extract<OutboxItem, { kind: "stale" }> => i.kind === "stale");
+  if (stale.length) {
+    const s = stale.at(-1)!.data;
+    const what = stale.every((x) => x.data.decision === "approve") ? "you approved it" : stale.every((x) => x.data.decision === "changes") ? "you requested changes" : "your decision";
+    lines.push(`It changed since ${what} on v${s.seenVersion} (now v${s.version}${s.note ? `: ${s.note}` : ""}). Take another look and decide again.`);
   }
   for (const r of resolves) {
     lines.push(

@@ -72,3 +72,18 @@ test("mermaid fences become <Diagram> and are syntax-checked at write time", asy
   const pie = await compileFile("index.mdx", '```mermaid\npie title Share\n  "A" : 60\n  "B" : 40\n```\n', files);
   expect(pie.errors[0]?.message).toContain('<Chart type="pie">');
 });
+
+test("widths wider than a phone come back as warnings, not errors", async () => {
+  const { buildArtifact, phoneWidthWarnings } = await import("../src/worker/compile.ts");
+  const r = await buildArtifact({
+    "index.mdx": `# Wide\n\n<div className="w-[800px] md:w-[900px] w-full min-w-120 max-w-[2000px]">x</div>\n`,
+    "chart.tsx": `export default function C() { return <div style={{ width: 640, maxWidth: "100%" }} />; }`,
+  });
+  expect(r.errors).toEqual([]);
+  expect(r.warnings?.some((w) => w.startsWith("w-[800px] is 800 px"))).toBe(true);
+  expect(r.warnings?.some((w) => w.startsWith("min-w-120 is 480 px"))).toBe(true);
+  expect(r.warnings?.some((w) => w.includes("md:w-[900px]"))).toBe(false);
+  expect(r.warnings?.some((w) => w.startsWith("max-w"))).toBe(false);
+  expect(r.warnings?.some((w) => w.startsWith("chart.tsx: width: 640"))).toBe(true);
+  expect(phoneWidthWarnings(["w-80", "w-full", "sm:min-w-[50rem]"], {})).toEqual([]);
+});

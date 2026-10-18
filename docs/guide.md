@@ -21,6 +21,7 @@ so they need no account.
   - The full list of Mermaid types and when to pick each is in the kit reference below.
 - **Images and files:** upload them with `artifact_asset` (path `assets/<name>`), then use `![alt](assets/logo.png)` in MDX or `useAsset("assets/logo.png")` in code.
 - **Live data:** `artifact_source` keeps a `data/*.json` file updated from a public HTTPS JSON URL every 15 minutes or more. Nothing is fetched until a workspace admin approves the URL's host (in the artifact's Manage panel or workspace settings); tell the user when that's needed.
+- **Phones:** many readers open artifacts on a phone, about 390 px wide. Don't set fixed widths over about 360 px (`w-[800px]`, `min-w-120`, `style={{ width: 640 }}`); use `w-full` and `max-w-…`, or put the wide version behind `md:`. `Grid`, `Stack`, `Table` and charts already adapt. A save that finds a width wider than a phone says so; fix it with another edit.
 - **Styling:** Tailwind classes work. Use the theme tokens (`bg-muted`, `text-muted-foreground`, `border`, `text-primary`, `bg-card`) rather than raw colors so artifacts match the (dark-only) theme.
 
 ## Storage

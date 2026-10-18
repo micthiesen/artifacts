@@ -3,7 +3,7 @@
 An artifact has one entry: `index.mdx` / `index.md` (a readable report) or `app.tsx` (a full-height app, `export default function App()`). Other `*.tsx` files import by relative path; `data/*.json` files load with `useData("x.json")` or a component's `data="x.json"`. Allowed imports: `react`, `@a/ui`, `@a/hooks`, `lucide-react`, `recharts`, relative files. MDX gets every `@a/ui` component and styled markdown with no imports. There is no network: no fetch, no external images or fonts (use `data:` URLs).
 - `useAsset(path)` → URL of a file uploaded with artifact_asset (e.g. `"assets/logo.png"`); MDX images (`![alt](assets/logo.png)`) resolve automatically.
 
-Style with Tailwind classes and theme tokens (the theme is dark only): `bg-background bg-card bg-muted bg-accent bg-primary text-foreground text-muted-foreground text-primary text-primary-foreground border-border text-positive text-caution text-negative bg-chart-1`…`6`, `bg-signal` (the accent gradient; use sparingly), `rounded-lg`, `font-mono`. Avoid raw colors like `bg-white` or `text-gray-500`.
+Style with Tailwind classes and theme tokens (the theme is dark only): `bg-background bg-card bg-muted bg-accent bg-primary text-foreground text-muted-foreground text-primary text-primary-foreground border-border text-positive text-caution text-negative bg-chart-1`…`6`, `bg-signal` (the accent gradient; use sparingly), `rounded-lg`, `font-mono`. Avoid raw colors like `bg-white` or `text-gray-500`. Readers are often on phones (about 390 px): no fixed widths over about 360 px unless behind `md:`.
 
 ## Components (`@a/ui`)
 

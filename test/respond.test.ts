@@ -163,3 +163,20 @@ test("an agent can read decisions and responses but never make them", async () =
   const text = ((await activity.json()) as { result: { content: { text: string }[] } }).result.content[0].text;
   expect(text).toContain(`${SAM} approved in approval "launch"`);
 });
+
+test("a new version tells people whose decision it made stale, once", async () => {
+  const id = await make();
+  await h.directory.addChannel(SAM, "ntfy", { server: "https://ntfy.sh", topic: "sam" }, "ntfy");
+  await h.directory.addChannel(DANA, "ntfy", { server: "https://ntfy.sh", topic: "dana" }, "ntfy");
+  h.hub.setState(id, { [`approve/launch/${SAM}`]: { decision: "approve" } }, SAM, undefined, { origin: ORIGIN });
+  await deliver();
+  await h.hub.writeFiles(id, { "index.mdx": "# Launch\n\nShip it Monday.\n" }, undefined, { note: "Moved to Monday", origin: ORIGIN });
+  await h.hub.writeFiles(id, { "index.mdx": "# Launch\n\nShip it Tuesday.\n" }, undefined, { note: "Now Tuesday", origin: ORIGIN });
+  const out = await deliver();
+  const toSam = out.filter((s) => s.url.endsWith("/sam")).map((s) => String(s.init.body));
+  expect(toSam).toEqual(["It changed since you approved it on v1 (now v3: Now Tuesday). Take another look and decide again."]);
+  // Dana never decided, so she isn't told; and a later version doesn't repeat it.
+  expect(out.some((s) => s.url.endsWith("/dana"))).toBe(false);
+  await h.hub.writeFiles(id, { "index.mdx": "# Launch\n\nShip it Wednesday.\n" }, undefined, { origin: ORIGIN });
+  expect((await deliver()).filter((s) => s.url.endsWith("/sam"))).toEqual([]);
+});

@@ -186,6 +186,8 @@ async function writeResult(r: Awaited<ReturnType<Workspace["create"]>>, ctx: Ctx
   const shot = withScreenshot && screenshot;
   return {
     text: `Saved ${r.id} v${r.version}: ${out.url}\nFiles: ${r.files.join(", ")}\n${describeCheck(check)}${
+      r.warnings?.length ? `\nOn phones (fix these with another edit):\n${r.warnings.map((w) => `- ${w}`).join("\n")}` : ""
+    }${
       shot ? "\nScreenshot of the first screen (1024×768) attached." : screenshot ? "\nartifact_check returns a screenshot." : ""
     }`,
     structured: out,
