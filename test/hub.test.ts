@@ -111,3 +111,18 @@ test("a build from an older compiler is recompiled on read and saved", async () 
   expect(stored.stamp).toBe(served.stamp);
   expect(stored.stamp).toBeTruthy();
 });
+
+test("recompiling a stale build does not overwrite a build written meanwhile", async () => {
+  const id = await make();
+  const sql = h.ctx.sqlStorage;
+  const stale = { ...(await h.hub.build(id))!.build, stamp: undefined, css: ":root{--background: brown}" };
+  sql.exec(`UPDATE builds SET build = ? WHERE artifact_id = ?`, JSON.stringify(stale), id);
+
+  const reading = h.hub.build(id);
+  // A data refresh rewrites the build without bumping the version.
+  const newer = { ...stale, stamp: "newer", css: "/* newer */" };
+  sql.exec(`UPDATE builds SET build = ? WHERE artifact_id = ?`, JSON.stringify(newer), id);
+  expect((await reading)!.build.css).toBe("/* newer */");
+  const stored = JSON.parse(sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, id).toArray()[0].build as string);
+  expect(stored.css).toBe("/* newer */");
+});

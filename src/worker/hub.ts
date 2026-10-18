@@ -257,25 +257,37 @@ export class ArtifactHub extends DurableObject {
 
   async build(id: string): Promise<{ meta: ArtifactMeta; build: Build } | null> {
     const row = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).toArray()[0];
-    const b = this.sql.exec(`SELECT version, build FROM builds WHERE artifact_id = ?`, id).toArray()[0];
+    const b = this.sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, id).toArray()[0];
     if (!row || !b) return null;
     const build: Build = JSON.parse(b.build as string);
     if (build.stamp === BUILD_STAMP) return { meta: toMeta(row), build };
     // Built by an older compiler (for example before a theme change): recompile
-    // the same files. Keep serving the stored build if that fails.
+    // the same files once, even if several frames load at the same time. Keep
+    // serving the stored build if that fails.
+    let pending = this.rebuilds.get(id);
+    if (!pending) {
+      pending = this.rebuildStale(id, b.build as string).finally(() => this.rebuilds.delete(id));
+      this.rebuilds.set(id, pending);
+    }
+    return { meta: toMeta(row), build: (await pending) ?? build };
+  }
+
+  private rebuilds = new Map<string, Promise<Build | null>>();
+
+  private async rebuildStale(id: string, storedJson: string): Promise<Build | null> {
     const fresh = (await buildArtifact(this.files(id))).build;
-    if (!fresh) return { meta: toMeta(row), build };
-    // An edit may have landed while compiling; only replace the version we read.
+    if (!fresh) return null;
+    // An edit or data refresh may have rewritten the build while compiling; that
+    // build is already current, so only replace the exact one we read.
     const updated = this.sql.exec(
-      `UPDATE builds SET build = ? WHERE artifact_id = ? AND version = ?`,
+      `UPDATE builds SET build = ? WHERE artifact_id = ? AND build = ?`,
       JSON.stringify(fresh),
       id,
-      b.version,
+      storedJson,
     ).rowsWritten;
-    if (updated) return { meta: toMeta(row), build: fresh };
+    if (updated) return fresh;
     const now = this.sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, id).toArray()[0];
-    const meta = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).toArray()[0];
-    return now && meta ? { meta: toMeta(meta), build: JSON.parse(now.build as string) } : null;
+    return now ? JSON.parse(now.build as string) : null;
   }
 
   history(id: string) {
