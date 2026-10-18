@@ -166,8 +166,11 @@ The hosted service is free in early access; the terms promise admins 30
 days' notice before anything costs money, and guests never need a plan.
 Pricing plans are kept privately.
 
-A workspace has a plan (`src/worker/plans.ts`): Team has no limits, Free
-caps artifacts, members and stored bytes. The workspace enforces them on
+A workspace has a plan (`src/worker/plans.ts`). Team caps only what one
+Durable Object can hold (5 GB of content, leaving room for history and the
+activity log under its 10 GB) and saves a day (5,000, which bounds render
+checks); Free also caps artifacts and members, with less storage and fewer
+saves. Whatever the plan, writes stop at 9.5 GB of database in use. The workspace enforces them on
 writes and new members; deleting is always allowed, so a full workspace can
 make room, and someone joining by email domain past the member limit stays
 a guest. Existing and operator-made workspaces are on Team; the operator

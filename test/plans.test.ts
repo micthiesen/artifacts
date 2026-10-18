@@ -49,8 +49,8 @@ async function create(cookie: string, fields: Record<string, string>) {
   );
 }
 
-test("existing workspaces are on Team, with no limits", async () => {
-  expect(h.hub.plan()).toMatchObject({ id: "team", limits: { artifacts: null, bytes: null, members: null } });
+test("existing workspaces are on Team: no artifact or member limits, capped near what one Durable Object holds", async () => {
+  expect(h.hub.plan()).toMatchObject({ id: "team", limits: { artifacts: null, members: null, bytes: 5 * 1024 ** 3, changesPerDay: 5000 } });
   expect(h.hub.stats().plan).toBe("team");
 });
 

@@ -314,6 +314,8 @@ const WEBHOOK_TIMEOUT_MS = 5_000;
 const EVENT_TEXT_MAX = 500;
 
 const PINS_PER_PERSON = 100;
+/** A Durable Object's SQLite holds 10 GB; writes stop short of it. */
+const DATABASE_CAPACITY_BYTES = 9.5 * 1024 * 1024 * 1024;
 const PUBLIC_DAYS_MAX = 365;
 const JOIN_DOMAINS_MAX = 20;
 /** Anyone can get an address at these, so a domain rule for them would let the whole internet in. */
@@ -442,6 +444,24 @@ export class Workspace extends DurableObject {
   }
 
   /**
+   * Whatever the plan, a workspace's database must stay under the Durable
+   * Object's 10 GB: pages freed by deletes are reused, so they don't count.
+   */
+  private withinCapacity() {
+    let free = 0;
+    try {
+      const pages = this.sql.exec(`PRAGMA freelist_count`).one().freelist_count as number;
+      const size = this.sql.exec(`PRAGMA page_size`).one().page_size as number;
+      free = pages * size;
+    } catch {
+      // Not every PRAGMA is allowed; without it, the file size is the measure.
+    }
+    if (this.sql.databaseSize - free >= DATABASE_CAPACITY_BYTES) {
+      throw new HubError("This workspace is almost out of space. Delete artifacts you no longer need, then try again.");
+    }
+  }
+
+  /**
    * What a workspace stores for its plan's storage limit: file contents,
    * assets, shared state and screenshots. Unlike the database file's size, it
    * falls as soon as something is deleted.
@@ -458,6 +478,7 @@ export class Workspace extends DurableObject {
 
   /** Refuses a write that would go past the plan. Deleting is always allowed, so a full workspace can make room. */
   private withinPlan(kind: "artifacts" | "bytes" | "members" | "changesPerDay") {
+    if (kind === "bytes") this.withinCapacity();
     const plan = PLANS[this.planId()];
     const max = plan.limits[kind];
     if (max === null) return;
@@ -472,7 +493,7 @@ export class Workspace extends DurableObject {
     const limit = {
       artifacts: `${max} artifacts. Delete artifacts you no longer need to make room.`,
       members: `${max} members. Remove a member to make room.`,
-      bytes: `${Math.round(max / 1024 / 1024)} MB of storage. Delete artifacts you no longer need to make room.`,
+      bytes: `${max >= 1024 ** 3 ? `${max / 1024 ** 3} GB` : `${Math.round(max / 1024 / 1024)} MB`} of storage. Delete artifacts you no longer need to make room.`,
       changesPerDay: `${max} saved changes a day. Try again later; changes save again as the oldest of today's fall out of the last 24 hours.`,
     }[kind];
     throw new HubError(`This workspace is on the ${plan.label} plan, which allows ${limit}`);

@@ -260,7 +260,8 @@ function render() {
   // Only plans with limits say anything: there's nothing to buy yet.
   const { limits, usage } = data.plan;
   if (limits.artifacts !== null || limits.bytes !== null || limits.members !== null) {
-    const mb = (b: number) => (b < 1024 * 1024 ? "under 1 MB" : `${Math.round(b / 1024 / 1024)} MB`);
+    const mb = (b: number) =>
+      b < 1024 * 1024 ? "under 1 MB" : b >= 1024 ** 3 ? `${Math.round((b / 1024 ** 3) * 10) / 10} GB` : `${Math.round(b / 1024 / 1024)} MB`;
     const parts = [
       limits.artifacts !== null && `${usage.artifacts} of ${limits.artifacts} artifacts`,
       limits.members !== null && `${usage.members} of ${limits.members} members`,
