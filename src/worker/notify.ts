@@ -2,9 +2,15 @@
 // and deliver one message through a stored config.
 
 import { b64uDecode, b64uEncode, sendWebPush } from "./webpush.ts";
+import { sendNotificationEmail } from "./mail.ts";
 
-export type ChannelType = "pushover" | "ntfy" | "webhook" | "webpush";
+/** "email" isn't added like the others: everyone has it, on by default (see Directory.channelsFor). */
+export type ChannelType = "pushover" | "ntfy" | "webhook" | "webpush" | "email";
 export type NotifyEnv = {
+  EMAIL?: SendEmail;
+  MAIL_FROM?: string;
+  /** Origin of the apex, for the "turn these off" link in notification emails. */
+  APEX_ORIGIN?: string;
   PUSHOVER_TOKEN?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
@@ -455,6 +461,10 @@ export async function sendToChannel(
         return await sendWebhook(config, msg);
       case "webpush":
         return await sendWebPushChannel(config, msg, env);
+      case "email":
+        if (!env.EMAIL || !env.MAIL_FROM) return { ok: false, error: "email isn't set up on this server" };
+        await sendNotificationEmail({ EMAIL: env.EMAIL, MAIL_FROM: env.MAIL_FROM }, String(config.to), msg, env.APEX_ORIGIN ?? "");
+        return { ok: true };
       default:
         return { ok: false, error: `Unknown channel type: ${String(type)}` };
     }

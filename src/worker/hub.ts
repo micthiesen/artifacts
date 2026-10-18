@@ -14,7 +14,29 @@ import { migrate, type Migration } from "./migrate.ts";
 import { randomId, type DirectoryApi, type WorkspaceRole, type WorkspaceStats } from "./directory.ts";
 import { b64url } from "./session.ts";
 import { DATA_TABLES } from "./tables.ts";
-import { backupRuns, clearTables, deletePrefix, exportPage, fromB64, importRows, newRun, nextBackupAt, pruneBackups, startBackup, startRestore, stepBackup, stepRestore, toB64, unknownColumn, type BackupCursor, type Page, type RestoreCursor } from "./snapshot.ts";
+import {
+  backupRuns,
+  createShadows,
+  deletePrefix,
+  dropShadows,
+  exportPage,
+  fromB64,
+  hasShadows,
+  loadShadow,
+  newRun,
+  nextBackupAt,
+  pruneBackups,
+  shadowRows,
+  startBackup,
+  startRestore,
+  stepBackup,
+  stepRestore,
+  swapShadows,
+  toB64,
+  type BackupCursor,
+  type Page,
+  type RestoreCursor,
+} from "./snapshot.ts";
 import {
   SHARED_STATE_MAX_BYTES,
   SHARED_VALUE_MAX_BYTES,
@@ -62,7 +84,7 @@ export type WriteResult =
 
 export class HubError extends Error {}
 
-type JobBase = { startedAt: string; phase?: string; error?: string; retryAt?: string; tries?: number };
+type JobBase = { startedAt: string; gen: number; phase?: string; error?: string; retryAt?: string; tries?: number };
 type BackupJob = JobBase & { kind: "backup"; cursor: BackupCursor };
 type RestoreJob = JobBase & { kind: "restore"; run: string; cursor: RestoreCursor | null };
 type ImportJob = JobBase & { kind: "import" };
@@ -89,12 +111,12 @@ export type HubApi = AsyncMethods<
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
-    | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "cancelJob" | "threads" | "addComment"
+    | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "previewInfo" | "previewImage" | "watches" | "setWatch"
   >
 > & { fetch(request: Request): Promise<Response> };
 
-type SocketTag = { id: string; email: string | null; role: Role; origin?: string };
+type SocketTag = { id: string; email: string | null; role: Role; origin?: string; exp?: number };
 
 const HISTORY_KEEP = 50;
 const ASSETS_MAX_BYTES = 20 * 1024 * 1024;
@@ -120,7 +142,9 @@ const BACKUPS_KEEP = 30;
 const JOB_STEP_MS = 10_000;
 const TOKEN_TOUCH_MS = 3600_000;
 /** Invitations and "shared with you" emails a workspace may send per day. */
-const MAIL_PER_DAY = 200;
+const MAIL_PER_DAY = 1000;
+/** Share emails one person may send a day. */
+const SHARE_MAIL_PER_PERSON = 50;
 
 /** Tables keyed by artifact, cleared when an artifact is deleted. */
 const ARTIFACT_TABLES = [
@@ -247,6 +271,10 @@ export class Workspace extends DurableObject {
     }
     const existing = this.setting("slug");
     if (existing && existing !== input.slug) throw new HubError(`this object already belongs to ${existing}`);
+    // Data left from a delete that didn't finish must never reappear in a new workspace.
+    if (this.setting("destroyed") || (existing && (this.sql.exec(`SELECT COUNT(*) AS n FROM members`).one().n as number) > 0)) {
+      throw new HubError(`data from an earlier ${input.slug} is still here; delete it again first`);
+    }
     this.setSetting("slug", input.slug);
     this.setSetting("name", input.name);
     if (!this.setting("created_at")) this.setSetting("created_at", new Date().toISOString());
@@ -287,17 +315,24 @@ export class Workspace extends DurableObject {
   }
 
   /** Deletes everything this workspace stores, including its backups. */
-  async destroy() {
-    // Marked first, so an alarm or a backup that runs during the awaits below does nothing.
-    this.setSetting("destroyed", new Date().toISOString());
-    for (const ws of this.ctx.getWebSockets()) ws.close(4004, "workspace deleted");
-    const slug = this.info().slug;
+  /** Delete everything; safe to call again if an earlier attempt failed partway. */
+  async destroy(slugHint?: string) {
+    const slug = this.info().slug || slugHint || "";
+    if (this.ready) {
+      // Marked first, so an alarm or a backup that runs during the awaits below does nothing.
+      this.setSetting("destroyed", new Date().toISOString());
+      for (const ws of this.ctx.getWebSockets()) ws.close(4004, "workspace deleted");
+    }
     await this.ctx.storage.deleteAlarm();
     const bucket = this.hubEnv.BACKUPS;
     if (bucket && slug) await deletePrefix(bucket, `${slug}/`);
     await this.ctx.storage.deleteAll();
     // No tables any more: this instance now answers as a workspace that doesn't exist.
     this.ready = false;
+    this.dirty = null;
+    this.nextCheckAt = 0;
+    // A backup step that was awaiting R2 may have written once more; remove that too.
+    if (bucket && slug) await deletePrefix(bucket, `${slug}/`);
   }
 
   // ---- members and agent tokens ----------------------------------------------------
@@ -355,13 +390,18 @@ export class Workspace extends DurableObject {
     return this.members();
   }
 
-  /** Take `n` from today's email quota (invitations and share emails); false when it's used up. */
-  allowMail(n: number): boolean {
+  /**
+   * Take `n` from today's email allowance (invitations, shares, notifications);
+   * false when it's used up. `by` also counts against that person's own daily
+   * share allowance, so one member can't use the workspace to send bulk mail.
+   */
+  allowMail(n: number, by?: string): boolean {
     const day = new Date().toISOString().slice(0, 10);
-    const used = JSON.parse(this.setting("mail_sent") ?? "{}") as { day?: string; n?: number };
-    const count = used.day === day ? (used.n ?? 0) : 0;
-    if (count + n > MAIL_PER_DAY) return false;
-    this.setSetting("mail_sent", JSON.stringify({ day, n: count + n }));
+    const used = JSON.parse(this.setting("mail_sent") ?? "{}") as { day?: string; n?: number; by?: Record<string, number> };
+    const today = used.day === day ? used : { day, n: 0, by: {} };
+    const mine = by ? (today.by?.[by] ?? 0) : 0;
+    if ((today.n ?? 0) + n > MAIL_PER_DAY || (by && mine + n > SHARE_MAIL_PER_PERSON)) return false;
+    this.setSetting("mail_sent", JSON.stringify({ day, n: (today.n ?? 0) + n, by: by ? { ...today.by, [by]: mine + n } : today.by }));
     return true;
   }
 
@@ -416,7 +456,7 @@ export class Workspace extends DurableObject {
 
   /** The member a presented agent token belongs to, or null. */
   async verifyAgentToken(token: string): Promise<{ email: string } | null> {
-    if (!token.startsWith("art_")) return null;
+    if (!this.ready || !token.startsWith("art_")) return null;
     const row = this.sql.exec(`SELECT id, email, last_used_at FROM tokens WHERE hash = ?`, await sha256Hex(token)).toArray()[0];
     if (!row || !this.memberRole(row.email as string)) return null;
     const last = row.last_used_at ? Date.parse(row.last_used_at as string) : 0;
@@ -883,6 +923,7 @@ export class Workspace extends DurableObject {
     await step("jobs", () => this.stepJobs(Date.now() + JOB_STEP_MS));
     // Nothing else touches data while a restore or import replaces it.
     if (this.offline()) return;
+    if (this.setting("resync_due")) await step("directory resync", () => this.resync());
     const backupAt = Number(this.setting("backup_due_at") ?? NaN);
     if (backupAt <= Date.now() && !this.job()) this.queueJobs([{ kind: "backup" }]);
     await step("render check", async () => {
@@ -916,6 +957,16 @@ export class Workspace extends DurableObject {
   private async armAlarm() {
     if (!this.ready) return;
     const times: number[] = [];
+    // Offline (restoring or importing): only the job's own schedule matters.
+    if (this.offline()) {
+      const job = this.job();
+      if (job && job.kind !== "import") {
+        const at = Math.max(job.retryAt ? Date.parse(job.retryAt) : Date.now(), Date.now() + 1000);
+        const existing = await this.ctx.storage.getAlarm();
+        if (existing === null || existing > at || existing < Date.now()) await this.ctx.storage.setAlarm(at);
+      }
+      return;
+    }
     const queued = this.sql.exec(`SELECT COUNT(*) AS n FROM checks WHERE status = 'queued'`).one().n as number;
     if (queued > 0) times.push(Math.max(Date.now() + CHECK_SPACING_MS, this.nextCheckAt));
     const due = this.sql.exec(`SELECT MIN(due_at) AS t FROM outbox`).one().t as number | null;
@@ -927,6 +978,7 @@ export class Workspace extends DurableObject {
     const job = this.job();
     if (job && job.kind !== "import") times.push(job.retryAt ? Date.parse(job.retryAt) : Date.now());
     else if (!job && this.setting("jobs_next")) times.push(Date.now());
+    if (this.setting("resync_due")) times.push(Date.now() + 60_000);
     if (!times.length) return;
     const at = Math.max(Math.min(...times), Date.now() + 1000);
     const existing = await this.ctx.storage.getAlarm();
@@ -1201,23 +1253,28 @@ export class Workspace extends DurableObject {
     return exportPage(this.sql, DATA_TABLES, table, after);
   }
 
-  /** Start replacing every data table (members included) with rows from importRows. The workspace is offline until importEnd. */
+  /**
+   * Start replacing every data table (members included) with rows from
+   * importRows. Rows load into shadow tables; nothing live changes until
+   * importEnd swaps them in. The workspace is offline meanwhile.
+   */
   importBegin() {
-    if (this.job()?.kind === "restore") throw new HubError("a restore is running; cancel it first");
-    this.setJob({ kind: "import", startedAt: new Date().toISOString() });
-    this.setSetting("jobs_next", null);
-    this.clearData();
+    if (this.job()) throw new HubError(`a ${this.job()!.kind} is running; cancel it first`);
+    createShadows(this.ctx.storage, DATA_TABLES);
+    this.setJob({ kind: "import", startedAt: new Date().toISOString(), gen: this.nextGen() });
   }
 
   importRows(table: string, rows: Record<string, unknown>[]): number {
     if (this.job()?.kind !== "import") throw new HubError("call importBegin first");
-    return importRows(this.ctx.storage, DATA_TABLES, table, rows);
+    return loadShadow(this.ctx.storage, DATA_TABLES, table, rows);
   }
 
   async importEnd() {
     if (this.job()?.kind !== "import") throw new HubError("no import is running");
-    await this.afterLoad();
+    if (!shadowRows(this.sql, "members", "role = 'admin'")) throw new HubError("the import has no admin; add one, or cancel the import");
+    this.swapIn();
     this.setJob(null);
+    await this.afterLoad();
     return this.stats();
   }
 
@@ -1241,98 +1298,171 @@ export class Workspace extends DurableObject {
     const slug = this.info().slug;
     if (!bucket) throw new HubError("no backup bucket is bound");
     if (!(await bucket.head(`${slug}/${run}/manifest.json`))) throw new HubError(`no complete backup ${run}`);
-    this.queueJobs([{ kind: "backup" }, { kind: "restore", run }]);
+    this.queueJobs([{ kind: "backup" }, { kind: "restore", run }], true);
     await this.armAlarm();
     return { queued: true };
   }
 
-  /** The running job, if any (for the operator console). */
+  /** The running job, if any, and the last one that failed (for the operator console). */
   job(): Job | null {
     if (!this.ready) return null;
     const raw = this.setting("job");
     return raw ? (JSON.parse(raw) as Job) : null;
   }
 
-  /** Drop the running and queued jobs. A restore cancelled mid-load leaves what it had loaded. */
-  cancelJob() {
+  lastJobError(): { message: string; at: string } | null {
+    if (!this.ready) return null;
+    const raw = this.setting("last_job_error");
+    return raw ? (JSON.parse(raw) as { message: string; at: string }) : null;
+  }
+
+  /**
+   * Drop the running and queued jobs. A restore or import that hadn't swapped
+   * in yet is simply abandoned: the live data was never touched.
+   */
+  async cancelJob() {
+    if (hasShadows(this.sql, DATA_TABLES)) dropShadows(this.ctx.storage, DATA_TABLES);
+    this.nextGen();
     this.setJob(null);
     this.setSetting("jobs_next", null);
+    this.setSetting("last_job_error", null);
+    await this.reportJob();
   }
 
   private setJob(job: Job | null) {
     this.setSetting("job", job ? JSON.stringify(job) : null);
   }
 
-  private queueJobs(jobs: QueuedJob[]) {
+  /** Each job (and each cancel) gets a new generation, so a step still in flight can tell it was cancelled. */
+  private nextGen(): number {
+    const gen = Number(this.setting("job_gen") ?? 0) + 1;
+    this.setSetting("job_gen", String(gen));
+    return gen;
+  }
+
+  /** The job as it is now, if it's still the one with generation `gen`. */
+  private current(gen: number): Job | null {
+    const job = this.job();
+    return job && job.gen === gen ? job : null;
+  }
+
+  private queueJobs(jobs: QueuedJob[], force = false) {
     const queue = JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[];
     for (const j of jobs) {
-      // One pending backup is enough.
-      if (j.kind === "backup" && queue.some((q) => q.kind === "backup") && jobs.length === 1) continue;
+      // One pending backup is enough (unless it's the one a restore relies on).
+      if (!force && j.kind === "backup" && (queue.some((q) => q.kind === "backup") || this.job()?.kind === "backup")) continue;
       queue.push(j);
     }
     this.setSetting("jobs_next", JSON.stringify(queue));
   }
 
-  /** Run the current job (starting the next queued one) until it finishes or `deadline` passes. */
+  /** Run jobs (starting queued ones) until they're done or `deadline` passes. */
   private async stepJobs(deadline: number) {
+    for (let guard = 0; guard < 5 && Date.now() < deadline; guard++) {
+      if (!(await this.stepJob(deadline))) return;
+    }
+  }
+
+  /** One step of the current or next job; true when it finished and the next one may start now. */
+  private async stepJob(deadline: number): Promise<boolean> {
     const bucket = this.hubEnv.BACKUPS;
     const slug = this.info().slug;
     let job = this.job();
-    if (job?.kind === "import") return;
-    if (job?.retryAt && Date.parse(job.retryAt) > Date.now()) return;
+    if (job?.kind === "import") return false;
+    if (job?.retryAt && Date.parse(job.retryAt) > Date.now()) return false;
     if (!job) {
       const queue = JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[];
       const next = queue.shift();
-      if (!next) return;
+      if (!next) return false;
       this.setSetting("jobs_next", queue.length ? JSON.stringify(queue) : null);
       const startedAt = new Date().toISOString();
-      job = next.kind === "backup" ? { kind: "backup", startedAt, cursor: startBackup(this.nextRun()) } : { kind: "restore", startedAt, run: next.run, cursor: null };
+      const gen = this.nextGen();
+      job = next.kind === "backup" ? { kind: "backup", startedAt, gen, cursor: startBackup(this.nextRun()) } : { kind: "restore", startedAt, gen, run: next.run, cursor: null };
       this.setJob(job);
       if (job.kind === "backup") {
         // This backup covers everything so far; later writes schedule the next.
         this.setSetting("backup_due_at", null);
         this.dirty = false;
       }
+      await this.reportJob();
     }
-    if (!bucket || !slug) return this.setJob(null);
+    if (!bucket || !slug) {
+      this.setJob(null);
+      return false;
+    }
+    const gen = job.gen;
     try {
       if (job.kind === "backup") {
-        const r = await stepBackup(bucket, slug, DATA_TABLES, (t, after) => this.exportPage(t, after), job.cursor, this.schemaVersion(), deadline);
-        if ("next" in r) return this.setJob({ ...job, cursor: r.next, phase: `${DATA_TABLES[r.next.table] ?? "finishing"}`, error: undefined });
+        const r = await stepBackup(bucket, slug, DATA_TABLES, (t, after) => this.exportPage(t, after), job.cursor, this.schemaVersion(), deadline, () => this.ready && !this.setting("destroyed"));
+        if (!this.current(gen)) return false;
+        if ("next" in r) {
+          this.setJob({ ...job, cursor: r.next, phase: DATA_TABLES[r.next.table] ?? "finishing", error: undefined });
+          return false;
+        }
         this.setJob(null);
-        await pruneBackups(bucket, slug, BACKUPS_KEEP);
-        await this.directory().recordStats(slug, this.stats(), this.info().name);
-        return;
+        // Tidying up afterwards can't undo a finished backup.
+        const pending = JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[];
+        await pruneBackups(bucket, slug, BACKUPS_KEEP, pending.flatMap((q) => (q.kind === "restore" ? [q.run] : []))).catch((err) => console.error("prune failed", err));
+        await this.reportJob();
+        return true;
       }
-      const cursor = job.cursor ?? (await startRestore(bucket, slug, job.run, DATA_TABLES, this.schemaVersion()));
-      const next = await stepRestore(bucket, cursor, deadline, {
-        check: (table, rows) => {
-          if (!DATA_TABLES.includes(table)) throw new Error(`backup has an unknown table ${table}`);
-          const bad = unknownColumn(this.sql, table, rows);
-          if (bad) throw new Error(`backup ${job!.kind === "restore" ? (job as RestoreJob).run : ""}: ${table} has a column this version doesn't (${bad})`);
-        },
-        begin: () => this.clearData(),
-        load: (table, rows) => importRows(this.ctx.storage, DATA_TABLES, table, rows),
+      if (!job.cursor) {
+        const cursor = await startRestore(bucket, slug, job.run, DATA_TABLES, this.schemaVersion());
+        if (!this.current(gen)) return false;
+        createShadows(this.ctx.storage, DATA_TABLES);
+        job = { ...job, cursor };
+        this.setJob(job);
+      }
+      const next = await stepRestore(bucket, job.cursor!, deadline, (table, rows) => {
+        if (!this.current(gen)) throw new Error("cancelled");
+        loadShadow(this.ctx.storage, DATA_TABLES, table, rows);
       });
-      if (next) return this.setJob({ ...job, cursor: next, phase: `${next.phase} ${next.index}/${next.keys.length}`, error: undefined });
-      await this.afterLoad();
-      this.setJob(null);
-    } catch (err) {
-      const message = (err as Error).message.slice(0, 300);
-      const restoring = job.kind === "restore";
-      // Nothing was changed yet: a failed check or a failed backup just ends the job.
-      if (job.kind === "backup" || (restoring && (!job.cursor || job.cursor.phase === "validate"))) {
-        const tries = (job.tries ?? 0) + 1;
-        if (job.kind === "backup" && tries < 6) return this.setJob({ ...job, tries, error: message, retryAt: new Date(Date.now() + tries * 600_000).toISOString() });
-        this.setJob(null);
-        this.setSetting("last_job_error", `${job.kind}: ${message}`);
-        // Drop a restore that was queued behind this backup: it was meant to follow a good backup.
-        if (job.kind === "backup") this.setSetting("jobs_next", null);
-        return;
+      if (!this.current(gen)) return false;
+      if (next) {
+        this.setJob({ ...job, cursor: next, phase: `loading ${next.index}/${next.keys.length}`, error: undefined });
+        return false;
       }
-      // Mid-load: stay offline with the error until the operator retries or cancels.
-      this.setJob({ ...job, error: message, retryAt: new Date(Date.now() + 3600_000).toISOString() });
+      this.swapIn();
+      this.setJob(null);
+      await this.afterLoad();
+      return true;
+    } catch (err) {
+      if (!this.current(gen)) return false;
+      const message = (err as Error).message.slice(0, 300);
+      const tries = (job.tries ?? 0) + 1;
+      // A few quick retries for passing trouble (R2, the directory); a loading restore resumes where it was.
+      if (tries < 4 && !/column|schema|missing pages|no complete backup/.test(message)) {
+        this.setJob({ ...job, tries, error: message, retryAt: new Date(Date.now() + tries * 60_000).toISOString() });
+        await this.reportJob();
+        return false;
+      }
+      // Give up. Nothing live was changed: a backup failed, or a restore never swapped in.
+      if (job.kind === "restore") dropShadows(this.ctx.storage, DATA_TABLES);
+      this.setJob(null);
+      this.setSetting("last_job_error", JSON.stringify({ message: `${job.kind}: ${message}`, at: new Date().toISOString() }));
+      if (job.kind === "backup") {
+        // A restore queued behind this backup was relying on it; drop it. Try the backup again tomorrow.
+        this.setSetting("jobs_next", null);
+        this.setSetting("backup_due_at", String(nextBackupAt()));
+      }
+      await this.reportJob();
+      return false;
     }
+  }
+
+  /** Swap the loaded shadows in, all at once, and drop sockets and in-memory state that described the old data. */
+  private swapIn() {
+    for (const ws of this.ctx.getWebSockets()) ws.close(4003, "data restored");
+    swapShadows(this.ctx.storage, DATA_TABLES);
+  }
+
+  /** Tell the directory about this workspace's job (the operator console reads it there, without waking workspaces). */
+  private async reportJob() {
+    const job = this.job();
+    const summary = job ? { kind: job.kind, phase: job.phase, error: job.error, startedAt: job.startedAt } : null;
+    await this.directory()
+      .recordJob(this.info().slug, summary, this.lastJobError())
+      .catch((err: unknown) => console.error("reporting job failed", err));
   }
 
   /** A run id later than any before it here, even for two backups in the same millisecond. */
@@ -1349,19 +1479,25 @@ export class Workspace extends DurableObject {
     return this.sql.exec(`SELECT version FROM _schema`).one().version as number;
   }
 
-  private clearData() {
-    for (const ws of this.ctx.getWebSockets()) ws.close(4003, "data restored");
-    clearTables(this.ctx.storage, DATA_TABLES);
-  }
-
-  /** After a restore or import: mirror the members, report stats, and back up the new state tonight. */
+  /** After a restore or import: mirror the members and stats to the directory (retried by the alarm if it's down), and back up the new state tonight. */
   private async afterLoad() {
-    const { slug, name } = this.info();
-    const directory = this.directory();
-    await directory.replaceMemberships(slug, this.members());
-    await directory.recordStats(slug, this.stats(), name);
     this.dirty = false;
     this.markDirty();
+    this.setSetting("resync_due", "1");
+    await this.resync();
+  }
+
+  private async resync() {
+    const { slug, name } = this.info();
+    try {
+      const directory = this.directory();
+      await directory.replaceMemberships(slug, this.members());
+      await directory.recordStats(slug, this.stats(), name);
+      this.setSetting("resync_due", null);
+      await this.reportJob();
+    } catch (err) {
+      console.error("resync with the directory failed; the alarm retries", err);
+    }
   }
 
   /** Something worth backing up changed: schedule tonight's backup if none is pending. */
@@ -1386,12 +1522,13 @@ export class Workspace extends DurableObject {
     const role = request.headers.get("X-Art-Role") as Role | null;
     const email = request.headers.get("X-Art-Email") || null;
     const origin = request.headers.get("X-Art-Origin") ?? undefined;
+    const exp = Number(request.headers.get("X-Art-Exp") ?? 0) || undefined;
     if (request.headers.get("Upgrade") !== "websocket" || !role) return new Response("expected websocket", { status: 400 });
     this.requireArtifact(id);
     // Read before accepting: the snapshot and threads must describe the same moment.
     const people = email ? await this.people(id, role !== "view" ? undefined : email) : [];
     const pair = new WebSocketPair();
-    const tag: SocketTag = { id, email, role, origin };
+    const tag: SocketTag = { id, email, role, origin, ...(exp ? { exp } : {}) };
     this.ctx.acceptWebSocket(pair[1], [id]);
     pair[1].serializeAttachment(tag);
     const seq = this.sql.exec(`SELECT state_seq FROM artifacts WHERE id = ?`, id).one().state_seq as number;
@@ -1411,6 +1548,10 @@ export class Workspace extends DurableObject {
       return;
     }
     if (!msg || typeof msg !== "object") return;
+    if (tag.exp && Date.now() / 1000 > tag.exp) {
+      ws.close(4001, "session expired");
+      return;
+    }
     if (msg.t === "read") {
       if (tag.email && Number.isFinite(msg.seq)) this.markRead(tag.id, tag.email, msg.seq);
       return;
@@ -1895,6 +2036,8 @@ export class Workspace extends DurableObject {
       const origin = items.map((i) => i.data.origin).find((o): o is string => typeof o === "string" && o !== "") ?? this.setting("origin") ?? "";
       const msg = composeMessage({ title: art.title as string, artifactId: id, origin, items, nameOf: (e) => names[e] ?? null });
       for (const c of mine) {
+        // Notification emails share the workspace's daily email allowance.
+        if (c.type === "email" && !this.allowMail(1)) continue;
         sends++;
         const result = await sendToChannel(c.type, c.config, msg, this.hubEnv).catch((err: Error) => ({ ok: false as const, error: err.message }));
         results.push({ id: c.id, result });

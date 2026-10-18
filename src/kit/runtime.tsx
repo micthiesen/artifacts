@@ -136,7 +136,7 @@ function installErrorHandlers(send: (m: FrameMessage) => void) {
   });
 }
 
-/** External links can't open from the sandbox; ask the shell instead. */
+/** Links can't navigate out of the sandbox; ask the shell to open them instead. */
 function installLinkHandler(send: (m: FrameMessage) => void) {
   document.addEventListener(
     "click",
@@ -145,7 +145,9 @@ function installLinkHandler(send: (m: FrameMessage) => void) {
       const a = (ev.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
       if (!a) return;
       const href = a.getAttribute("href") ?? "";
-      if (!/^(https?:|mailto:)/i.test(href)) return;
+      // In-page anchors stay in the frame; everything else (absolute or relative) goes through the shell.
+      if (href.startsWith("#") || /^(javascript|data|blob):/i.test(href)) return;
+      if (!/^(https?|mailto):/i.test(a.href)) return;
       ev.preventDefault();
       send({ t: "open", url: a.href });
     },

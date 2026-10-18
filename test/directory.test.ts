@@ -15,10 +15,10 @@ test("workspace slugs are short, lowercase and never our own hostnames", () => {
 
 test("a sign-in code works once, for its own address", async () => {
   const code = await h.directory.startLogin("dana@corp.com");
-  expect(code).toMatch(/^\d{6}$/);
+  expect(code).toMatch(/^\d{8}$/);
   expect(await h.directory.verifyLogin("sam@corp.com", code)).toBe(false);
   expect(h.directory.hasSignedIn("dana@corp.com")).toBe(false);
-  expect(await h.directory.verifyLogin("dana@corp.com", `${code.slice(0, 3)} ${code.slice(3)}`)).toBe(true);
+  expect(await h.directory.verifyLogin("dana@corp.com", `${code.slice(0, 4)} ${code.slice(4)}`)).toBe(true);
   expect(h.directory.hasSignedIn("dana@corp.com")).toBe(true);
   expect(await h.directory.verifyLogin("dana@corp.com", code)).toBe(false);
 });
@@ -27,7 +27,7 @@ test("someone else asking for codes, or guessing, doesn't cancel the code in you
   const mine = await h.directory.startLogin("dana@corp.com", "10.0.0.1");
   for (let i = 0; i < 5; i++) await h.directory.startLogin("dana@corp.com", "6.6.6.6");
   await expect(h.directory.startLogin("dana@corp.com", "6.6.6.6")).rejects.toThrow("Too many codes");
-  const wrong = mine === "000000" ? "111111" : "000000";
+  const wrong = mine === "00000000" ? "11111111" : "00000000";
   for (let i = 0; i < 12; i++) await h.directory.verifyLogin("dana@corp.com", wrong, "6.6.6.6");
   // The attacker's network is locked out; yours isn't, and your first code still works.
   expect(await h.directory.verifyLogin("dana@corp.com", mine, "6.6.6.6")).toBe(false);
@@ -71,4 +71,23 @@ test("the directory exports, imports and backs itself up like a workspace", asyn
   // Login codes are never exported.
   await dir.startLogin("dana@corp.com");
   expect(() => dir.exportPage("login_codes")).toThrow("unknown table");
+});
+
+test("everyone gets email notifications unless they turn them off", () => {
+  expect(h.directory.channelsFor(["dana@corp.com"])["dana@corp.com"]).toEqual([{ id: "email", type: "email", config: { to: "dana@corp.com" } }]);
+  h.directory.setEmailNotifications("dana@corp.com", false);
+  expect(h.directory.channelsFor(["dana@corp.com"])["dana@corp.com"]).toEqual([]);
+  expect(h.directory.profile("dana@corp.com").emailNotifications).toBe(false);
+  // Results for the built-in channel have no row to update.
+  h.directory.recordChannelResult("email", { ok: false, error: "x" });
+});
+
+test("guessing from many networks doesn't lock the owner out of their own", async () => {
+  const mine = await h.directory.startLogin("dana@corp.com", "10.0.0.1");
+  const wrong = mine === "00000000" ? "11111111" : "00000000";
+  for (let n = 0; n < 4; n++) for (let i = 0; i < 10; i++) await h.directory.verifyLogin("dana@corp.com", wrong, `6.6.6.${n}`);
+  // 40 failures from four networks: a fifth that already failed is refused, the owner's isn't.
+  await h.directory.verifyLogin("dana@corp.com", wrong, "7.7.7.7");
+  expect(await h.directory.verifyLogin("dana@corp.com", mine, "7.7.7.7")).toBe(false);
+  expect(await h.directory.verifyLogin("dana@corp.com", mine, "10.0.0.1")).toBe(true);
 });

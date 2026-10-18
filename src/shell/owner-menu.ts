@@ -152,7 +152,7 @@ export function initOwnerMenu(
   button: HTMLElement,
   onArchived?: (archivedAt: string | null) => void,
   options: { isAdmin?: boolean } = {},
-): { show: () => void; copyMyLink: () => Promise<string>; reload: () => void } {
+): { show: () => void; reload: () => void } {
   const isAdmin = options.isAdmin ?? (boot as ShellBoot & { admin?: boolean }).admin ?? false;
   const base = `/api/a/${encodeURIComponent(boot.artifactId)}`;
   const tool = (name: string, args: Record<string, unknown> = {}) => request<ToolResponse>(`${base}/${name}`, args);
@@ -388,9 +388,6 @@ export function initOwnerMenu(
                 h("option", { value: "view", selected: s.role === "view" }, "Can view"),
                 h("option", { value: "edit", selected: s.role === "edit" }, "Can edit"),
               ),
-              !isDomain &&
-                btn("Copy link", `link-${s.email}`, () =>
-                  void act(`link-${s.email}`, "sharing", () => copyLink(s.email), false), "om-text-button"),
               btn("Remove", `remove-${s.email}`, () =>
                 void act(`remove-${s.email}`, "sharing", async () => {
                   await tool("artifact_share", { remove: [s.email] });
@@ -429,7 +426,9 @@ export function initOwnerMenu(
           void act("add", "sharing", async () => {
             await tool("artifact_share", { add: [{ email, role }] });
             drafts.delete("add-email");
-            return { text: email.startsWith("@") ? `Shared with everyone at ${email.slice(1)}.` : `Shared with ${email}. Use "Copy link" to send them a sign-in link.` };
+            return {
+              text: email === "workspace" ? "Shared with everyone in the workspace." : email.startsWith("@") ? `Shared with everyone at ${email.slice(1)}.` : `Shared with ${email}. We emailed them a link.`,
+            };
           });
         },
       },
@@ -496,22 +495,7 @@ export function initOwnerMenu(
     return [
       h("div", { class: "om-group" }, h("h3", { class: "om-h" }, "People"), list, form),
       h("div", { class: "om-group" }, publicToggle, previewToggle),
-      h(
-        "div",
-        { class: "om-group" },
-        h("h3", { class: "om-h" }, "Your link"),
-        h("p", { class: "muted om-small" }, "A sign-in link for you, valid 7 days. Anyone holding it acts as you."),
-        btn("Copy my link", "my-link", () => void act("my-link", "sharing", () => copyLink(boot.viewer.email ?? undefined, "you"), false), "button small secondary"),
-      ),
     ];
-  }
-
-  async function copyLink(email?: string, who = email ?? "you"): Promise<Note> {
-    const r = await tool("artifact_link", email ? { email } : {});
-    const link = String(r.data?.link ?? "");
-    if (!link) throw new Error(r.text || "No link returned.");
-    if (await copyText(link)) return { text: `Copied a sign-in link for ${who}. It signs in as ${who}, so send it only to them.` };
-    return { text: `Couldn't reach the clipboard. Link for ${who}:\n${link}`, pre: true };
   }
 
   // --- History --------------------------------------------------------------
@@ -789,13 +773,6 @@ export function initOwnerMenu(
     show,
     reload: () => {
       if (open) void load();
-    },
-    // A presigned link for the owner, for opening this artifact on another device.
-    copyMyLink: async () => {
-      const r = await tool("artifact_link", { email: boot.viewer.email ?? undefined });
-      const link = String(r.data?.link ?? "");
-      if (!link) throw new Error(r.text || "No link returned.");
-      return link;
     },
   };
 }

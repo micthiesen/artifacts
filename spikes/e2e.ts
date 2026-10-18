@@ -195,6 +195,17 @@ for (let i = 0; i < 20 && !runs.length; i++) {
   runs = (await operator(`/workspaces/${slug}/backups`)).runs ?? [];
 }
 check("backup job finished and is listed", runs.length === 1, runs);
+// Restore it: a fresh backup runs first, the workspace is offline meanwhile, then it's back with the data.
+const before = (await call("artifact_read", { id })).structuredContent?.version;
+check("restore queued", (await operator(`/workspaces/${slug}/restore`, { run: runs[0] })).queued === true);
+let restored = false;
+for (let i = 0; i < 30 && !restored; i++) {
+  await Bun.sleep(1500);
+  const w = (await operator("/workspaces")).workspaces.find((x: any) => x.slug === slug);
+  restored = !w?.job && (await operator(`/workspaces/${slug}/backups`)).runs.length === 2;
+}
+check("restore finished (with its safety backup)", restored);
+check("restored artifact is intact", (await call("artifact_read", { id })).structuredContent?.version === before);
 
 // Sliding sessions: a session close to expiry (the test cookies last an hour) gets renewed.
 const renewed = await fetch(`${origin}/`, { headers: { Cookie: cookie } });
@@ -206,8 +217,6 @@ await call("artifact_share", { id, add: [{ email: "@example.org", role: "view" }
 check("domain member can open", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.org") } })).status === 200);
 check("other domain refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.net") } })).status === 403);
 check("subdomain of a shared domain refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("x@sub.example.org") } })).status === 403);
-const domainLink = await call("artifact_link", { id, email: "pat@example.org" });
-check("link allowed for domain member", !domainLink.isError, domainLink.content);
 const badDomain = await call("artifact_share", { id, add: [{ email: "@localhost", role: "view" }] });
 check("invalid domain rejected", badDomain.isError === true, badDomain.content);
 await call("artifact_share", { id, remove: ["@example.org"] });
@@ -222,14 +231,14 @@ const linkCookie = (opened.headers.get("Set-Cookie") ?? "").split(";")[0];
 check("links are bound to their workspace", (await fetch(linkUrl.replace(origin, `https://other-${slug}.${new URL(apex).hostname}`), { redirect: "manual" })).status !== 303);
 check("owner link signs in and redirects", opened.status === 303 && opened.headers.get("Location") === `/a/${id}` && linkCookie.startsWith("__Host-art_session="), opened.status);
 check("owner link session opens private artifact", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: linkCookie } })).status === 200);
-const noAccess = await call("artifact_link", { id, email: "nobody@example.com" });
-check("link refused for unshared email", noAccess.isError === true, noAccess.content);
+const forOther = await call("artifact_link", { id, email: "nobody@example.com" });
+check("no sign-in links for anyone but yourself", forOther.isError === true, forOther.content);
 const shared = await call("artifact_share", { id, add: [{ email: "guest@example.com", role: "view" }] });
-const guestLink = shared.structuredContent?.links?.["guest@example.com"] as string;
-check("share returns a link per added person", typeof guestLink === "string", shared.structuredContent);
+check("share never hands back someone else's sign-in link", !JSON.stringify(shared).includes("/s/"), shared.structuredContent);
+const guest = await cookieFor("guest@example.com");
+check("shared guest opens it", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: guest } })).status === 200);
 await call("artifact_share", { id, remove: ["guest@example.com"] });
-const revoked = await fetch(guestLink, { redirect: "manual" });
-check("link stops working after unshare", revoked.status === 403, revoked.status);
+check("unshared guest is refused at once", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: guest } })).status === 403);
 // Flip a character inside the payload (the signature's last base64 char has spare bits).
 const cut = linkUrl.indexOf("/s/") + 10;
 const tamperedUrl = linkUrl.slice(0, cut) + (linkUrl[cut] === "A" ? "B" : "A") + linkUrl.slice(cut + 1);

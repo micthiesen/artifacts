@@ -9,6 +9,8 @@ import {
   consentPage,
   continuePage,
   linkSwitchPage,
+  policyPage,
+  type PolicyKind,
   frameDocument,
   indexPage,
   loginPage,
@@ -23,6 +25,7 @@ import {
 } from "./pages.ts";
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
+import { publicMessage } from "./errors.ts";
 export { isTestAddress };
 import {
   b64url,
@@ -35,7 +38,7 @@ import {
   timingSafeEqual,
   verifyToken,
 } from "./session.ts";
-import { validSlug, type DirectoryApi, type WorkspaceRecord, type WorkspaceRole } from "./directory.ts";
+import { validSlug, WORKSPACE_LIST_KEY, type DirectoryApi, type WorkspaceRecord, type WorkspaceRole } from "./directory.ts";
 import type { HubApi, Workspace } from "./hub.ts";
 import type { Directory } from "./directory.ts";
 import type { Role } from "../shared/protocol.ts";
@@ -63,6 +66,8 @@ export type Env = {
   OPERATOR_EMAILS: string;
   /** The front door, e.g. "artifacts.boo". */
   APEX_HOST: string;
+  /** https://<APEX_HOST>, for links in notification emails. */
+  APEX_ORIGIN?: string;
   /** Appended to a slug to make its host, e.g. ".artifacts.boo" ("acme.artifacts.boo"). */
   WORKSPACE_SUFFIX: string;
   /** Sender address for sign-in codes. */
@@ -92,7 +97,7 @@ const NONCE_COOKIE = "__Host-art_login";
  * `only` is set for a session from a presigned link: it opens that one
  * artifact and nothing else (no list, settings, owner actions or OAuth).
  */
-type Viewer = { email: string | null; only?: string };
+type Viewer = { email: string | null; only?: string; exp?: number };
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -154,19 +159,20 @@ function apexBrand(env: Env): Brand {
 
 type Routable = Pick<WorkspaceRecord, "slug" | "name" | "suspended">;
 type WorkspaceList = { at: string; list: Record<string, { name: string; suspended: boolean }> };
-const WORKSPACE_LIST_KEY = "artifacts:workspaces";
-/** How old the KV list must be before a slug missing from it is trusted to be missing. */
-const LIST_SETTLE_MS = 120_000;
+/** KV is edge-cached this long; a missing slug is trusted only once the list is older than that plus a margin. */
+const LIST_CACHE_S = 30;
+const LIST_SETTLE_MS = (LIST_CACHE_S + 90) * 1000;
 
 /**
  * The workspace for a host, without touching the directory on ordinary
- * requests: the list of workspaces is mirrored to KV (edge-cached for a
- * minute) whenever one is created, renamed, suspended or deleted. A slug the
- * list doesn't have is answered from the list alone once it has settled, so
- * random subdomains never reach the directory or wake a Durable Object; only
- * just after a change does a miss fall back to asking the directory.
+ * requests: the directory mirrors its list of workspaces to KV whenever one
+ * is created, renamed, suspended or deleted. A slug the list doesn't have is
+ * answered from the list alone once the list has settled, so random
+ * subdomains never reach the directory or wake a Durable Object; only just
+ * after a change does a miss fall back to asking the directory.
  */
 const workspaceCache = new Map<string, { record: Routable | null; at: number }>();
+let listCache: { value: WorkspaceList | null; at: number } | null = null;
 let publishing = false;
 
 async function workspaceRecord(env: Env, slug: string, ctx?: ExecutionContext): Promise<Routable | null> {
@@ -178,24 +184,26 @@ async function workspaceRecord(env: Env, slug: string, ctx?: ExecutionContext): 
     workspaceCache.set(slug, { record, at: Date.now() });
     return record;
   };
-  const listed = (await env.OAUTH_KV.get<WorkspaceList>(WORKSPACE_LIST_KEY, { type: "json", cacheTtl: 60 }).catch(() => null)) ?? null;
-  const entry = listed?.list[slug];
+  if (!listCache || Date.now() - listCache.at > LIST_CACHE_S * 1000) {
+    const value = (await env.OAUTH_KV.get<WorkspaceList>(WORKSPACE_LIST_KEY, { type: "json", cacheTtl: LIST_CACHE_S }).catch(() => null)) ?? null;
+    listCache = { value, at: Date.now() };
+  }
+  const listed = listCache.value;
+  const entry = listed && Object.hasOwn(listed.list, slug) ? listed.list[slug] : null;
   if (entry) return remember({ slug, ...entry });
   if (listed && Date.now() - Date.parse(listed.at) > LIST_SETTLE_MS) return remember(null);
   if (!listed && ctx && !publishing) {
     publishing = true;
-    ctx.waitUntil(publishWorkspaces(env).finally(() => (publishing = false)));
+    ctx.waitUntil(directory(env).publish().finally(() => (publishing = false)));
   }
   const record = await directory(env).workspace(slug);
   return remember(record ? { slug, name: record.name, suspended: record.suspended } : null);
 }
 
-/** Mirror the workspace list to KV for routing (see workspaceRecord). */
-async function publishWorkspaces(env: Env) {
-  const all = await directory(env).workspaces();
-  const value: WorkspaceList = { at: new Date().toISOString(), list: Object.fromEntries(all.map((w) => [w.slug, { name: w.name, suspended: w.suspended }])) };
-  await env.OAUTH_KV.put(WORKSPACE_LIST_KEY, JSON.stringify(value));
+/** After a change to the workspace list: forget this isolate's copies (the directory has republished). */
+function forgetWorkspaces() {
   workspaceCache.clear();
+  listCache = null;
 }
 
 // ---- workspace hosts: OAuth around the app --------------------------------------------
@@ -269,18 +277,24 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   const slug = slugOf(url.hostname, env)!;
   if (path === "/healthz") return new Response("ok");
   if (path === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n", { headers: { "Content-Type": "text/plain" } });
+  if (path === "/privacy" || path === "/terms" || path === "/security") return Response.redirect(`${apexOrigin(env)}${path}`, 301);
   const record = await workspaceRecord(env, slug);
   const brand: Brand = { name: record?.name ?? slug, home: "/", apex: apexOrigin(env) };
   if (!record) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
   if (record.suspended) return messagePage("Workspace suspended", `${record.name} is suspended. Contact whoever runs it.`, 403, { href: apexOrigin(env), label: "Artifacts" }, brand);
   const hub = workspaceHub(env, slug);
-  const state = await hub.access(null, url.origin);
-  // A deleted workspace's object may still be cached here for a few seconds.
-  if (state.slug !== slug) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
-  if (state.offline) {
-    const res = messagePage("Back in a few minutes", `${record.name} is being restored from a backup. Try again in a few minutes.`, 503, { href: path, label: "Try again" }, brand);
-    res.headers.set("Retry-After", "60");
-    return res;
+  // Pages and APIs check the workspace itself first (deleted, or offline for a restore). Frames,
+  // assets and images carry their own short-lived tokens, and anything else is a 404, so neither
+  // wakes the workspace for nothing.
+  if (/^\/($|archived$|me$|settings$|authorize$|switch$|login$|auth\/|s\/|a\/|api\/)/.test(path)) {
+    const state = await hub.access(null, workspaceOrigin(env, slug));
+    // A deleted workspace's object may still be cached here for a few seconds.
+    if (state.slug !== slug) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
+    if (state.offline) {
+      const res = messagePage("Back in a few minutes", `${record.name} is being restored from a backup. Try again in a few minutes.`, 503, { href: path, label: "Try again" }, brand);
+      res.headers.set("Retry-After", "60");
+      return res;
+    }
   }
 
   const og = /^\/og\/([a-z0-9]+)\.jpg$/.exec(path);
@@ -408,6 +422,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
       headers.set("X-Art-Id", id);
       headers.set("X-Art-Role", role);
       headers.set("X-Art-Email", here.email ?? "");
+      // A link session's socket ends when its link would have.
+      if (here.exp) headers.set("X-Art-Exp", String(here.exp));
       headers.set("X-Art-Origin", url.origin);
       return hub.fetch(new Request(request.url, { headers }));
     }
@@ -448,7 +464,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
  */
 async function invite(env: Env, hub: HubApi, to: string, input: { workspace: string; url: string; by: string | null; role: string }): Promise<boolean> {
   try {
-    if (!(await hub.allowMail(1))) return false;
+    if (isTestAddress(to) || !(await hub.allowMail(1))) return false;
     await sendInvite(env, to, input);
     return true;
   } catch (err) {
@@ -484,6 +500,9 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
     return workspacesPage(viewer.email, workspaces, operator, brand);
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
+  if (path === "/privacy" || path === "/terms" || path === "/security") {
+    return policyPage(path.slice(1) as PolicyKind, brand, (env.OPERATOR_EMAILS ?? "").split(",")[0].trim());
+  }
   if (path === "/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
     return new Response(null, { status: 303, headers: { Location: "/", "Set-Cookie": clearSessionCookie() } });
@@ -509,7 +528,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
 }
 
 /**
- * Email sign-in: ask for an address, email a six-digit code, check it. With
+ * Email sign-in: ask for an address, email a code, check it. With
  * `to` (a workspace origin) the browser is then handed to that workspace.
  */
 async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, brand: Brand): Promise<Response> {
@@ -643,7 +662,7 @@ async function presignedSignIn(request: Request, code: string, url: URL, env: En
 async function currentViewer(request: Request, env: Env): Promise<Viewer> {
   const claims = await verifyToken<{ e: string; h: string; a?: string }>(env.SESSION_SECRET, "session", readCookie(request, SESSION_COOKIE));
   if (!claims || claims.h !== new URL(request.url).hostname) return { email: null };
-  return claims.a ? { email: claims.e, only: claims.a } : { email: claims.e };
+  return claims.a ? { email: claims.e, only: claims.a, exp: claims.exp } : { email: claims.e };
 }
 
 /**
@@ -702,13 +721,8 @@ async function jsonBody(request: Request): Promise<Record<string, unknown>> {
 
 /** Validation errors from a Durable Object arrive as plain Errors over RPC, so every failure is shown as its message. */
 function failure(err: unknown): Response {
-  const message = err instanceof Error ? err.message : String(err);
-  // Storage and runtime errors aren't for the browser.
-  if (/SQLITE|no such (table|column)|D1_|internal error|Network connection lost/i.test(message)) {
-    console.error(err);
-    return Response.json({ error: "Something went wrong on our side. Try again." }, { status: 500 });
-  }
-  return Response.json({ error: message }, { status: 400 });
+  const { message, internal } = publicMessage(err);
+  return Response.json({ error: message }, { status: internal ? 500 : 400 });
 }
 
 // ---- OAuth consent ---------------------------------------------------------------------
@@ -822,6 +836,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         workspace: { slug, name, url: url.origin },
         you: { email, role: member },
         mcpUrl: `${url.origin}/mcp`,
+        mcpName: `artifacts-${slug}`,
         members: await hub.members(),
         tokens: await hub.tokens(admin ? undefined : email),
         apps: (await hub.grants(email)).map((g) => ({ id: g.id, client: g.client, createdAt: g.createdAt })),
@@ -832,7 +847,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
     if (path === "/api/settings/name" && request.method === "POST") {
       if (!admin) return adminOnly();
       const info = await hub.rename(String(body.name ?? ""));
-      await publishWorkspaces(env);
+      forgetWorkspaces();
       return Response.json(info);
     }
     if (path === "/api/settings/members" && request.method === "POST") {
@@ -852,9 +867,10 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
     if (token && request.method === "DELETE") return Response.json({ revoked: await hub.revokeToken(token[1], email) });
     const app = /^\/api\/settings\/apps\/([A-Za-z0-9_-]+)$/.exec(path);
     if (app && request.method === "DELETE") {
-      // Only your own: the grant must be one the workspace recorded for you.
-      if (!(await hub.forgetGrants({ id: app[1], email })).length) return Response.json({ error: "not found" }, { status: 404 });
+      // Only your own: the grant must be one the workspace recorded for you. Revoked first, then forgotten.
+      if (!(await hub.grants(email)).some((g) => g.id === app[1])) return Response.json({ error: "not found" }, { status: 404 });
       await oauth.revokeGrant(app[1], grantUser(slug, email));
+      await hub.forgetGrants({ id: app[1], email });
       return Response.json({ revoked: true });
     }
     if (path === "/api/settings/hosts" && request.method === "POST") {
@@ -948,6 +964,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
   try {
     if (url.pathname === "/api/me") {
       if (request.method === "POST" && typeof body.name === "string") await dir.setName(email, body.name);
+      if (request.method === "POST" && typeof body.emailNotifications === "boolean") await dir.setEmailNotifications(email, body.emailNotifications);
       const profile = await dir.profile(email);
       return Response.json({
         ...profile,
@@ -1021,15 +1038,18 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       if (host !== env.APEX_HOST && !slugOf(host, env)) return Response.json({ error: "unknown host" }, { status: 400 });
       return Response.json({ cookie: `${SESSION_COOKIE}=${await signToken(env.SESSION_SECRET, "session", 3600, { e: email, h: host })}` });
     }
+    // End-to-end checks sign in through the real forms: a code for a test address (whose mail is never sent).
+    if (path === "/api/admin/test-code" && request.method === "POST") {
+      const email = String((await jsonBody(request)).email ?? "").toLowerCase();
+      if (!isTestAddress(email)) return Response.json({ error: "only test addresses" }, { status: 400 });
+      return Response.json({ code: await dir.startLogin(email, "operator") });
+    }
+    if (path === "/api/admin/signins" && request.method === "GET") {
+      return Response.json(await dir.signInDiagnostics(String(url.searchParams.get("email") ?? "").toLowerCase()));
+    }
     if (path === "/api/admin/workspaces" && request.method === "GET") {
-      const all = await dir.workspaces();
-      const jobs = await Promise.all(all.map((w) => Promise.resolve().then(() => workspaceHub(env, w.slug).job()).catch(() => null)));
-      return Response.json({
-        workspaces: all.map((w, i) => {
-          const job = jobs[i];
-          return { ...w, url: workspaceOrigin(env, w.slug), job: job ? { kind: job.kind, phase: job.phase, error: job.error, startedAt: job.startedAt } : null };
-        }),
-      });
+      // Jobs come from the directory, which each workspace reports to, so this wakes no workspace.
+      return Response.json({ workspaces: (await dir.workspaces()).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) })) });
     }
     if (path === "/api/admin/workspaces" && request.method === "POST") {
       const body = await jsonBody(request);
@@ -1043,7 +1063,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
         await dir.removeWorkspace(slug);
         throw err;
       }
-      await publishWorkspaces(env);
+      forgetWorkspaces();
       const origin = workspaceOrigin(env, slug);
       const emailed = await invite(env, workspaceHub(env, slug), admin, { workspace: record.name, url: origin, by: null, role: "admin" });
       return Response.json({ workspace: { ...record, url: origin }, emailed });
@@ -1053,31 +1073,35 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
     if (d) {
       const body = request.method === "POST" ? await jsonBody(request) : {};
       const done = await snapshotAction(dir, d[1], request.method, url, body);
-      if (d[1] === "restore" || (d[1] === "import" && body.step === "end")) await publishWorkspaces(env);
+      if (d[1] === "restore" || (d[1] === "import" && body.step === "end")) forgetWorkspaces();
       return done ?? Response.json({ error: "not found" }, { status: 404 });
     }
     const m = /^\/api\/admin\/workspaces\/([a-z0-9-]+)(?:\/([a-z]+))?$/.exec(path);
     if (!m) return Response.json({ error: "not found" }, { status: 404 });
     const [, slug, action] = m;
-    if (!(await dir.workspace(slug))) return Response.json({ error: `no workspace ${slug}` }, { status: 404 });
     const hub = workspaceHub(env, slug);
+    const listed = await dir.workspace(slug);
+    // Deleting again finishes a delete that failed partway, even after the directory forgot the workspace.
+    if (!action && request.method === "DELETE") {
+      if (!validSlug(slug)) return Response.json({ error: `no workspace ${slug}` }, { status: 404 });
+      for (const m of await hub.members().catch(() => [])) {
+        await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email, hub).catch((err) => console.error("revoking grants failed", err));
+      }
+      await hub.destroy(slug);
+      if (listed) await dir.removeWorkspace(slug);
+      forgetWorkspaces();
+      return Response.json({ deleted: slug });
+    }
+    if (!listed) return Response.json({ error: `no workspace ${slug}` }, { status: 404 });
     const body = request.method === "POST" ? await jsonBody(request) : {};
     if (!action && request.method === "POST") {
       if (typeof body.suspended === "boolean") {
         await dir.setSuspended(slug, body.suspended);
         // Open pages reconnect and meet the suspended page.
         if (body.suspended) await hub.closeSockets();
-        await publishWorkspaces(env);
+        forgetWorkspaces();
       }
       return Response.json({ workspace: await dir.workspace(slug) });
-    }
-    if (!action && request.method === "DELETE") {
-      // Gone from routing first, then agents' OAuth grants (they live outside the workspace), then the data.
-      await dir.removeWorkspace(slug);
-      await publishWorkspaces(env);
-      for (const m of await hub.members().catch(() => [])) await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email, hub);
-      await hub.destroy();
-      return Response.json({ deleted: slug });
     }
     // Fix the admins without a role inside the workspace: say, a mistyped first admin.
     if (action === "members" && request.method === "POST") {

@@ -64,6 +64,8 @@ export default Alchemy.Stack(
       domain: { name: apexHost, aliases: prod ? [`www.${domain}`] : [] },
       workersDev: false,
       routes: [{ pattern: `*${workspaceSuffix}/*`, zoneId: zone.id }],
+      // Workers Logs, so sign-in and email failures can be looked up afterwards.
+      observability: { enabled: true },
       env: {
         WORKSPACE: Cloudflare.DurableObject("Workspace"),
         DIRECTORY: Cloudflare.DurableObject("Directory"),
@@ -78,6 +80,7 @@ export default Alchemy.Stack(
         OPERATOR_TOKEN: yield* Config.Redacted("OPERATOR_TOKEN"),
         OPERATOR_EMAILS: operators,
         APEX_HOST: apexHost,
+        APEX_ORIGIN: `https://${apexHost}`,
         WORKSPACE_SUFFIX: workspaceSuffix,
         MAIL_FROM: mailFrom,
         VAPID_PUBLIC_KEY: vapid("public"),

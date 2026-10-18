@@ -176,7 +176,7 @@ function render() {
 
   for (const w of workspaces) {
     const s = w.stats;
-    const busy = w.job !== null && !w.job.error;
+    const busy = w.job != null && !w.job.error;
     const card = h(
       "section",
       { class: "card-section" },

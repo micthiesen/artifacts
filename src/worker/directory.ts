@@ -6,7 +6,22 @@ import { DurableObject } from "cloudflare:workers";
 import { migrate, type Migration } from "./migrate.ts";
 import type { ChannelType } from "./notify.ts";
 import { DIRECTORY_TABLES } from "./tables.ts";
-import { backupRuns, clearTables, exportPage, importRows, nextBackupAt, pruneBackups, startBackup, startRestore, stepBackup, stepRestore, unknownColumn, type Page } from "./snapshot.ts";
+import {
+  backupRuns,
+  createShadows,
+  dropShadows,
+  exportPage,
+  hasShadows,
+  loadShadow,
+  nextBackupAt,
+  pruneBackups,
+  readRun,
+  startBackup,
+  startRestore,
+  stepBackup,
+  swapShadows,
+  type Page,
+} from "./snapshot.ts";
 
 export type WorkspaceRole = "admin" | "member";
 
@@ -17,9 +32,12 @@ export type WorkspaceRecord = {
   suspended: boolean;
   stats: WorkspaceStats | null;
   statsAt: string | null;
+  job: WorkspaceJob | null;
+  jobError: { message: string; at: string } | null;
 };
 
 export type WorkspaceStats = { artifacts: number; members: number; bytes: number; lastActivity: string | null };
+export type WorkspaceJob = { kind: string; phase?: string; error?: string; startedAt: string };
 
 export type ChannelRow = { id: string; type: ChannelType; config: Record<string, unknown> };
 
@@ -34,7 +52,7 @@ export type DirectoryApi = AsyncMethods<
     Directory,
     | "createWorkspace" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
-    | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "exportPage" | "importBegin" | "importRows" | "importEnd"
+    | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore"
   >
 >;
@@ -52,17 +70,25 @@ export function validSlug(slug: string): boolean {
 const CODE_TTL_MS = 10 * 60_000;
 // Anyone can ask for a code, so cap what one client, one address and everyone together can make us send.
 const CODES_PER_EMAIL_PER_IP_PER_HOUR = 5;
-const CODES_PER_EMAIL_PER_HOUR = 20;
+const CODES_PER_EMAIL_PER_HOUR = 10;
 const CODES_PER_IP_PER_HOUR = 100;
 const CODES_PER_HOUR = 2000;
-const LIVE_CODES = 5;
-// Wrong guesses: per address and network, and per address overall (bounds brute force at 50 an hour).
+/** Live codes one network can have for an address; older ones from that network make way. */
+const LIVE_CODES = 3;
+// Wrong guesses: a network that keeps failing for an address is shut out for the hour. Once an
+// address has many failures, only networks that already failed are refused, so its owner can still
+// sign in from theirs. With 8-digit codes that bounds brute force far below one in a thousand a week.
 const FAILS_PER_EMAIL_PER_IP_PER_HOUR = 10;
-const FAILS_PER_EMAIL_PER_HOUR = 50;
+const FAILS_PER_EMAIL_PER_HOUR = 30;
+const CODE_DIGITS = 8;
 const CHANNEL_TESTS_PER_HOUR = 20;
 const CHANNEL_MAX_FAILURES = 5;
 const CHANNELS_MAX = 10;
+/** The id the built-in email channel goes by in channelsFor; it has no row. */
+const EMAIL_CHANNEL = "email";
 const BACKUP_ROOT = "_directory";
+/** KV key holding the workspace list the Worker routes by. */
+export const WORKSPACE_LIST_KEY = "artifacts:workspaces";
 const BACKUPS_KEEP = 30;
 
 const MIGRATIONS: Migration[] = [
@@ -100,6 +126,10 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX visits_by_slug ON visits (slug);
       CREATE TABLE channel_tests (email TEXT NOT NULL, at INTEGER NOT NULL);
     `),
+  // Email notifications are on unless someone turns them off.
+  (sql) => sql.exec(`ALTER TABLE users ADD COLUMN email_off INTEGER NOT NULL DEFAULT 0`),
+  // Each workspace's running job and last failure, reported by the workspace.
+  (sql) => sql.exec(`ALTER TABLE workspaces ADD COLUMN job TEXT; ALTER TABLE workspaces ADD COLUMN job_error TEXT;`),
 ];
 
 export class Directory extends DurableObject {
@@ -108,22 +138,42 @@ export class Directory extends DurableObject {
   private bucket?: R2Bucket;
   private dirty = false;
 
-  constructor(ctx: DurableObjectState, env: { LOGIN_SECRET: string; BACKUPS?: R2Bucket }) {
+  constructor(ctx: DurableObjectState, env: { LOGIN_SECRET: string; BACKUPS?: R2Bucket; OAUTH_KV?: KVNamespace }) {
     super(ctx, env as never);
     this.sql = ctx.storage.sql;
     this.loginSecret = env.LOGIN_SECRET;
     this.bucket = env.BACKUPS;
+    this.kv = env.OAUTH_KV;
     migrate(ctx.storage, MIGRATIONS);
+  }
+
+  private kv?: KVNamespace;
+  private publishing: Promise<void> = Promise.resolve();
+
+  /**
+   * Mirror the workspace list to KV for routing (see workspaceRecord in
+   * index.ts). Publishes run one after another and each reads the list when it
+   * runs, so the last write is always the newest state.
+   */
+  publish(): Promise<void> {
+    const run = async () => {
+      if (!this.kv) return;
+      const list = Object.fromEntries(this.workspaces().map((w) => [w.slug, { name: w.name, suspended: w.suspended }]));
+      await this.kv.put(WORKSPACE_LIST_KEY, JSON.stringify({ at: new Date().toISOString(), list }));
+    };
+    this.publishing = this.publishing.then(run, run).catch((err) => console.error("publishing the workspace list failed", err));
+    return this.publishing;
   }
 
   // ---- workspaces --------------------------------------------------------------
 
-  createWorkspace(slug: string, name: string): WorkspaceRecord {
+  async createWorkspace(slug: string, name: string): Promise<WorkspaceRecord> {
     if (RESERVED.has(slug)) throw new DirectoryError(`"${slug}" is reserved for the site itself; pick another workspace name`);
     if (!validSlug(slug)) throw new DirectoryError(`"${slug}" can't be a workspace name: use 3-32 lowercase letters, digits and single hyphens, starting with a letter`);
     if (this.workspace(slug)) throw new DirectoryError(`workspace ${slug} already exists`);
     this.sql.exec(`INSERT INTO workspaces (slug, name, created_at) VALUES (?, ?, ?)`, slug, name.trim() || slug, new Date().toISOString());
     this.markDirty();
+    await this.publish();
     return this.workspace(slug)!;
   }
 
@@ -143,21 +193,24 @@ export class Directory extends DurableObject {
       .map((r) => ({ ...toWorkspace(r), admins: admins.get(r.slug as string) ?? [] }));
   }
 
-  setSuspended(slug: string, suspended: boolean) {
+  async setSuspended(slug: string, suspended: boolean) {
     this.sql.exec(`UPDATE workspaces SET suspended = ? WHERE slug = ?`, suspended ? 1 : 0, slug);
     this.markDirty();
+    await this.publish();
   }
 
-  removeWorkspace(slug: string) {
+  async removeWorkspace(slug: string) {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(`DELETE FROM memberships WHERE slug = ?`, slug);
       this.sql.exec(`DELETE FROM visits WHERE slug = ?`, slug);
       this.sql.exec(`DELETE FROM workspaces WHERE slug = ?`, slug);
     });
     this.markDirty();
+    await this.publish();
   }
 
-  recordStats(slug: string, stats: WorkspaceStats, name?: string) {
+  async recordStats(slug: string, stats: WorkspaceStats, name?: string) {
+    const renamed = name !== undefined && this.workspace(slug)?.name !== name;
     this.sql.exec(
       `UPDATE workspaces SET stats = ?, stats_at = ?, name = COALESCE(?, name) WHERE slug = ?`,
       JSON.stringify(stats),
@@ -165,6 +218,12 @@ export class Directory extends DurableObject {
       name ?? null,
       slug,
     );
+    if (renamed) await this.publish();
+  }
+
+  /** A workspace's running job and last failure, so the operator console needn't wake every workspace. */
+  recordJob(slug: string, job: WorkspaceJob | null, lastError: { message: string; at: string } | null) {
+    this.sql.exec(`UPDATE workspaces SET job = ?, job_error = ? WHERE slug = ?`, job ? JSON.stringify(job) : null, lastError ? JSON.stringify(lastError) : null, slug);
   }
 
   /** Mirror of a workspace's member list, for "your workspaces". The workspace itself is the source of truth. */
@@ -233,7 +292,7 @@ export class Directory extends DurableObject {
         lastError: (c.last_error as string | null) ?? null,
         disabled: Boolean(c.disabled),
       }));
-    return { email, name: this.names([email])[email], channels, workspaces: this.membershipsOf(email) };
+    return { email, name: this.names([email])[email], channels, emailNotifications: this.emailNotifications(email), workspaces: this.membershipsOf(email) };
   }
 
   setName(email: string, name: string) {
@@ -283,7 +342,7 @@ export class Directory extends DurableObject {
     return c ? { id: c.id as string, type: c.type as ChannelType, config: JSON.parse(c.config as string) } : null;
   }
 
-  /** Active channels for each email, for a workspace delivering notifications. */
+  /** Active channels for each email, for a workspace delivering notifications. Email is one, unless turned off. */
   channelsFor(emails: string[]): Record<string, ChannelRow[]> {
     const out: Record<string, ChannelRow[]> = {};
     for (const e of new Set(emails)) {
@@ -291,8 +350,23 @@ export class Directory extends DurableObject {
         .exec(`SELECT id, type, config FROM channels WHERE email = ? AND disabled = 0`, e)
         .toArray()
         .map((c) => ({ id: c.id as string, type: c.type as ChannelType, config: JSON.parse(c.config as string) }));
+      if (this.emailNotifications(e)) out[e].push({ id: EMAIL_CHANNEL, type: "email", config: { to: e } });
     }
     return out;
+  }
+
+  emailNotifications(email: string): boolean {
+    return !this.sql.exec(`SELECT email_off FROM users WHERE email = ?`, email).toArray()[0]?.email_off;
+  }
+
+  setEmailNotifications(email: string, on: boolean) {
+    this.sql.exec(
+      `INSERT INTO users (email, name, created_at, email_off) VALUES (?, NULL, ?, ?) ON CONFLICT (email) DO UPDATE SET email_off = excluded.email_off`,
+      email,
+      new Date().toISOString(),
+      on ? 0 : 1,
+    );
+    this.markDirty();
   }
 
   /** Many delivery results at once (one RPC per notification run). */
@@ -302,6 +376,7 @@ export class Directory extends DurableObject {
 
   /** Track delivery health; a channel is switched off after repeated failures or when its endpoint is gone. */
   recordChannelResult(id: string, result: { ok: boolean; error?: string; gone?: boolean }) {
+    if (id === EMAIL_CHANNEL) return;
     if (!result.ok) this.markDirty();
     // Successes only write when there was something to clear.
     if (result.ok) this.sql.exec(`UPDATE channels SET failures = 0, last_error = NULL, disabled = 0 WHERE id = ? AND (failures > 0 OR last_error IS NOT NULL OR disabled = 1)`, id);
@@ -322,16 +397,26 @@ export class Directory extends DurableObject {
     return exportPage(this.sql, DIRECTORY_TABLES, table, after);
   }
 
+  /** Imports load into shadow tables and swap in at importEnd, so a failed import changes nothing. */
   importBegin() {
-    clearTables(this.ctx.storage, DIRECTORY_TABLES);
+    createShadows(this.ctx.storage, DIRECTORY_TABLES);
   }
 
   importRows(table: string, rows: Record<string, unknown>[]): number {
-    return importRows(this.ctx.storage, DIRECTORY_TABLES, table, rows);
+    if (!hasShadows(this.sql, DIRECTORY_TABLES)) throw new DirectoryError("call importBegin first");
+    return loadShadow(this.ctx.storage, DIRECTORY_TABLES, table, rows);
   }
 
-  importEnd() {
+  async importEnd() {
+    if (!hasShadows(this.sql, DIRECTORY_TABLES)) throw new DirectoryError("no import is running");
+    swapShadows(this.ctx.storage, DIRECTORY_TABLES);
+    return this.importDone();
+  }
+
+  private async importDone() {
+    this.dirty = false;
     this.markDirty();
+    await this.publish();
     return { workspaces: this.workspaces().length };
   }
 
@@ -362,21 +447,26 @@ export class Directory extends DurableObject {
   }
 
   /** Replace the directory with a backup run, after checking every page fits; nothing else runs meanwhile. */
+  /**
+   * Replace the directory with a backup run. It backs up the current state
+   * first, reads the whole run (the directory is small), then loads and swaps
+   * it in with no awaits in between, so it lands entirely or not at all.
+   */
   async restore(run: string) {
     const bucket = this.bucket;
     if (!bucket) throw new DirectoryError("no backup bucket is bound");
     const cursor = await startRestore(bucket, BACKUP_ROOT, run, DIRECTORY_TABLES, this.schemaVersion());
-    return this.ctx.blockConcurrencyWhile(async () => {
-      await stepRestore(bucket, cursor, Infinity, {
-        check: (table, rows) => {
-          const bad = unknownColumn(this.sql, table, rows);
-          if (bad) throw new DirectoryError(`backup ${run}: ${table} has a column this version doesn't (${bad})`);
-        },
-        begin: () => this.importBegin(),
-        load: (table, rows) => this.importRows(table, rows),
-      });
-      return this.importEnd();
-    });
+    const pages = await readRun(bucket, cursor);
+    await this.backup();
+    createShadows(this.ctx.storage, DIRECTORY_TABLES);
+    try {
+      for (const p of pages) loadShadow(this.ctx.storage, DIRECTORY_TABLES, p.table, p.rows);
+    } catch (err) {
+      dropShadows(this.ctx.storage, DIRECTORY_TABLES);
+      throw err;
+    }
+    swapShadows(this.ctx.storage, DIRECTORY_TABLES);
+    return this.importDone();
   }
 
   async alarm() {
@@ -401,7 +491,7 @@ export class Directory extends DurableObject {
   // ---- sign-in codes ---------------------------------------------------------------
 
   /**
-   * A fresh six-digit code for `email`; the caller emails it. Earlier codes
+   * A fresh eight-digit code for `email`; the caller emails it. Earlier codes
    * stay valid until they expire, so a stranger asking for codes for your
    * address can't cancel the one in your inbox.
    */
@@ -415,8 +505,8 @@ export class Directory extends DurableObject {
     }
     if (ip && count("ip = ?", ip) >= CODES_PER_IP_PER_HOUR) throw new DirectoryError("Too many sign-in attempts from your network. Try again in an hour.");
     if (count("1") >= CODES_PER_HOUR) throw new DirectoryError("Sign-in is busy right now. Try again in a few minutes.");
-    const n = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000;
-    const code = String(n).padStart(6, "0");
+    const n = crypto.getRandomValues(new Uint32Array(1))[0] % 10 ** CODE_DIGITS;
+    const code = String(n).padStart(CODE_DIGITS, "0");
     this.sql.exec(`INSERT INTO login_codes (email, ip, code_hash, expires_at) VALUES (?, ?, ?, ?)`, email, ip, await this.codeHash(email, code), now + CODE_TTL_MS);
     // Only the requester's own older codes make way, never codes sent to someone else's request.
     this.sql.exec(
@@ -440,7 +530,8 @@ export class Directory extends DurableObject {
     const hourAgo = now - 3600_000;
     this.sql.exec(`DELETE FROM login_fails WHERE at < ?`, hourAgo);
     const fails = (where: string, ...args: SqlStorageValue[]) => this.sql.exec(`SELECT COUNT(*) AS n FROM login_fails WHERE email = ? AND ${where}`, email, ...args).one().n as number;
-    if (fails("ip IS ?", ip) >= FAILS_PER_EMAIL_PER_IP_PER_HOUR || fails("1") >= FAILS_PER_EMAIL_PER_HOUR) return false;
+    const mine = fails("ip IS ?", ip);
+    if (mine >= FAILS_PER_EMAIL_PER_IP_PER_HOUR || (mine > 0 && fails("1") >= FAILS_PER_EMAIL_PER_HOUR)) return false;
     const hash = await this.codeHash(email, code.replace(/\D/g, ""));
     const hit = this.sql.exec(`DELETE FROM login_codes WHERE email = ? AND code_hash = ? AND expires_at >= ? RETURNING id`, email, hash, now).toArray();
     if (!hit.length) {
@@ -450,6 +541,17 @@ export class Directory extends DurableObject {
     // Signed in once: they have an account now (see hasSignedIn).
     this.sql.exec(`INSERT INTO users (email, name, created_at) VALUES (?, NULL, ?) ON CONFLICT (email) DO NOTHING`, email, new Date(now).toISOString());
     return true;
+  }
+
+  /** For the operator helping someone who can't sign in: their recent code sends and failed checks. */
+  signInDiagnostics(email: string) {
+    const rows = (sql: string) => this.sql.exec(sql, email).toArray();
+    return {
+      sends: rows(`SELECT ip, at FROM login_sends WHERE email = ? ORDER BY at DESC LIMIT 20`).map((r) => ({ ip: r.ip, at: new Date(r.at as number).toISOString() })),
+      fails: rows(`SELECT ip, at FROM login_fails WHERE email = ? ORDER BY at DESC LIMIT 20`).map((r) => ({ ip: r.ip, at: new Date(r.at as number).toISOString() })),
+      liveCodes: rows(`SELECT ip, expires_at FROM login_codes WHERE email = ?`).map((r) => ({ ip: r.ip, expires: new Date(r.expires_at as number).toISOString() })),
+      signedInBefore: this.hasSignedIn(email),
+    };
   }
 
   /** Whether this person has ever signed in with a code (so a link must not sign in as them). */
@@ -486,6 +588,8 @@ function toWorkspace(r: Record<string, SqlStorageValue>): WorkspaceRecord {
     suspended: Boolean(r.suspended),
     stats: r.stats ? (JSON.parse(r.stats as string) as WorkspaceStats) : null,
     statsAt: (r.stats_at as string | null) ?? null,
+    job: r.job ? (JSON.parse(r.job as string) as WorkspaceJob) : null,
+    jobError: r.job_error ? (JSON.parse(r.job_error as string) as { message: string; at: string }) : null,
   };
 }
 

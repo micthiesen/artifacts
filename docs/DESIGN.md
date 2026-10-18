@@ -32,8 +32,8 @@ never affects another's.
 Each workspace origin is also a separate browser origin, so sessions, storage
 and service workers are separated by the browser as well as by the server.
 
-Routing reads the list of workspaces from KV, so an unknown subdomain is
-answered without the directory. A small global directory records which
+Routing reads the list of workspaces from KV, which the directory republishes
+on every change, so an unknown subdomain is answered without the directory. A small global directory records which
 workspaces exist, who belongs to which,
 and per-person settings that should follow someone everywhere (display name,
 notification channels). It is consulted at sign-in, when a workspace is
@@ -71,12 +71,15 @@ receive a short-lived signed hand-off and set their own session cookie.
 Adding a member, creating a workspace and sharing with a person all send an
 email. Someone who has never signed in gets a presigned link that signs them
 straight into that one artifact, for no longer than the link lasts; anyone who
-has signed in before gets the page and signs in as themselves, so nobody can
-mint a link that acts as an existing account. Codes are
+has signed in before gets the page and signs in as themselves. A presigned
+link only ever goes into its own person's inbox, or to an agent for its own
+person, so nobody can obtain a link that acts as someone else. Codes are
 rate-limited per address and globally, because anyone can request one.
 
-Requesting codes for someone else's address can't cancel the code in their
-inbox, and wrong guesses are counted per address and network.
+Codes are eight digits. Requesting codes for someone else's address can't
+cancel the code in their inbox, and wrong guesses are limited per address and
+network; a network with no failures can always try, so guessing elsewhere
+can't lock the owner out.
 
 Agents connect with OAuth (each workspace is its own authorization server and
 MCP resource) or with a personal token created on the workspace's settings
@@ -85,8 +88,12 @@ page, for clients that can't run a browser sign-in. Both identify a person.
 ## Isolation
 
 Artifact code is untrusted. It renders in a sandboxed, opaque-origin frame
-with no network access and no popups (links go through the shell, which asks
-before leaving the site); storage, shared state and comments reach it only
+that can't make network requests or open popups (links go through the shell,
+which asks before leaving the workspace). A sandbox can't stop a frame
+navigating itself, which a malicious artifact could use to send away what it
+can see (the viewer's email, the artifact's state); the shell then replaces
+the frame, so the other page never shows inside our chrome. Agents should only
+publish code people would trust with that. storage, shared state and comments reach it only
 through the shell's postMessage bridge, and the shell scopes all of them to
 one artifact. Comments live in the shell, so artifact code can't read or
 forge them. Every write from a person is checked against their role on the
@@ -107,9 +114,12 @@ verified email.
   seconds and resumes, so no size is too big for one invocation. Small
   workspaces back up as a point-in-time snapshot; big ones page by page. Every
   run has its own prefix and a manifest written last.
-- **Restores can't half-happen.** A restore first takes a fresh backup, then
-  checks every page of the chosen run against the current schema before
-  touching anything, and the workspace is offline until it has loaded.
+- **Restores and imports can't half-happen.** They load into shadow copies of
+  the tables and swap them in with one transaction once everything has
+  loaded; any failure before that leaves the live data as it was. A workspace
+  restore takes a fresh backup first and keeps the workspace offline until the
+  swap; the directory restores (and backs up first) the same way, in one go.
+  Jobs carry a generation, so a cancel can't be undone by a step in flight.
   Durable Object point-in-time restore was tried and dropped: on 2026-10-16,
   bookmark restores on a test stage didn't land at the requested times.
 

@@ -45,21 +45,16 @@ test("create makes the agent's person the owner; others need a share to see it",
   expect((await call(ADMIN, "artifact_edit", { id, path: "index.mdx", edits: [{ oldText: "Text.", newText: "Fixed." }] })).error).toBe(false);
 });
 
-test("links default to the agent's person and are bound to the workspace", async () => {
+test("sign-in links are only for the agent's own person, and bound to the workspace", async () => {
   const id = (await call(MIA, "artifact_create", { title: "x", files })).data.id as string;
   const link = (await call(MIA, "artifact_link", { id })).data;
   expect(link.email).toBe(MIA);
   const claims = await verifyToken<{ e: string; a: string; w: string }>(h.env.LOGIN_SECRET, "link", link.link.split("/s/")[1]);
   expect(claims).toMatchObject({ e: MIA, a: id, w: "acme" });
-  // A link for someone else is sharing, so it needs the owner, and the person needs access.
-  expect((await call(MIA, "artifact_link", { id, email: OLU })).text).toContain("no access");
-  await call(MIA, "artifact_share", { id, add: [{ email: OLU, role: "view" }] });
-  expect((await call(OLU, "artifact_link", { id, email: MIA })).text).toContain("has view access");
+  // Never one for someone else: they get theirs by email.
+  await call(MIA, "artifact_share", { id, add: [{ email: OLU, role: "view" }], notify: false });
+  expect((await call(MIA, "artifact_link", { id, email: OLU })).text).toContain("only for you");
   expect((await call(OLU, "artifact_link", { id })).error).toBe(false);
-  // Someone who has signed in before signs in as themselves: no link that could stand in for them.
-  expect((await call(MIA, "artifact_link", { id, email: OLU })).error).toBe(false);
-  await h.directory.verifyLogin(OLU, await h.directory.startLogin(OLU));
-  expect((await call(MIA, "artifact_link", { id, email: OLU })).text).toContain("sign in as themselves");
 });
 
 test("agent comments don't notify their own person", async () => {
@@ -76,27 +71,29 @@ test("the owner menu uses the same checks", async () => {
   expect(h.hub.meta(id)!.title).toBe("renamed");
 });
 
-test("no presigned link for someone who manages the artifact", async () => {
-  const id = (await call(MIA, "artifact_create", { title: "x", files })).data.id as string;
-  const r = await call(MIA, "artifact_link", { id, email: ADMIN });
-  expect(r.error).toBe(true);
-  expect(r.text).toContain("sign in as themselves");
-});
-
-test("sharing emails each person: a link if they're new, the page if they've signed in before", async () => {
+test("sharing emails each new person their own link, and never hands it to the sharer", async () => {
   const sent: { to: string; subject: string; text: string }[] = [];
   h.env.EMAIL = { send: async (m: { to: string; subject: string; text: string }) => void sent.push(m) };
   h.env.MAIL_FROM = "sign-in@mail.test";
   await h.directory.verifyLogin(OLU, await h.directory.startLogin(OLU));
   const id = (await call(MIA, "artifact_create", { title: "Plan", files })).data.id as string;
   const r = await call(MIA, "artifact_share", { id, add: [{ email: "new@client.co", role: "view" }, { email: OLU, role: "view" }] });
-  expect(r.data.links["new@client.co"]).toContain("/s/");
-  expect(r.data.links[OLU]).toBe(`https://acme.artifacts.test/a/${id}`);
-  expect(sent.map((m) => m.to).sort()).toEqual(["new@client.co", OLU].sort());
-  expect(sent[0].subject).toContain("“Plan”");
-  // notify: false sends nothing.
+  expect(r.data.emailed).toEqual({ "new@client.co": "link", [OLU]: "page" });
+  expect(JSON.stringify(r)).not.toContain("/s/");
+  expect(sent.find((m) => m.to === "new@client.co")!.text).toContain("/s/");
+  expect(sent.find((m) => m.to === OLU)!.text).toContain(`/a/${id}`);
+  // Re-sharing someone already on the list doesn't email them again; notify: false sends nothing.
+  await call(MIA, "artifact_share", { id, add: [{ email: OLU, role: "edit" }] });
   await call(MIA, "artifact_share", { id, add: [{ email: "quiet@client.co", role: "view" }], notify: false });
   expect(sent.length).toBe(2);
+});
+
+test("a view-only person's agent can't resolve someone else's thread", async () => {
+  const id = (await call(MIA, "artifact_create", { title: "x", files })).data.id as string;
+  await call(MIA, "artifact_share", { id, add: [{ email: OLU, role: "view" }], notify: false });
+  const thread = (await call(MIA, "artifact_comment", { id, text: "Mine" })).data.thread.id;
+  expect((await call(OLU, "artifact_comment", { id, thread, resolve: true })).error).toBe(true);
+  expect((await call(MIA, "artifact_comment", { id, thread, resolve: true })).error).toBe(false);
 });
 
 test("an agent's shared-state writes are its person's: it can't vote as someone else", async () => {

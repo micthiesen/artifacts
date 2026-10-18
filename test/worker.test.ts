@@ -68,7 +68,7 @@ async function signIn(email: string, to = "", ret = "/") {
   const form = (fields: Record<string, string>) => new URLSearchParams({ to, n, return: ret, ...fields });
   const sent = await fetchAs(`${APEX}/login`, { method: "POST", body: form({ email }) });
   expect(sent.status).toBe(200);
-  const code = /(\d{3}) (\d{3})/.exec(mail.at(-1)!.text)!.slice(1).join("");
+  const code = /(\d{4}) (\d{4})/.exec(mail.at(-1)!.text)!.slice(1).join("");
   const done = await fetchAs(`${APEX}/login`, { method: "POST", body: form({ email, code }) });
   // Straight to a page here, or a continue page on the way to a workspace.
   expect(done.status).toBe(to ? 200 : 303);
@@ -288,4 +288,14 @@ test("form posts from our own pages pass with Origin: null; cross-site ones don'
     ctx,
   );
   expect(res.status).toBe(200);
+});
+
+test("policy pages are on the apex; workspaces point there", async () => {
+  for (const p of ["privacy", "terms", "security"]) {
+    const res = await fetchAs(`${APEX}/${p}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Last updated");
+  }
+  expect((await fetchAs(`${ACME}/privacy`)).headers.get("Location")).toBe(`${APEX}/privacy`);
+  expect(await (await fetchAs(`${APEX}/`)).text()).toContain('href="/privacy"');
 });

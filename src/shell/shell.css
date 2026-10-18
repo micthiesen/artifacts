@@ -616,6 +616,8 @@ div.thread-anchor { cursor: default; }
   .splash-grid { margin-top: 2.75rem; }
 }
 
+.frame-stopped { margin: 2rem auto; max-width: 36rem; }
+
 /* UI pass 2 */
 .card-section .snippet-label { margin: .7rem 0 0; }
 .card-section .reveal-row + .reveal-row { margin-top: .35rem; }
@@ -627,3 +629,27 @@ div.thread-anchor { cursor: default; }
 .admin-chip { display: inline-flex; align-items: center; gap: .15rem; padding: 0 .1rem 0 .55rem; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; }
 .admin-chip .om-text-button { height: 1.6rem; padding: 0 .45rem; border-radius: 999px; font-size: 12.5px; }
 .job-error { font-size: 13px; }
+
+/* Narrow screens: grid columns may shrink below their content, and long tokens
+   (MCP URLs, snippets, hostnames, emails) wrap instead of widening the page. */
+.list, .profile { grid-template-columns: minmax(0, 1fr); }
+.list li, .list li a, .card-section, .channels li, .channels li > *, .reveal-row, .notice { min-width: 0; }
+.card-section, .channels li, .notice, .list .title, .list .meta { overflow-wrap: anywhere; }
+.reveal, .card-section code, .card-section pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.profile .row { flex-wrap: wrap; }
+.profile .row > input, .profile .row > select { flex: 1 1 12rem; min-width: 0; }
+.profile .row > .button { flex: none; }
+.channel-actions { flex-wrap: wrap; }
+.content { width: 100%; }
+.policy h2 { font-size: 17px; margin: 1.75rem 0 .5rem; }
+.policy p, .policy li { line-height: 1.65; }
+.policy ul { padding-left: 1.2rem; display: grid; gap: .4rem; }
+.policy-nav { font-size: 14px; margin: 0 0 1.25rem; }
+.policy-date { margin-top: 2rem; font-size: 13px; }
+.site-foot { max-width: 46rem; margin: 0 auto; padding: 0 1.25rem 2.5rem; font-size: 13px; }
+.site-foot a { color: var(--muted-fg); }
+@media (max-width: 560px) {
+  .bar { gap: .5rem; padding: 0 .75rem; }
+  .content { padding-left: 1rem; padding-right: 1rem; }
+  .card-section { padding: 1rem .9rem 1.1rem; }
+}

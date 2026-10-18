@@ -323,3 +323,25 @@ test("inserting a paragraph marks only the new one", async () => {
   await h.hub.editText(id, "index.mdx", [{ oldText: "## Costs\n\n", newText: "## Costs\n\nA new first paragraph.\n\n" }]);
   expect(h.hub.visit(id, DANA).since?.changedBlocks).toEqual(["costs-1"]);
 });
+
+test("notifications go by email by default", async () => {
+  const mails: { to: string; subject: string; headers?: Record<string, string> }[] = [];
+  h.env.EMAIL = { send: async (m: { to: string; subject: string }) => void mails.push(m) };
+  h.env.MAIL_FROM = "sign-in@mail.test";
+  h.env.APEX_ORIGIN = "https://artifacts.test";
+  // owner@example.com is a test address (never mailed), so this artifact belongs to a deliverable one.
+  const PAT = "pat@corp.co";
+  const r = await h.hub.create({ title: "Plan", files, owner: PAT });
+  if (!r.ok) throw new Error("create");
+  const id = r.id;
+  h.hub.share(id, { add: [{ email: DANA, role: "view" }] });
+  h.hub.addComment(id, DANA, { text: "Is this right?" }, ORIGIN);
+  await h.hub.deliverDue(Date.now() + 3_600_000);
+  expect(mails.map((m) => m.to)).toEqual([PAT]);
+  expect(mails[0].subject).toContain("Plan");
+  expect(mails[0].headers?.["List-Unsubscribe"]).toBe("<https://artifacts.test/me>");
+  h.directory.setEmailNotifications(PAT, false);
+  h.hub.addComment(id, DANA, { text: "again" }, ORIGIN);
+  await h.hub.deliverDue(Date.now() + 3_600_000);
+  expect(mails.length).toBe(1);
+});

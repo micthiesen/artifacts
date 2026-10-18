@@ -299,7 +299,7 @@ cd artifacts &amp;&amp; bun install
 bun run deploy</code></pre></div>
 </section>
 
-<footer class="splash-foot muted"><a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="/login">Sign in</a></footer>
+<footer class="splash-foot muted"><a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · <a href="/login">Sign in</a></footer>
 </main>`,
   );
 }
@@ -318,7 +318,7 @@ export function loginPage(state: LoginState, brand: Brand, status = 200): Respon
   }
   const body =
     state.step === "email"
-      ? `<h1>Sign in</h1><p class="muted">We'll email you a six-digit code${where}.</p>${error}
+      ? `<h1>Sign in</h1><p class="muted">We'll email you a sign-in code${where}.</p>${error}
 <form class="key-form" method="post" action="/login">${hidden}
 <label for="email">Email</label>
 <div class="row"><input class="input" id="email" name="email" type="email" autocomplete="email" required autofocus value="${escapeHtml(state.email ?? "")}"><button class="button" type="submit">Send code</button></div>
@@ -326,10 +326,10 @@ export function loginPage(state: LoginState, brand: Brand, status = 200): Respon
       : `<h1>Check your email</h1><p class="muted">We sent a code to <strong>${escapeHtml(state.email ?? "")}</strong>. It works for 10 minutes.</p>${error}
 <form class="key-form" method="post" action="/login">${hidden}<input type="hidden" name="email" value="${escapeHtml(state.email ?? "")}">
 <label for="code">Code</label>
-<div class="row"><input class="input code-input" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus><button class="button" type="submit">Sign in</button></div>
+<div class="row"><input class="input code-input" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{8,9}" maxlength="9" required autofocus><button class="button" type="submit">Sign in</button></div>
 </form>
 <form method="post" action="/login" class="resend">${hidden}<input type="hidden" name="email" value="${escapeHtml(state.email ?? "")}"><button class="link" type="submit">Send a new code</button> <a href="/login?to=${encodeURIComponent(state.to)}&n=${encodeURIComponent(state.n)}&return=${encodeURIComponent(state.return)}">Use a different email</a></form>`;
-  return page("Sign in · Artifacts", `${topBar(brand)}<main class="content"><section class="empty">${body}</section></main>`, { status });
+  return page("Sign in · Artifacts", `${topBar(brand)}<main class="content"><section class="empty">${body}<p class="muted fine">By signing in you agree to the <a href="/terms">terms</a>; see how we handle your data in <a href="/privacy">Privacy</a>.</p></section></main>`, { status });
 }
 
 /** The apex for someone signed in: their workspaces. */
@@ -349,7 +349,7 @@ export function workspacesPage(
     ? `<h1 class="page-title">Your workspaces</h1><ul class="list">${rows}</ul>`
     : `<section class="empty"><h1>No workspaces yet</h1><p class="muted">${escapeHtml(email)} isn't a member of a workspace. Artifacts shared with you open from the links you were sent.</p></section>`;
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
-  return page("Artifacts", `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>`);
+  return page("Artifacts", `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>${POLICY_FOOTER}`);
 }
 
 /**
@@ -429,6 +429,116 @@ export function continuePage(location: string, headers: Headers = new Headers())
   for (const [k, v] of headers) if (k.toLowerCase() !== "content-type") res.headers.append(k, v);
   return res;
 }
+
+export type PolicyKind = "privacy" | "terms" | "security";
+
+const POLICY_UPDATED = "2026-10-18";
+
+/** Privacy, terms, and security and data: what this hosted instance does with your data and expects of you. */
+export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Response {
+  const mail = contact ? `<a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a>` : "the operator";
+  const sections: Record<PolicyKind, { title: string; body: string }> = {
+    privacy: {
+      title: "Privacy",
+      body: `
+<p>Artifacts at ${escapeHtml(brand.apex.replace(/^https:\/\//, ""))} is run by Michael Thiesen ("we"). This page says what we store, why, who else handles it, and how long we keep it. Questions or requests: ${mail}.</p>
+<h2>What we store</h2>
+<ul>
+<li><strong>Your email address</strong>, to sign you in with one-time codes, to know who an artifact is shared with, and to email you invitations, shares and notifications (on by default; you can turn notification emails off).</li>
+<li><strong>Your display name</strong>, if you set one; it's shown on your comments.</li>
+<li><strong>Artifacts</strong>: the files your agent writes (up to 50 versions each), images and data files, and live data fetched from hosts a workspace admin approved.</li>
+<li><strong>What people do on an artifact</strong>: comments, votes, checklists, notes and other shared state; which version you last saw and which comments you've read; an activity log (the latest 5,000 events per artifact).</li>
+<li><strong>Workspace membership</strong>: who belongs to which workspace and in what role, and when members last signed in.</li>
+<li><strong>Agent access</strong>: OAuth grants and personal agent tokens, stored only as hashes, with when each was last used.</li>
+<li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
+<li><strong>Render checks</strong>: after each change a headless browser renders the artifact; we keep the result, a screenshot and any errors. Viewers' browsers also report runtime errors (the latest 30 per artifact).</li>
+<li><strong>Sign-in records</strong>: when codes were sent and checked, with your IP address or network, to limit abuse. Kept for an hour.</li>
+<li><strong>Request logs</strong>: Cloudflare keeps logs of requests to this service for debugging, for a limited period.</li>
+</ul>
+<h2>In your browser</h2>
+<p>A session cookie per site you sign in to (it lasts 30 days from your last visit), a short-lived cookie during sign-in, and cookies that remember OAuth approvals. Artifacts can keep per-person data in your browser's storage, separately for each artifact. No advertising or cross-site tracking. Pages load Cloudflare Web Analytics, which counts visits without cookies.</p>
+<h2>Who can see what</h2>
+<ul>
+<li>An artifact is visible to its owner, the admins of its workspace, and the people, domains or workspace it's shared with; a public artifact to anyone with its link.</li>
+<li>Workspace admins can see and manage every artifact in their workspace and its member list.</li>
+<li>We, as operator, can access stored data to run the service: backups, restores and support. We don't sell it, use it for advertising, or train models on it.</li>
+</ul>
+<h2>Who else handles it</h2>
+<ul>
+<li><strong>Cloudflare</strong> hosts everything: compute, storage (Durable Objects, R2, KV), email sending, the headless browser for render checks, analytics and logs. Data lives on Cloudflare's network; a workspace's database is placed near where it was first used.</li>
+<li><strong>Services you choose</strong>: if you add Pushover, ntfy, a webhook or browser push, notifications go to that service. Live data sources are fetched from the hosts your workspace approved.</li>
+</ul>
+<h2>How long we keep it</h2>
+<ul>
+<li>As long as the artifact or workspace exists. Deleting an artifact removes it from the live database at once.</li>
+<li>Each workspace is backed up nightly when it changed; the newest 30 backups are kept, so deleted data leaves backups within about a month.</li>
+<li>Deleting a workspace deletes its data and its backups, and ends its agents' access.</li>
+</ul>
+<h2>Your choices</h2>
+<p>Turn email notifications off in your account. Ask the owner or an admin to remove you from an artifact or workspace. To get a copy of your data, or to have it deleted, email ${mail}; we reply within 30 days.</p>
+<h2>Changes</h2>
+<p>We'll update this page when what we do changes, and change the date below.</p>`,
+    },
+    terms: {
+      title: "Terms",
+      body: `
+<p>These terms cover using Artifacts at ${escapeHtml(brand.apex.replace(/^https:\/\//, ""))}, run by Michael Thiesen. Using the service means you accept them. Questions: ${mail}.</p>
+<h2>Your content</h2>
+<p>You own what you and your agents put in Artifacts. You let us store it, render it and show it to the people you share it with, only to run the service. You're responsible for what your agents create and share in your name, and for having the right to share it.</p>
+<h2>Acceptable use</h2>
+<ul>
+<li>No unlawful content, malware, phishing, or content that infringes others' rights.</li>
+<li>No using shares or invitations to send unwanted email.</li>
+<li>No attempts to break the isolation between workspaces or artifacts, get around rate limits or sign in as someone else. Security research is welcome through responsible disclosure (see Security and data).</li>
+<li>No load meant to degrade the service for others.</li>
+</ul>
+<h2>Workspaces and accounts</h2>
+<p>Workspace admins decide who belongs to a workspace and can manage everything in it. We may suspend or delete a workspace or content that breaks these terms, or to protect the service and its users, telling the admins where we can.</p>
+<h2>The service</h2>
+<p>Artifacts is provided as is, without warranties or a guaranteed level of availability. We back data up nightly but can't promise nothing is ever lost; keep copies of anything critical. To the extent the law allows, we aren't liable for indirect or consequential losses, and our total liability is limited to what you paid us in the last twelve months.</p>
+<h2>Changes</h2>
+<p>We may change these terms; continuing to use the service after a change means you accept it. The date below shows the latest version.</p>`,
+    },
+    security: {
+      title: "Security and data",
+      body: `
+<p>How Artifacts keeps workspaces and readers safe, for anyone deciding whether to use it at work. The design is public in the <a href="https://github.com/micthiesen/artifacts">source on GitHub</a>. Report a vulnerability to ${mail}; please give us a chance to fix it before publishing.</p>
+<h2>Isolation</h2>
+<ul>
+<li>Each workspace is its own Cloudflare Durable Object with its own SQLite database, served from its own subdomain, so browser cookies and storage are separated by origin too.</li>
+<li>Artifact code is treated as untrusted. It runs in a sandboxed, opaque-origin frame that can't make network requests or open popups; links that leave the workspace ask first. Storage, shared state and comments reach it only through the page around it, scoped to that one artifact. A frame that tries to navigate itself elsewhere is replaced.</li>
+<li>Comments are drawn outside the frame, and votes, comments and checklist ticks are stamped with the verified signed-in email on the server, so artifact code can't forge them.</li>
+</ul>
+<h2>Sign-in and access</h2>
+<ul>
+<li>People sign in with eight-digit one-time codes emailed to them; codes are stored hashed, expire in 10 minutes, and sending and guessing are limited per address and network.</li>
+<li>Sessions are signed, HTTP-only, secure cookies bound to one host. Every request checks the artifact's sharing, so removing someone takes effect immediately.</li>
+<li>Agents connect with OAuth 2.1 (PKCE, per-workspace audience) or a personal token stored as a hash. An agent acts as one member, with that member's access, and loses it when they leave the workspace.</li>
+<li>Links that sign straight into an artifact are only ever emailed to their own person (or given to an agent for its own person), open that one artifact, and expire.</li>
+</ul>
+<h2>Data</h2>
+<ul>
+<li>Everything is served over HTTPS with HSTS. Data is stored on Cloudflare (Durable Objects, R2, KV), encrypted at rest by Cloudflare.</li>
+<li>Nightly backups to R2, the newest 30 kept. A restore loads everything first and swaps it in at once, so it never leaves data half-replaced.</li>
+<li>Live data is only fetched from hosts a workspace admin approved, over HTTPS, without credentials.</li>
+<li>See <a href="/privacy">Privacy</a> for what's stored, who handles it and for how long.</li>
+</ul>
+<h2>Subprocessors</h2>
+<p>Cloudflare, Inc. (hosting, storage, email, headless browser, analytics, logs). Notification services you add yourself (Pushover, ntfy, webhook targets, browser push services) receive the notifications you route to them.</p>`,
+    },
+  };
+  const { title, body } = sections[kind];
+  const nav = (["privacy", "terms", "security"] as PolicyKind[])
+    .map((k) => (k === kind ? `<strong>${sections[k].title}</strong>` : `<a href="/${k}">${sections[k].title}</a>`))
+    .join(" · ");
+  return page(
+    `${title} · Artifacts`,
+    `${topBar(brand)}<main class="content policy"><p class="muted policy-nav">${nav}</p><h1>${title}</h1>${body}<p class="muted policy-date">Last updated ${POLICY_UPDATED}.</p></main>`,
+  );
+}
+
+/** Links to the policies, at the bottom of public pages. */
+export const POLICY_FOOTER = `<footer class="site-foot muted"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>`;
 
 /** A presigned link for someone other than whoever is signed in here: switch only if they say so. */
 export function linkSwitchPage(url: URL, current: string, linked: string, brand: Brand): Response {

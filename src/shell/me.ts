@@ -10,6 +10,7 @@ type Profile = {
   email: string;
   // Apex (account) only.
   name?: string | null;
+  emailNotifications?: boolean;
   channels?: Channel[];
   workspaces?: { slug: string; name: string; role: "admin" | "member" | "guest"; url: string; suspended: boolean }[];
   vapidPublicKey?: string | null;
@@ -147,8 +148,23 @@ function renderAccount(sections: HTMLElement[]) {
     ),
   );
 
-  // Channels
+  // Channels: email first (on by default), then whatever you added.
   const list = h("ul", { class: "channels" });
+  const emailOn = profile.emailNotifications !== false;
+  list.append(
+    h(
+      "li",
+      {},
+      h("span", { class: "channel-label" }, "Email"),
+      h("span", { class: "muted small" }, profile.email),
+      h("span", { class: `chip${emailOn ? " positive" : ""}` }, emailOn ? "On" : "Off"),
+      h(
+        "span",
+        { class: "channel-actions" },
+        btn(emailOn ? "Turn off" : "Turn on", () => act(() => api("/api/me", { body: { emailNotifications: !emailOn } }), emailOn ? "Email notifications are off." : "Email notifications are on."), "button small ghost"),
+      ),
+    ),
+  );
   for (const c of profile.channels ?? []) {
     const status = c.disabled ? h("span", { class: "chip caution" }, "Paused after errors") : c.lastError ? h("span", { class: "chip caution" }, "Last send failed") : h("span", { class: "chip positive" }, "On");
     const li = h("li", {}, h("span", { class: "channel-label" }, c.label), status);
@@ -163,13 +179,17 @@ function renderAccount(sections: HTMLElement[]) {
     );
     list.append(li);
   }
-  if (!profile.channels?.length) list.append(h("li", { class: "muted" }, "No channels yet. Add one below to get notified."));
+
   sections.push(
     h(
       "section",
       { class: "card-section" },
       h("h2", {}, "Where to notify you"),
-      h("p", { class: "muted" }, "Every channel gets every notification, from every workspace. Nothing is sent while you have the artifact open."),
+      h(
+        "p",
+        { class: "muted" },
+        "Every channel that's on gets every notification, from every workspace: comments on artifacts you own, replies to your comments and @mentions. Nothing is sent while you have the artifact open.",
+      ),
       list,
       addChannels(),
     ),
@@ -186,7 +206,7 @@ function renderAccount(sections: HTMLElement[]) {
       h(
         "p",
         { class: "muted" },
-        "Each workspace has its own per-artifact notification settings. By default you hear about every comment on artifacts you own, and about replies and @mentions everywhere else.",
+        "To hear more or less about a particular artifact, use its avatar menu, or Notifications in that workspace.",
       ),
       workspaces.length
         ? h(

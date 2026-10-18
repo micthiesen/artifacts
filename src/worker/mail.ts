@@ -32,7 +32,7 @@ async function send(env: MailEnv, to: string, subject: string, lines: string[], 
 }
 
 export async function sendCode(env: MailEnv, to: string, code: string) {
-  const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
+  const spaced = `${code.slice(0, 4)} ${code.slice(4)}`;
   if (!env.EMAIL) throw new Error("no EMAIL binding");
   if (!deliverable(to)) return;
   await env.EMAIL.send({
@@ -41,6 +41,23 @@ export async function sendCode(env: MailEnv, to: string, code: string) {
     subject: `${spaced} is your Artifacts code`,
     text: `Your Artifacts sign-in code is ${spaced}.\n\nIt works once, for 10 minutes. If you didn't try to sign in, ignore this email.\n`,
     html: `<div style="font-family:system-ui,sans-serif;font-size:15px;color:#222"><p>Your Artifacts sign-in code is</p><p style="font-size:28px;font-weight:600;letter-spacing:4px">${spaced}</p><p style="color:#666">It works once, for 10 minutes. If you didn't try to sign in, ignore this email.</p></div>`,
+  });
+}
+
+/** A notification (comments, replies, updates), with a way to turn these emails off. */
+export async function sendNotificationEmail(env: MailEnv, to: string, msg: { title: string; body: string; url: string }, apex: string) {
+  if (!env.EMAIL) throw new Error("no EMAIL binding");
+  if (!deliverable(to)) return;
+  const settings = `${apex}/me`;
+  const text = `${msg.body}\n\nOpen it: ${msg.url}\n\nYou get these because you take part in “${msg.title}”. Turn email notifications off: ${settings}\n`;
+  const html = `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;color:#222;max-width:32rem"><p style="color:#666;margin:0 0 4px">${escape(msg.title)}</p><p style="margin:0 0 16px">${escape(msg.body)}</p><p><a href="${escape(msg.url)}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#6d5efc;color:#fff;text-decoration:none;font-weight:600">Open it</a></p><p style="color:#888;font-size:13px">You get these because you take part in this artifact. <a href="${escape(settings)}" style="color:#888">Turn email notifications off</a>.</p></div>`;
+  await env.EMAIL.send({
+    from: { name: "Artifacts", email: env.MAIL_FROM },
+    to,
+    subject: `${msg.title}: ${msg.body.length > 80 ? `${msg.body.slice(0, 77)}…` : msg.body}`,
+    text,
+    html,
+    headers: { "List-Unsubscribe": `<${settings}>` },
   });
 }
 

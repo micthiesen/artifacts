@@ -92,8 +92,14 @@ export async function stepBackup(
   cursor: BackupCursor,
   schema: number,
   deadline: number,
+  alive: () => boolean = () => true,
 ): Promise<{ done: Manifest } | { next: BackupCursor }> {
   const c = structuredClone(cursor);
+  // A workspace deleted mid-backup must not get pages written after its backups were removed.
+  const put = async (key: string, body: string) => {
+    if (!alive()) throw new Error("workspace deleted");
+    await bucket.put(key, body);
+  };
   const prefix = `${root}/${c.run}/`;
   const advance = () => {
     const table = tables[c.table];
@@ -123,7 +129,8 @@ export async function stepBackup(
       }
     }
     if (c.table >= tables.length) {
-      await Promise.all(pages.map((p) => bucket.put(p.key, p.body)));
+      await Promise.all(pages.map((p) => put(p.key, p.body)));
+      if (!alive()) throw new Error("workspace deleted");
       return { done: await finishBackup(bucket, root, c, schema) };
     }
     // Too big to hold at once: start over, paging.
@@ -135,8 +142,9 @@ export async function stepBackup(
     if (!first && Date.now() > deadline) return { next: c };
     first = false;
     const p = advance();
-    if (p) await bucket.put(p.key, p.body);
+    if (p) await put(p.key, p.body);
   }
+  if (!alive()) throw new Error("workspace deleted");
   return { done: await finishBackup(bucket, root, c, schema) };
 }
 
@@ -147,10 +155,10 @@ async function finishBackup(bucket: R2Bucket, root: string, c: BackupCursor, sch
 }
 
 /** Keep the newest `keep` complete runs; drop older ones, and incomplete runs over a day old. */
-export async function pruneBackups(bucket: R2Bucket, root: string, keep: number) {
+export async function pruneBackups(bucket: R2Bucket, root: string, keep: number, alsoKeep: string[] = []) {
   const runs = await listRuns(bucket, root);
   const complete = await completeRuns(bucket, root, runs);
-  const kept = new Set(complete.slice(0, keep));
+  const kept = new Set([...complete.slice(0, keep), ...alsoKeep]);
   const dayAgo = newRun(new Date(Date.now() - 86400_000));
   for (const run of runs) {
     if (kept.has(run)) continue;
@@ -180,15 +188,79 @@ async function listRuns(bucket: R2Bucket, root: string): Promise<string[]> {
   return runs.sort();
 }
 
-// ---- restores ------------------------------------------------------------------------
+// ---- restores and imports -------------------------------------------------------------
+//
+// Restores and imports never touch live tables until everything has loaded:
+// rows go into shadow copies of the tables (same schema, "_restore_" names),
+// then one transaction swaps them in. A failure before the swap leaves the
+// live data exactly as it was. Loading uses INSERT OR REPLACE, so a page
+// loaded twice (a retried step, or a paged backup that caught a row twice)
+// does no harm.
 
-/**
- * A restore in progress. It first reads every page to check that it parses,
- * fits the current schema and matches the manifest, changing nothing; only
- * then does it clear the tables and load the pages. Persisted between steps.
- */
-export type RestoreCursor = { run: string; phase: "validate" | "load"; keys: string[]; index: number };
+const SHADOW = "_restore_";
 
+/** Fresh, empty shadow copies of `tables`. */
+export function createShadows(storage: DurableObjectStorage, tables: string[]) {
+  const sql = storage.sql;
+  storage.transactionSync(() => {
+    for (const t of tables) {
+      sql.exec(`DROP TABLE IF EXISTS ${SHADOW}${t}`);
+      const ddl = sql.exec(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, t).one().sql as string;
+      sql.exec(ddl.replace(/^CREATE TABLE\s+"?\w+"?/i, `CREATE TABLE ${SHADOW}${t}`));
+    }
+  });
+}
+
+export function dropShadows(storage: DurableObjectStorage, tables: string[]) {
+  storage.transactionSync(() => {
+    for (const t of tables) storage.sql.exec(`DROP TABLE IF EXISTS ${SHADOW}${t}`);
+  });
+}
+
+export function hasShadows(sql: SqlStorage, tables: string[]): boolean {
+  return sql.exec(`SELECT 1 FROM sqlite_master WHERE name = ?`, `${SHADOW}${tables[0]}`).toArray().length > 0;
+}
+
+/** Load rows into `table`'s shadow, after checking every column exists in the live table. */
+export function loadShadow(storage: DurableObjectStorage, tables: string[], table: string, rows: Record<string, unknown>[]): number {
+  if (!tables.includes(table)) throw new Error(`unknown table ${table}`);
+  const sql = storage.sql;
+  const bad = unknownColumn(sql, table, rows);
+  if (bad) throw new Error(`${table} has no column ${bad}`);
+  storage.transactionSync(() => {
+    for (const row of rows) {
+      const cols = Object.keys(row);
+      const values = cols.map((c) => {
+        const v = row[c];
+        return v && typeof v === "object" && "$b64" in v ? fromB64(String((v as { $b64: unknown }).$b64)) : (v as SqlStorageValue);
+      });
+      sql.exec(`INSERT OR REPLACE INTO ${SHADOW}${table} (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`, ...values);
+    }
+  });
+  return rows.length;
+}
+
+/** Replace the live tables with their shadows, all at once. */
+export function swapShadows(storage: DurableObjectStorage, tables: string[]) {
+  const sql = storage.sql;
+  storage.transactionSync(() => {
+    for (const t of tables) {
+      sql.exec(`DELETE FROM ${t}`);
+      sql.exec(`INSERT INTO ${t} SELECT * FROM ${SHADOW}${t}`);
+      sql.exec(`DROP TABLE ${SHADOW}${t}`);
+    }
+  });
+}
+
+/** Rows in a table's shadow (to check, say, that an import kept an admin). */
+export function shadowRows(sql: SqlStorage, table: string, where = "1", ...args: SqlStorageValue[]): number {
+  return sql.exec(`SELECT COUNT(*) AS n FROM ${SHADOW}${table} WHERE ${where}`, ...args).one().n as number;
+}
+
+/** A restore in progress: the run's page keys and how many are loaded. Persisted between steps. */
+export type RestoreCursor = { run: string; keys: string[]; index: number };
+
+/** Check the run is complete and fits this schema, and list its pages. */
 export async function startRestore(bucket: R2Bucket, root: string, run: string, tables: string[], schema: number): Promise<RestoreCursor> {
   const head = await bucket.get(`${root}/${run}/manifest.json`);
   if (!head) throw new Error(`no complete backup ${run}`);
@@ -206,37 +278,38 @@ export async function startRestore(bucket: R2Bucket, root: string, run: string, 
     if ((manifest.pages?.[table] ?? found.length) !== found.length) throw new Error(`backup ${run} is missing pages of ${table}`);
     keys.push(...found.sort());
   }
-  return { run, phase: "validate", keys, index: 0 };
+  return { run, keys, index: 0 };
 }
 
-/**
- * Advance a restore until done or `deadline`. `check` throws for rows that
- * don't fit; `begin` clears the tables (once, between the phases); `load`
- * inserts one page. Returns the cursor to continue from, or null when done.
- */
+/** Load pages into the shadows until done or `deadline` (at least one per step). Returns the cursor, or null when all are loaded. */
 export async function stepRestore(
   bucket: R2Bucket,
   cursor: RestoreCursor,
   deadline: number,
-  steps: { check: (table: string, rows: Record<string, unknown>[]) => void; begin: () => void; load: (table: string, rows: Record<string, unknown>[]) => void },
+  load: (table: string, rows: Record<string, unknown>[]) => void,
 ): Promise<RestoreCursor | null> {
   const c = structuredClone(cursor);
-  while (c.index < c.keys.length || c.phase === "validate") {
-    if (c.index >= c.keys.length) {
-      steps.begin();
-      c.phase = "load";
-      c.index = 0;
-      continue;
-    }
-    if (c.index > (cursor.phase === c.phase ? cursor.index : 0) && Date.now() > deadline) return c;
+  const start = c.index;
+  while (c.index < c.keys.length) {
+    if (c.index > start && Date.now() > deadline) return c;
     const key = c.keys[c.index];
     const body = await bucket.get(key);
     if (!body) throw new Error(`backup page ${key} disappeared`);
-    const rows = JSON.parse(await body.text()) as Record<string, unknown>[];
-    (c.phase === "validate" ? steps.check : steps.load)(tableOfKey(key), rows);
+    load(tableOfKey(key), JSON.parse(await body.text()) as Record<string, unknown>[]);
     c.index++;
   }
   return null;
+}
+
+/** Read a whole (small) run into memory: for the directory, which restores in one transaction. */
+export async function readRun(bucket: R2Bucket, cursor: RestoreCursor): Promise<{ table: string; rows: Record<string, unknown>[] }[]> {
+  const out: { table: string; rows: Record<string, unknown>[] }[] = [];
+  for (const key of cursor.keys) {
+    const body = await bucket.get(key);
+    if (!body) throw new Error(`backup page ${key} disappeared`);
+    out.push({ table: tableOfKey(key), rows: JSON.parse(await body.text()) });
+  }
+  return out;
 }
 
 function tableOfKey(key: string): string {

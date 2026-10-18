@@ -8,6 +8,7 @@ import { describeCheck, type RenderCheck } from "./check.ts";
 import { signToken } from "./session.ts";
 import { sendShare } from "./mail.ts";
 import type { DirectoryApi } from "./directory.ts";
+import { publicMessage } from "./errors.ts";
 import type { Env } from "./index.ts";
 import guideIntro from "../../docs/guide.md";
 import catalog from "../kit/CATALOG.md";
@@ -121,26 +122,26 @@ function directoryOf(ctx: Ctx): DirectoryApi {
 }
 
 /**
- * Tell people they were shared on an artifact, by email. Someone who has never
- * signed in gets a presigned link (no sign-in step); anyone else gets the page
- * URL and signs in as themselves, so a link never stands in for a real account.
- * Returns the link or URL handed to each person.
+ * Email people newly shared on an artifact. Someone who has never signed in
+ * gets a presigned link (no sign-in step); anyone else gets the page and
+ * signs in as themselves. The link only ever goes into that person's inbox:
+ * it's never returned to whoever shared, so nobody can act as someone else.
  */
-async function announceShares(ctx: Ctx, id: string, title: string, emails: string[], notify: boolean): Promise<Record<string, { url: string; link: boolean; emailed: boolean }>> {
-  const out: Record<string, { url: string; link: boolean; emailed: boolean }> = {};
+async function announceShares(ctx: Ctx, id: string, title: string, emails: string[], notify: boolean): Promise<Record<string, "link" | "page" | "not emailed">> {
+  const out: Record<string, "link" | "page" | "not emailed"> = {};
   for (const email of emails) {
-    const fresh = !(await directoryOf(ctx).hasSignedIn(email));
-    const target = fresh ? await signInLink(ctx, id, email) : url(ctx.origin, id);
-    let emailed = false;
-    if (notify && ctx.env.EMAIL && (await ctx.hub.allowMail(1))) {
-      try {
-        await sendShare(ctx.env, email, { title, workspace: ctx.workspace ?? ctx.slug, link: target, by: ctx.person });
-        emailed = true;
-      } catch (err) {
-        console.error("share email failed", err);
-      }
+    if (!notify || !ctx.env.EMAIL || !(await ctx.hub.allowMail(1, ctx.person))) {
+      out[email] = "not emailed";
+      continue;
     }
-    out[email] = { url: target, link: fresh, emailed };
+    const fresh = !(await directoryOf(ctx).hasSignedIn(email));
+    try {
+      await sendShare(ctx.env, email, { title, workspace: ctx.workspace ?? ctx.slug, link: fresh ? await signInLink(ctx, id, email) : url(ctx.origin, id), by: ctx.person });
+      out[email] = fresh ? "link" : "page";
+    } catch (err) {
+      console.error("share email failed", err);
+      out[email] = "not emailed";
+    }
   }
   return out;
 }
@@ -253,6 +254,10 @@ export const TOOLS: Tool[] = [
     },
     run: async (args, ctx) => {
       const { hub } = ctx;
+      for (const a of (Array.isArray(args.share) ? args.share : []) as { email?: unknown; role?: unknown }[]) {
+        if (!a || typeof a.email !== "string" || !isValidPrincipal(sharePrincipal(a.email))) return { isError: true, text: `"${a?.email}" is not an email address, @domain or workspace.` };
+        if (a.role !== "view" && a.role !== "edit") return { isError: true, text: `role must be view or edit, not ${String(a.role)}.` };
+      }
       const r = await hub.create({
         title: String(args.title),
         description: typeof args.description === "string" ? args.description : "",
@@ -262,7 +267,6 @@ export const TOOLS: Tool[] = [
       });
       if (r.ok && (Array.isArray(args.share) || typeof args.public === "boolean")) {
         const add = ((args.share as { email: string; role: string }[] | undefined) ?? []).filter((a) => a && typeof a.email === "string");
-        for (const a of add) if (!isValidPrincipal(sharePrincipal(a.email))) return { isError: true, text: `"${a.email}" is not an email address, @domain or workspace.` };
         await hub.share(r.id, { add: add as never, public: args.public as boolean | undefined });
         const people = add.map((a) => sharePrincipal(a.email)).filter((p) => p.includes("@") && !p.startsWith("@") && p !== ctx.person);
         if (people.length) await announceShares(ctx, r.id, String(args.title), people, true);
@@ -474,7 +478,7 @@ export const TOOLS: Tool[] = [
     name: "artifact_share",
     title: "Artifacts: share",
     description:
-      "Artifacts: share an artifact with people by email, with everyone at a domain (\"@example.com\") or with every workspace member (\"workspace\"), change roles, remove entries, or toggle a public read-only link. A person's own entry overrides their domain's role. Removal takes effect immediately. Each person added is emailed (notify: false to skip): someone new gets a sign-in link, someone who has signed in before gets the page URL. Returns the current sharing and what each person got.",
+      "Artifacts: share an artifact with people by email, with everyone at a domain (\"@example.com\") or with every workspace member (\"workspace\"), change roles, remove entries, or toggle a public read-only link. A person's own entry overrides their domain's role. Removal takes effect immediately. Each newly added person is emailed (notify: false to skip): someone new gets their own sign-in link, someone who has signed in before gets the page. Sign-in links only ever go to their person, never back to you. Returns the current sharing and who was emailed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -495,6 +499,7 @@ export const TOOLS: Tool[] = [
           return { isError: true, text: `"${entry}" is not an email address or @domain.` };
         }
       }
+      const before = new Set(((await hub.meta(String(args.id)))?.shares ?? []).map((s) => s.email));
       const meta = await hub.share(String(args.id), {
         add: args.add as never,
         remove: args.remove as string[] | undefined,
@@ -506,16 +511,13 @@ export const TOOLS: Tool[] = [
       const added = ((args.add as { email: string }[] | undefined) ?? [])
         .map((a) => sharePrincipal(a.email))
         .filter((p) => p.includes("@") && !p.startsWith("@"));
-      const people = await announceShares(ctx, meta.id, meta.title, added.filter((e) => e !== ctx.person), args.notify !== false);
-      const links = Object.fromEntries(Object.entries(people).map(([e, p]) => [e, p.url]));
-      const linkText = Object.keys(people).length
-        ? `\n${Object.entries(people)
-            .map(([e, p]) => `- ${e}: ${p.emailed ? "emailed " : ""}${p.link ? `a sign-in link (valid ${LINK_DEFAULT_DAYS} days; it signs in as them, so it's only for them)` : "the page URL (they've signed in before, so they sign in as themselves)"}: ${p.url}`)
-            .join("\n")}`
-        : "";
+      // Only people who weren't already on the list hear about it.
+      const people = await announceShares(ctx, meta.id, meta.title, added.filter((e) => e !== ctx.person && !before.has(e)), args.notify !== false);
+      const said = { link: "emailed a sign-in link", page: "emailed the page (they sign in as themselves)", "not emailed": "not emailed; send them the page URL" };
+      const lines = Object.entries(people).map(([e, p]) => `- ${e}: ${said[p]}`);
       return {
-        text: `${url(origin, meta.id)}\nShared with: ${shares}. Public link: ${meta.public ? "on" : "off"}.${linkText}`,
-        structured: { url: url(origin, meta.id), shares: meta.shares, public: meta.public, links },
+        text: `${url(origin, meta.id)}\nShared with: ${shares}. Public link: ${meta.public ? "on" : "off"}.${lines.length ? `\n${lines.join("\n")}` : ""}`,
+        structured: { url: url(origin, meta.id), shares: meta.shares, public: meta.public, emailed: people },
       };
     },
   },
@@ -523,28 +525,26 @@ export const TOOLS: Tool[] = [
     name: "artifact_link",
     title: "Artifacts: sign-in link",
     description:
-      "Artifacts: make a presigned link that opens one artifact already signed in, with no login step. Defaults to you (the user this agent acts for): use it when handing the user a link. For someone else it works only if they've never signed in (artifact_share already emails them one). The email must already have access. Valid 7 days by default (max 30), and unsharing still revokes it. Anyone holding the link acts as that email, so give each link only to its person.",
+      "Artifacts: make a presigned link for the user this agent acts for that opens one artifact already signed in, with no login step: use it when handing the user a link. Other people get their own by email when you share with them (artifact_share). Valid 7 days by default (max 30). Anyone holding it acts as the user, so give it only to them.",
     inputSchema: {
       type: "object",
       properties: {
         id,
-        email: { type: "string", description: "Who the link signs in as. Default: the user this agent acts for." },
+        email: { type: "string", description: "Leave out: the link is for the user this agent acts for." },
         days: { type: "number", minimum: 0.05, maximum: 30, description: "Validity in days. Default 7." },
       },
       required: ["id"],
       additionalProperties: false,
     },
-    // A link for yourself needs only access; one for someone else is a sharing action.
-    need: (args, ctx) => (typeof args.email === "string" && args.email.trim() && args.email.trim().toLowerCase() !== ctx.person ? "owner" : "view"),
+    need: "view",
     run: async (args, ctx) => {
       const artifactId = String(args.id);
       const email = (typeof args.email === "string" && args.email.trim() ? args.email : ctx.person).trim().toLowerCase();
       const role = await ctx.hub.roleFor(artifactId, email);
       if (!role) return { isError: true, text: `${email} has no access to ${artifactId}. Share it first with artifact_share.` };
-      // A link signs in as its person, so one for someone else is only for people who have never
-      // signed in (a first invitation); anyone with an account signs in as themselves.
-      if (email !== ctx.person && (role === "owner" || (await directoryOf(ctx).hasSignedIn(email)))) {
-        return { isError: true, text: `${email} has an account, so they sign in as themselves; send them ${url(ctx.origin, artifactId)}.` };
+      // A link signs in as its person, so you only get one for yourself; other people get theirs by email (artifact_share).
+      if (email !== ctx.person) {
+        return { isError: true, text: `Sign-in links are only for you. artifact_share emails ${email} their own; or send them ${url(ctx.origin, artifactId)}.` };
       }
       const days = typeof args.days === "number" ? args.days : LINK_DEFAULT_DAYS;
       const link = await signInLink(ctx, artifactId, email, days);
@@ -758,6 +758,8 @@ export const TOOLS: Tool[] = [
       const artifactId = String(args.id);
       const actor = ctx.actor;
       const onBehalf = actor === "agent" ? ctx.person : undefined;
+      // The agent has its person's powers over threads, no more: a viewer's agent can't resolve others' threads.
+      const role = (await ctx.hub.roleFor(artifactId, ctx.person)) ?? "view";
       let thread: Thread | null = null;
       if (typeof args.text === "string" && args.text.trim()) {
         const anchor =
@@ -772,12 +774,14 @@ export const TOOLS: Tool[] = [
           actor,
           { thread: typeof args.thread === "string" ? args.thread : undefined, anchor, text: args.text, onBehalf },
           ctx.origin,
+          undefined,
+          role,
         );
       }
       if (typeof args.resolve === "boolean") {
         const target = thread?.id ?? (typeof args.thread === "string" ? args.thread : "");
         if (!target) return { isError: true, text: "resolve needs a thread id" };
-        thread = await ctx.hub.resolveThread(artifactId, actor, target, args.resolve, { role: "agent", origin: ctx.origin, onBehalf });
+        thread = await ctx.hub.resolveThread(artifactId, onBehalf ?? actor, target, args.resolve, { role, origin: ctx.origin, onBehalf });
       }
       if (!thread) return { isError: true, text: "Nothing to do: pass text and/or resolve." };
       return { text: `${describeThread(thread)}\n${url(ctx.origin, artifactId)}#thread=${thread.id}`, structured: { thread } };
@@ -927,7 +931,7 @@ export async function runOwnerTool(name: string, args: Json, ctx: Ctx): Promise<
     const r = await runTool(tool, args, ctx);
     return { ...r, images: undefined };
   } catch (err) {
-    return { isError: true, text: (err as Error).message };
+    return { isError: true, text: publicMessage(err).message };
   }
 }
 
@@ -1008,7 +1012,7 @@ async function handleMessage(msg: RpcRequest, ctx: Ctx): Promise<Json | null> {
           isError: r.isError ?? false,
         });
       } catch (err) {
-        return reply({ content: [{ type: "text", text: (err as Error).message }], isError: true });
+        return reply({ content: [{ type: "text", text: publicMessage(err).message }], isError: true });
       }
     }
     default:

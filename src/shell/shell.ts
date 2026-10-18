@@ -40,7 +40,7 @@ async function setWatch(level: WatchLevel): Promise<WatchLevel> {
   return ((await res.json()) as { level: WatchLevel }).level;
 }
 
-// Your avatar opens the account menu; owners also get Manage and a sign-in link.
+// Your avatar opens the account menu; owners also get Manage.
 const meSlot = document.getElementById("me");
 if (meSlot && boot.viewer.email) {
   const common = { print: printArtifact, watch: { level: boot.watch ?? "participating", set: setWatch } };
@@ -55,8 +55,8 @@ if (meSlot && boot.viewer.email) {
     const avatar = mountAccountMenu(meSlot, boot.viewer.email, {
       ...common,
       manage: () => panel?.show(),
-      copyLink: () => panel!.copyMyLink(),
-      copyLabel: "Copy my sign-in link",
+      copyLink: async () => location.href,
+      copyLabel: "Copy page link",
       archive: {
         archived: () => archivedAt !== null,
         toggle: async () => archivedChanged(await setArchived(boot.artifactId, archivedAt === null)),
@@ -117,6 +117,17 @@ iframe.src = boot.frameUrl;
 // Until its document loads, an iframe shows a blank page that some browsers
 // (Safari especially) paint white; keep it hidden over the dark host until then.
 iframe.addEventListener("load", () => iframe.classList.add("loaded"), { once: true });
+// The frame is only ever loaded once. A second load means the artifact navigated its own frame,
+// which a sandbox can't prevent: replace it, so a page from elsewhere never sits in this chrome.
+let frameLoads = 0;
+iframe.addEventListener("load", () => {
+  if (++frameLoads < 2) return;
+  const notice = document.createElement("div");
+  notice.className = "notice error frame-stopped";
+  notice.setAttribute("role", "alert");
+  notice.textContent = "This artifact tried to load another page inside itself and was stopped. Reload to open it again, and tell its owner.";
+  iframe.replaceWith(notice);
+});
 document.getElementById("frame-host")!.append(iframe);
 
 function post(msg: ShellMessage) {
@@ -409,9 +420,13 @@ function openLink(raw: string) {
     return;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return;
-  const apex = new URL(boot.apex).hostname;
-  const ours = url.hostname === apex || url.hostname.endsWith(`.${apex}`);
-  if (!ours && !allowedHosts.has(url.host)) {
+  // A link to this workspace's own pages navigates the tab, as on any page.
+  if (url.origin === location.origin) {
+    location.assign(url.href);
+    return;
+  }
+  // Anywhere else, other workspaces included, asks first.
+  if (!allowedHosts.has(url.host)) {
     const shown = url.href.length > 160 ? `${url.href.slice(0, 160)}…` : url.href;
     if (!confirm(`This page wants to open a link on ${url.host}:\n\n${shown}\n\nOpen it?`)) return;
     allowedHosts.add(url.host);
