@@ -93,7 +93,8 @@ export function Callout({ tone = "info", title, children, className }: Children 
   return (
     <div className={cn("my-6 flex gap-3 rounded-lg border px-4 py-3.5 text-[15px] leading-relaxed", t.box, className)} role="note">
       <Icon className={cn("mt-[3px] size-[18px] shrink-0", t.icon_)} />
-      <div className="min-w-0 flex-1 [&_p]:my-0 [&_p+p]:mt-2">
+      {/* Lists sit under the title, with the callout's own size and spacing rather than the article's. */}
+      <div className="min-w-0 flex-1 [&_p]:my-0 [&_p+p]:mt-2 [&_ol]:my-2 [&_ol]:pl-[1.1rem] [&_ol]:text-[15px] [&_ol]:leading-relaxed [&_ul]:my-2 [&_ul]:pl-[1.1rem] [&_ul]:text-[15px] [&_ul]:leading-relaxed [&_li]:my-1 [&_li]:pl-0.5">
         {title && <div className="mb-0.5 font-semibold">{title}</div>}
         {children}
       </div>
