@@ -21,6 +21,8 @@ type Profile = {
   // Workspace only.
   workspace?: { name: string };
   watches?: { id: string; title: string; level: WatchLevel; custom: boolean }[];
+  /** Your default for this workspace; null is the standard one. */
+  watchDefault?: WatchLevel | null;
   account?: string;
 };
 
@@ -211,7 +213,7 @@ function renderAccount(sections: HTMLElement[]) {
       h(
         "p",
         { class: "muted" },
-        "To hear more or less about a particular artifact, use its avatar menu, or Notifications in that workspace.",
+        "Each workspace has its own Notifications page: set a default for the whole workspace (say, nothing from one you belong to on a second address), or a level per artifact.",
       ),
       workspaces.length
         ? h(
@@ -284,26 +286,53 @@ function renderWatches(sections: HTMLElement[], watches: NonNullable<Profile["wa
       h("a", { class: "button small", href: profile.account ?? "/" }, "Open your account"),
     ),
   );
+  // The workspace-wide default, which every artifact follows unless you chose otherwise for it.
+  const fallback = profile.watchDefault ?? null;
+  const defaultSelect = h("select", { "aria-label": "Default for this workspace" }) as HTMLSelectElement;
+  for (const [value, label] of [["standard", "Standard: everything on artifacts you own, replies and mentions elsewhere"], ...LEVELS] as [string, string][]) {
+    const o = h("option", { value }, label) as HTMLOptionElement;
+    o.selected = value === (fallback ?? "standard");
+    defaultSelect.append(o);
+  }
+  defaultSelect.addEventListener("change", () =>
+    act(
+      () => api("/api/me/watch-default", { body: { level: defaultSelect.value === "standard" ? null : defaultSelect.value } }),
+      defaultSelect.value === "mute" ? "You won't get notifications from this workspace." : "Default saved.",
+    ),
+  );
+  sections.push(
+    h(
+      "section",
+      { class: "card-section" },
+      h("h2", {}, "Default for this workspace"),
+      h(
+        "p",
+        { class: "muted" },
+        "Applies to every artifact here, now and later, unless you pick something else for one below. Choose “Nothing” to stay a member without notifications here, say on a second address.",
+      ),
+      defaultSelect,
+    ),
+  );
+  const followLabel = fallback ? `Workspace default (${LEVELS.find(([l]) => l === fallback)![1].toLowerCase()})` : "Workspace default";
   const rows = watches.map((w) => {
     const select = h("select", { "aria-label": `Notifications for ${w.title}` }) as HTMLSelectElement;
+    const follow = h("option", { value: "" }, followLabel) as HTMLOptionElement;
+    follow.selected = !w.custom;
+    select.append(follow);
     for (const [level, label] of LEVELS) {
       const o = h("option", { value: level }, label) as HTMLOptionElement;
-      o.selected = level === w.level;
+      o.selected = w.custom && level === w.level;
       select.append(o);
     }
-    select.addEventListener("change", () => act(() => api("/api/me/watch", { body: { id: w.id, level: select.value } })));
+    select.addEventListener("change", () => act(() => api("/api/me/watch", { body: { id: w.id, level: select.value || null } })));
     return h("tr", {}, h("td", {}, h("a", { href: `/a/${w.id}` }, w.title)), h("td", {}, select));
   });
   sections.push(
     h(
       "section",
       { class: "card-section" },
-      h("h2", {}, "What to notify you about"),
-      h(
-        "p",
-        { class: "muted" },
-        "By default you hear about every comment on artifacts you own, and about replies to your comments and @mentions on the rest. Choose “All activity” to also get page updates.",
-      ),
+      h("h2", {}, "Artifacts"),
+      h("p", { class: "muted" }, "“All activity” also includes page updates. Pick a level for one artifact to set it apart from the workspace default."),
       rows.length ? h("table", { class: "watches" }, h("tbody", {}, ...rows)) : h("p", { class: "muted" }, "Nothing is shared with you here yet."),
     ),
   );

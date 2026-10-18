@@ -1068,7 +1068,13 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
   if (request.method !== "GET" && !sameOrigin(request, url)) return Response.json({ error: "bad origin" }, { status: 403 });
   try {
     if (url.pathname === "/api/me" && request.method === "GET") {
-      return Response.json({ email, workspace: { name: (await hub.access(null)).name }, watches: await hub.watches(email), account: `${apexOrigin(env)}/me` });
+      return Response.json({
+        email,
+        workspace: { name: (await hub.access(null)).name },
+        watches: await hub.watches(email),
+        watchDefault: await hub.watchDefault(email),
+        account: `${apexOrigin(env)}/me`,
+      });
     }
     // Pins and dismissing the changed-since bar: your own, on artifacts you can open.
     const own = /^\/api\/me\/(pin|since)$/.exec(url.pathname);
@@ -1079,6 +1085,11 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
       if (own[1] === "pin") return Response.json(await hub.setPin(email, id, body.pinned !== false));
       await hub.dismissSince(id, email);
       return Response.json({ dismissed: true });
+    }
+    if (url.pathname === "/api/me/watch-default" && request.method === "POST") {
+      const body = await jsonBody(request);
+      const level = body.level === null ? null : (String(body.level) as "all" | "participating" | "mute");
+      return Response.json({ level: await hub.setWatchDefault(email, level) });
     }
     if (url.pathname === "/api/me/watch" && request.method === "POST") {
       const body = await jsonBody(request);

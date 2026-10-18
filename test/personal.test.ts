@@ -122,3 +122,46 @@ test("admins export the latest backup as JSON Lines; members can't", async () =>
   const blob = lines.filter((l) => l.table === "blobs").flatMap((l) => l.rows).find((b: { hash: string }) => b.hash === file.hash);
   expect(blob.content).toBe(files["index.mdx"]);
 });
+
+test("a workspace default silences or widens notifications; a per-artifact choice still wins", async () => {
+  const OWNED = await make("Mine", DANA);
+  const other = await make("Theirs");
+  h.hub.share(other, { add: [{ email: DANA, role: "edit" }] });
+  await h.directory.addChannel(DANA, "ntfy", { server: "https://ntfy.sh", topic: "dana" }, "ntfy");
+  h.hub.share(OWNED, { add: [{ email: "sam@example.com", role: "edit" }] });
+  const sent: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    sent.push(String(url));
+    return new Response("{}");
+  }) as typeof fetch;
+  try {
+    const deliver = async () => {
+      sent.length = 0;
+      await h.hub.deliverDue(Date.now() + 3_600_000);
+      return sent.filter((u) => u.endsWith("/dana")).length;
+    };
+    // Standard: a comment on what Dana owns reaches her.
+    h.hub.addComment(OWNED, "sam@example.com", { text: "hi" }, ACME);
+    expect(await deliver()).toBe(1);
+    // "Nothing" for this workspace: not even on what she owns, nor @mentions.
+    expect(await (await as(DANA, "/api/me/watch-default", { level: "mute" })).json()).toEqual({ level: "mute" });
+    h.hub.addComment(OWNED, "sam@example.com", { text: "hello @dana@example.com" }, ACME);
+    expect(await deliver()).toBe(0);
+    expect(h.hub.watches(DANA).every((w) => w.level === "mute" && !w.custom)).toBe(true);
+    // One artifact set apart still notifies.
+    h.hub.setWatch(DANA, other, "all");
+    h.hub.addComment(other, ADMIN, { text: "update" }, ACME);
+    expect(await deliver()).toBe(1);
+    // "All activity" as the default reaches her on artifacts she doesn't own.
+    h.hub.setWatch(DANA, other, null);
+    await as(DANA, "/api/me/watch-default", { level: "all" });
+    h.hub.addComment(other, ADMIN, { text: "another" }, ACME);
+    expect(await deliver()).toBe(1);
+    expect(((await (await as(DANA, "/api/me")).json()) as { watchDefault: string }).watchDefault).toBe("all");
+    await as(DANA, "/api/me/watch-default", { level: null });
+    expect(h.hub.watchDefault(DANA)).toBeNull();
+  } finally {
+    globalThis.fetch = real;
+  }
+});

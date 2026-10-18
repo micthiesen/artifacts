@@ -139,7 +139,7 @@ export type HubApi = AsyncMethods<
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
     | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
-    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince"
+    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault"
   >
 > & { fetch(request: Request): Promise<Response> };
 
@@ -283,6 +283,8 @@ const MIGRATIONS: Migration[] = [
     `),
   // Artifacts a person pinned to the top of their own list.
   (sql) => sql.exec(`CREATE TABLE pins (email TEXT NOT NULL, artifact_id TEXT NOT NULL, pinned_at TEXT NOT NULL, PRIMARY KEY (email, artifact_id))`),
+  // Each person's default notification level for this workspace, under any per-artifact choice.
+  (sql) => sql.exec(`CREATE TABLE watch_defaults (email TEXT PRIMARY KEY, level TEXT NOT NULL)`),
 ];
 
 /** MCP event webhooks: how soon after activity they go out, how long a subscription lasts, how hard to retry. */
@@ -2239,12 +2241,36 @@ export class Workspace extends DurableObject {
     const levels = new Map(
       this.sql.exec(`SELECT artifact_id, level FROM watches WHERE email = ?`, email).toArray().map((r) => [r.artifact_id as string, r.level as WatchLevel]),
     );
+    const fallback = this.watchDefault(email);
     return this.list(email).map((a) => ({
       id: a.id,
       title: a.title,
-      level: levels.get(a.id) ?? defaultLevel(a.owner === email),
+      level: levels.get(a.id) ?? fallback ?? defaultLevel(a.owner === email),
       custom: levels.has(a.id),
     }));
+  }
+
+  /** This person's default level for the whole workspace, or null for the standard one (everything on what you own, replies and mentions elsewhere). */
+  watchDefault(email: string): WatchLevel | null {
+    return (this.sql.exec(`SELECT level FROM watch_defaults WHERE email = ?`, email).toArray()[0]?.level as WatchLevel | undefined) ?? null;
+  }
+
+  setWatchDefault(email: string, level: WatchLevel | null): WatchLevel | null {
+    if (level === null) this.sql.exec(`DELETE FROM watch_defaults WHERE email = ?`, email);
+    else {
+      if (!["all", "participating", "mute"].includes(level)) throw new HubError(`unknown level ${level}`);
+      this.sql.exec(`INSERT INTO watch_defaults (email, level) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET level = excluded.level`, email, level);
+    }
+    this.markDirty();
+    return this.watchDefault(email);
+  }
+
+  /** Who might want every event on an artifact: "all" chosen for it, or as their workspace default. Callers still check watchLevel. */
+  private allWatchers(id: string): string[] {
+    return this.sql
+      .exec(`SELECT email FROM watches WHERE artifact_id = ? AND level = 'all' UNION SELECT email FROM watch_defaults WHERE level = 'all'`, id)
+      .toArray()
+      .map((r) => r.email as string);
   }
 
   setWatch(email: string, id: string, level: WatchLevel | null): WatchLevel {
@@ -2263,9 +2289,12 @@ export class Workspace extends DurableObject {
     return this.watchLevel(email, id);
   }
 
+  /** The artifact's own choice, else the person's workspace default, else the standard default. */
   private watchLevel(email: string, id: string): WatchLevel {
     const row = this.sql.exec(`SELECT level FROM watches WHERE email = ? AND artifact_id = ?`, email, id).toArray()[0];
     if (row) return row.level as WatchLevel;
+    const fallback = this.watchDefault(email);
+    if (fallback) return fallback;
     const owner = this.sql.exec(`SELECT owner FROM artifacts WHERE id = ?`, id).toArray()[0]?.owner;
     return defaultLevel(owner === email);
   }
@@ -2286,7 +2315,7 @@ export class Workspace extends DurableObject {
     const mentioned = new Set(mentionedEmails(c.text));
     const participants = new Set(c.participants);
     const candidates = new Set<string>([...mentioned, ...participants, owner]);
-    for (const r of this.sql.exec(`SELECT email FROM watches WHERE artifact_id = ? AND level = 'all'`, id)) candidates.add(r.email as string);
+    for (const email of this.allWatchers(id)) candidates.add(email);
     for (const email of candidates) {
       // Nobody hears about their own comments, or their own agent's.
       if (email === actor || email === c.onBehalf || !email.includes("@")) continue;
@@ -2308,7 +2337,7 @@ export class Workspace extends DurableObject {
   ) {
     const owner = this.requireArtifact(id).owner as string;
     const candidates = new Set<string>([owner]);
-    for (const row of this.sql.exec(`SELECT email FROM watches WHERE artifact_id = ? AND level = 'all'`, id)) candidates.add(row.email as string);
+    for (const email of this.allWatchers(id)) candidates.add(email);
     for (const email of candidates) {
       if (email === actor || !email.includes("@") || this.watchLevel(email, id) !== "all" || !this.canOpen(id, email)) continue;
       this.enqueue(email, id, "response", { ...r, by: actor }, COMMENT_DELAY_MS);
@@ -2325,9 +2354,8 @@ export class Workspace extends DurableObject {
 
   /** Page updates reach "all" watchers, except whoever made them (or had their agent make them), batched over a quiet period. */
   private notifyUpdate(id: string, actor: Actor, version: number, note: string, origin?: string, onBehalf?: string) {
-    for (const r of this.sql.exec(`SELECT email FROM watches WHERE artifact_id = ? AND level = 'all'`, id).toArray()) {
-      const email = r.email as string;
-      if (email === actor || email === onBehalf || !this.canOpen(id, email)) continue;
+    for (const email of this.allWatchers(id)) {
+      if (email === actor || email === onBehalf || this.watchLevel(email, id) !== "all" || !this.canOpen(id, email)) continue;
       const pending = this.sql.exec(`SELECT id, data FROM outbox WHERE email = ? AND artifact_id = ? AND kind = 'update'`, email, id).toArray()[0];
       if (pending) {
         const data = JSON.parse(pending.data as string) as { notes: string[]; first: number; version: number };
