@@ -86,10 +86,25 @@ test("hosts map to workspaces; unknown ones never reach a Durable Object", async
   expect(await res.text()).toContain("No such workspace");
 });
 
-test("signed out, the apex shows the splash page", async () => {
-  const html = await (await fetchAs(`${APEX}/`)).text();
+test("signed out, the apex shows the splash page, with the examples and the wordmark", async () => {
+  const res = await fetchAs(`${APEX}/`);
+  const html = await res.text();
   expect(html).toContain("Collaborative documents and little apps");
   expect(html).toContain('href="/login"');
+  expect(html).toContain('artifacts<span class="wordmark-tld">.boo</span>');
+  for (const slug of ["launch-plan", "retro", "costs"]) {
+    expect(html).toContain(`id="tab-${slug}"`);
+    expect(html).toMatch(new RegExp(`<iframe sandbox="allow-scripts[^"]*"[^>]* data-src="/demo/${slug}\\?v=`));
+  }
+  expect(html).not.toContain("allow-same-origin");
+  const seed = JSON.parse(/<script type="application\/json" id="demo-seed">(.*?)<\/script>/.exec(html)![1]);
+  expect(seed["launch-plan"].length).toBeGreaterThan(0);
+  // The splash and the policies may be indexed; everything else stays out.
+  expect(res.headers.get("X-Robots-Tag")).toBe("all");
+  expect((await fetchAs(`${APEX}/privacy`)).headers.get("X-Robots-Tag")).toBe("all");
+  expect((await fetchAs(`${APEX}/login`)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+  expect(await (await fetchAs(`${APEX}/robots.txt`)).text()).toBe("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /terms\nAllow: /security\nDisallow: /\n");
+  expect(await (await fetchAs(`${ACME}/robots.txt`)).text()).toBe("User-agent: *\nDisallow: /\n");
 });
 
 test("email sign-in hands the browser to the workspace, which sets its own session", async () => {

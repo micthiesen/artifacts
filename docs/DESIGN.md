@@ -1,6 +1,6 @@
 # Design
 
-Artifacts lets agents publish small interactive pages (reports, dashboards,
+artifacts.boo lets agents publish small interactive pages (reports, dashboards,
 polls, checklists, mini apps) that specific people open in a browser, with
 per-viewer storage, live shared state and comments. This document records what
 the system is for and the decisions behind it. The code is the reference for
@@ -42,6 +42,15 @@ routing and ordinary page loads don't touch it.
 
 The apex domain is the front door: a splash page, sign-in, the list of your
 workspaces, your notification settings and the operator console.
+
+The splash page is the most visited page and the only one search engines may
+index (with the policies). It shows real artifacts beside their source: the
+examples in `demo/` are compiled at build time into static frame documents
+served as Workers assets, so showing them costs no Worker time and touches no
+Durable Object. A small script on the page plays the shell's part in memory,
+so visitors can vote, tick and type, but nothing they do leaves their browser.
+The same examples are published as public artifacts in a `demo` workspace
+(`scripts/seed-demo.ts`), where visitors are read-only like on any public link.
 
 ## People and roles
 

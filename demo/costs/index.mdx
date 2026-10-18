@@ -1,0 +1,24 @@
+# Cloud costs: September
+
+<Summary>Spend fell **14%** to $18.2k after CI moved to spot instances.</Summary>
+
+<Stats>
+  <Stat label="Total" value="$18.2k" delta="-14%" invert />
+  <Stat label="Compute" value="$11.0k" delta="-22%" invert />
+  <Stat label="Storage" value="$4.1k" delta="+6%" invert />
+</Stats>
+
+<Chart type="bar" data="monthly.json" x="month" y="compute storage network" stacked height={220} />
+
+<Table
+  data="services.json"
+  columns={["service", "team", { key: "cost", format: "currency" }, { key: "change", format: "percent" }]}
+  sort="-cost"
+  search
+/>
+
+<Callout tone="warning" title="Storage keeps growing">
+  Logs are kept for 90 days. Keeping 30 would save about $900 a month.
+</Callout>
+
+<Notes id="followups" placeholder="Follow-ups for next month…" rows={3} />

@@ -44,6 +44,7 @@ wildcard DNS record, so deploy prod first.
 - **Off-Cloudflare copy:** `bun scripts/export.ts <slug|directory>` writes `exports/<slug>-<time>.json`; `bun scripts/import.ts <slug|directory> <file>` replaces that data with it (the workspace is offline while it loads).
 - **Fixing a workspace:** from `/admin`, add or replace its admins (say, a mistyped first admin) without a role inside it.
 - **Schema changes:** add a numbered migration (`src/worker/migrate.ts`); each workspace applies it the first time it wakes after the deploy. Migrations only go forward: once objects have migrated, older code refuses to run against them, so fix forward rather than rolling back.
+- **Demo workspace:** `bun scripts/seed-demo.ts` creates a `demo` workspace whose members are example people, publishes the examples in `demo/` as public artifacts with their starting votes and comments, and writes their links to `demo/links.json` for the splash page (commit it, then deploy). Run it again after changing an example; `--reseed` rewrites the shared state too.
 - **Test addresses:** mail to reserved test domains (example.com, .test, .invalid) is never sent; the end-to-end checks use them, and the operator API gives them sign-in codes and sessions directly.
 
 ## Checks

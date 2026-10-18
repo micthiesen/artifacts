@@ -1,0 +1,8 @@
+[
+  { "month": "Apr", "compute": 13900, "storage": 3200, "network": 2100 },
+  { "month": "May", "compute": 14300, "storage": 3400, "network": 2200 },
+  { "month": "Jun", "compute": 14800, "storage": 3600, "network": 2300 },
+  { "month": "Jul", "compute": 14600, "storage": 3700, "network": 2250 },
+  { "month": "Aug", "compute": 14100, "storage": 3870, "network": 3200 },
+  { "month": "Sep", "compute": 11000, "storage": 4100, "network": 3100 }
+]

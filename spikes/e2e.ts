@@ -10,7 +10,7 @@ check("protected resource metadata names this workspace", prm.resource === `${or
 const asm = (await (await fetch(`${origin}/.well-known/oauth-authorization-server`)).json()) as any;
 check("authorization server metadata", asm.issuer === origin && asm.registration_endpoint === `${origin}/oauth/register` && asm.authorization_endpoint === `${origin}/authorize`, asm);
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
-check("initialize names the workspace", init.body.result?.serverInfo?.name === `artifacts-${slug}` && init.body.result?.serverInfo?.title === "Artifacts · E2E", init.body.result?.serverInfo);
+check("initialize names the workspace", init.body.result?.serverInfo?.name === `artifacts-${slug}` && init.body.result?.serverInfo?.title === "artifacts.boo · E2E", init.body.result?.serverInfo);
 const list = await rpc("tools/list");
 check("tools/list", list.body.result?.tools?.length >= 10, list.body.result?.tools?.map((t: any) => t.name));
 

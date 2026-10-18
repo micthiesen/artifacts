@@ -1,4 +1,4 @@
-# Artifacts guide
+# artifacts.boo guide
 
 An artifact is a small set of files rendered as a page at `/a/<id>` in your
 workspace. You act as the user who connected you: what you create is theirs,

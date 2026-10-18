@@ -1,0 +1,25 @@
+# Launch plan: billing v2
+
+<Summary>Ship **this Thursday** unless the load test fails. Vote on the day below.</Summary>
+
+<Stats>
+  <Stat label="Beta signups" value="1,284" delta="+18%" />
+  <Stat label="Open bugs" value="7" delta="-5" invert />
+  <Stat label="p95 checkout" value="420ms" delta="-12%" invert />
+</Stats>
+
+```mermaid
+flowchart LR
+  Freeze[Code freeze] --> Load[Load test] --> Ship
+  Load -- fails --> Fix[Fix and retest] --> Load
+```
+
+<Chart type="area" data="signups.json" x="week" y="signups" height={200} />
+
+## Decide
+
+<Poll id="day" question="When do we launch?" options={["This Thursday", "Next Thursday"]} />
+
+<Checklist id="launch" items={["Docs", "Status page", "Announcement email"]} />
+
+<Comments />

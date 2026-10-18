@@ -2253,7 +2253,7 @@ async function fetchSource(url: string, pick: string | null, allowed: Set<string
   let res: Response | null = null;
   for (let hop = 0; hop < 5; hop++) {
     res = await fetch(target, {
-      headers: { Accept: "application/json", "User-Agent": "Artifacts/1 (+https://github.com/micthiesen/artifacts)" },
+      headers: { Accept: "application/json", "User-Agent": "artifacts.boo/1 (+https://github.com/micthiesen/artifacts.boo)" },
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });

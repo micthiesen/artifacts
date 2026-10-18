@@ -16,7 +16,7 @@ sw.addEventListener("push", (event: PushEvent) => {
     data = { body: event.data?.text() };
   }
   event.waitUntil(
-    sw.registration.showNotification(data.title || "Artifacts", {
+    sw.registration.showNotification(data.title || "artifacts.boo", {
       body: data.body ?? "",
       tag: data.tag,
       data: { url: data.url ?? "/" },

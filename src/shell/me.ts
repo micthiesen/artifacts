@@ -3,6 +3,7 @@
 // settings. In a workspace ("Notifications in <name>"): how much you hear about
 // each artifact there. Everything goes through that host's /api/me. A failed
 // action only shows its notice, so what you typed stays put.
+import { PRODUCT } from "../shared/brand.ts";
 import type { WatchLevel } from "../shared/protocol.ts";
 
 type Channel = { id: string; type: string; label: string; createdAt: string; lastError: string | null; disabled: boolean };
@@ -274,7 +275,7 @@ function addChannels(): HTMLElement {
         "p",
         { class: "muted small" },
         ios && !standalone
-          ? "On iPhone and iPad: tap Share, then “Add to Home Screen”, open Artifacts from your Home Screen and come back here."
+          ? `On iPhone and iPad: tap Share, then “Add to Home Screen”, open ${PRODUCT} from your Home Screen and come back here.`
           : "This browser doesn't support push notifications.",
       ),
     );

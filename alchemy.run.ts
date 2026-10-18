@@ -63,7 +63,9 @@ export default Alchemy.Stack(
       assets: "./dist/kit",
       domain: { name: apexHost, aliases: prod ? [`www.${domain}`] : [] },
       workersDev: false,
-      routes: [{ pattern: `*${workspaceSuffix}/*`, zoneId: zone.id }],
+      // Prod's wildcard route also matches a stage's apex (<stage>.domain) and
+      // outranks its custom domain, so stages route their apex explicitly.
+      routes: [{ pattern: `*${workspaceSuffix}/*`, zoneId: zone.id }, ...(prod ? [] : [{ pattern: `${apexHost}/*`, zoneId: zone.id }])],
       // Workers Logs, so sign-in and email failures can be looked up afterwards.
       observability: { enabled: true },
       env: {

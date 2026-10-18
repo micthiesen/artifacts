@@ -3,6 +3,8 @@
 import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { cp, mkdir, readdir, readFile } from "node:fs/promises";
+import { PRODUCT } from "../src/shared/brand.ts";
+import demos from "../src/worker/demos.json";
 
 const common = {
   bundle: true,
@@ -17,6 +19,7 @@ await mkdir("dist/kit/static", { recursive: true });
 await build({ ...common, entryPoints: ["src/shell/shell.ts"], outfile: "dist/kit/static/shell.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/account.ts"], outfile: "dist/kit/static/account.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/home.ts"], outfile: "dist/kit/static/home.js", platform: "browser" });
+await build({ ...common, entryPoints: ["src/shell/splash.ts"], outfile: "dist/kit/static/splash.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/me.ts"], outfile: "dist/kit/static/me.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/settings.ts"], outfile: "dist/kit/static/settings.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/admin.ts"], outfile: "dist/kit/static/admin.js", platform: "browser" });
@@ -32,8 +35,8 @@ await cp("src/shell/icons/favicon-32.png", "dist/kit/favicon.ico");
 await Bun.write(
   "dist/kit/manifest.webmanifest",
   JSON.stringify({
-    name: "Artifacts",
-    short_name: "Artifacts",
+    name: PRODUCT,
+    short_name: PRODUCT,
     start_url: "/",
     display: "standalone",
     background_color: "#0b0d15",
@@ -44,6 +47,11 @@ await Bun.write(
     ],
   }),
 );
+
+// The splash page embeds every example; scripts/build-demos.ts must have built them.
+for (const d of demos) {
+  if (!(await Bun.file(`dist/kit/demo/${d.slug}.html`).exists())) throw new Error(`dist/kit/demo/${d.slug}.html is missing: run the full bun run build`);
+}
 
 // Static files keep stable names, and edge caches hold them, so the Worker
 // references them with ?v=<hash of all assets>.

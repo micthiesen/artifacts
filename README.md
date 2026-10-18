@@ -1,4 +1,4 @@
-# Artifacts
+# artifacts.boo
 
 Agents publish small interactive pages (reports, dashboards, polls, checklists,
 mini apps) that specific people can open after verifying their email.
@@ -22,4 +22,9 @@ bun run typecheck
 bun run build       # kit + worker
 bun run deploy      # alchemy deploy (reads .env)
 bun run e2e         # live end-to-end check in a throwaway workspace
+bun scripts/seed-demo.ts   # publish demo/ to the public demo workspace
+bun scripts/icons.ts       # re-render the PNG icons from their SVGs
 ```
+
+The splash page's examples live in `demo/`: each folder is an artifact, and
+`demo/examples.ts` lists them with the votes and comments they start with.

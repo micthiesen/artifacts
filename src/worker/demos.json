@@ -1,0 +1,187 @@
+[
+ {
+  "slug": "launch-plan",
+  "label": "Launch plan",
+  "title": "Launch plan: billing v2",
+  "blurb": "MDX with a diagram, a chart, and a poll, checklist and comments that everyone shares.",
+  "entry": "index.mdx",
+  "source": "# Launch plan: billing v2\n\n<Summary>Ship **this Thursday** unless the load test fails. Vote on the day below.</Summary>\n\n<Stats>\n  <Stat label=\"Beta signups\" value=\"1,284\" delta=\"+18%\" />\n  <Stat label=\"Open bugs\" value=\"7\" delta=\"-5\" invert />\n  <Stat label=\"p95 checkout\" value=\"420ms\" delta=\"-12%\" invert />\n</Stats>\n\n```mermaid\nflowchart LR\n  Freeze[Code freeze] --> Load[Load test] --> Ship\n  Load -- fails --> Fix[Fix and retest] --> Load\n```\n\n<Chart type=\"area\" data=\"signups.json\" x=\"week\" y=\"signups\" height={200} />\n\n## Decide\n\n<Poll id=\"day\" question=\"When do we launch?\" options={[\"This Thursday\", \"Next Thursday\"]} />\n\n<Checklist id=\"launch\" items={[\"Docs\", \"Status page\", \"Announcement email\"]} />\n\n<Comments />\n",
+  "html": "<span class=\"t-h\"># Launch plan: billing v2</span>\n\n<span class=\"t-t\">&lt;Summary</span><span class=\"t-t\">&gt;</span>Ship <span class=\"t-b\">**this Thursday**</span> unless the load test fails. Vote on the day below.<span class=\"t-t\">&lt;/Summary</span><span class=\"t-t\">&gt;</span>\n\n<span class=\"t-t\">&lt;Stats</span><span class=\"t-t\">&gt;</span>\n  <span class=\"t-t\">&lt;Stat</span> <span class=\"t-a\">label</span>=<span class=\"t-s\">&quot;Beta signups&quot;</span> <span class=\"t-a\">value</span>=<span class=\"t-s\">&quot;1,284&quot;</span> <span class=\"t-a\">delta</span>=<span class=\"t-s\">&quot;+18%&quot;</span> <span class=\"t-t\">/&gt;</span>\n  <span class=\"t-t\">&lt;Stat</span> <span class=\"t-a\">label</span>=<span class=\"t-s\">&quot;Open bugs&quot;</span> <span class=\"t-a\">value</span>=<span class=\"t-s\">&quot;7&quot;</span> <span class=\"t-a\">delta</span>=<span class=\"t-s\">&quot;-5&quot;</span> invert <span class=\"t-t\">/&gt;</span>\n  <span class=\"t-t\">&lt;Stat</span> <span class=\"t-a\">label</span>=<span class=\"t-s\">&quot;p95 checkout&quot;</span> <span class=\"t-a\">value</span>=<span class=\"t-s\">&quot;420ms&quot;</span> <span class=\"t-a\">delta</span>=<span class=\"t-s\">&quot;-12%&quot;</span> invert <span class=\"t-t\">/&gt;</span>\n<span class=\"t-t\">&lt;/Stats</span><span class=\"t-t\">&gt;</span>\n\n<span class=\"t-m\">```mermaid</span>\nflowchart LR\n  Freeze[Code freeze] --<span class=\"t-t\">&gt;</span> Load[Load test] --<span class=\"t-t\">&gt;</span> Ship\n  Load -- fails --<span class=\"t-t\">&gt;</span> Fix[Fix and retest] --<span class=\"t-t\">&gt;</span> Load\n<span class=\"t-m\">```</span>\n\n<span class=\"t-t\">&lt;Chart</span> <span class=\"t-a\">type</span>=<span class=\"t-s\">&quot;area&quot;</span> <span class=\"t-a\">data</span>=<span class=\"t-s\">&quot;signups.json&quot;</span> <span class=\"t-a\">x</span>=<span class=\"t-s\">&quot;week&quot;</span> <span class=\"t-a\">y</span>=<span class=\"t-s\">&quot;signups&quot;</span> <span class=\"t-a\">height</span>={<span class=\"t-n\">200</span>} <span class=\"t-t\">/&gt;</span>\n\n<span class=\"t-h\">## Decide</span>\n\n<span class=\"t-t\">&lt;Poll</span> <span class=\"t-a\">id</span>=<span class=\"t-s\">&quot;day&quot;</span> <span class=\"t-a\">question</span>=<span class=\"t-s\">&quot;When do we launch?&quot;</span> <span class=\"t-a\">options</span>={[<span class=\"t-s\">&quot;This Thursday&quot;</span>, <span class=\"t-s\">&quot;Next Thursday&quot;</span>]} <span class=\"t-t\">/&gt;</span>\n\n<span class=\"t-t\">&lt;Checklist</span> <span class=\"t-a\">id</span>=<span class=\"t-s\">&quot;launch&quot;</span> <span class=\"t-a\">items</span>={[<span class=\"t-s\">&quot;Docs&quot;</span>, <span class=\"t-s\">&quot;Status page&quot;</span>, <span class=\"t-s\">&quot;Announcement email&quot;</span>]} <span class=\"t-t\">/&gt;</span>\n\n<span class=\"t-t\">&lt;Comments</span> <span class=\"t-t\">/&gt;</span>\n",
+  "data": [
+   "data/signups.json"
+  ],
+  "seed": [
+   {
+    "by": "priya.shah@example.com",
+    "key": "poll/day/priya.shah@example.com",
+    "value": [
+     "This Thursday"
+    ]
+   },
+   {
+    "by": "marcus.lee@example.com",
+    "key": "poll/day/marcus.lee@example.com",
+    "value": [
+     "Next Thursday"
+    ]
+   },
+   {
+    "by": "ana.ruiz@example.com",
+    "key": "poll/day/ana.ruiz@example.com",
+    "value": [
+     "This Thursday"
+    ]
+   },
+   {
+    "by": "priya.shah@example.com",
+    "key": "check/launch/docs",
+    "value": {
+     "done": true,
+     "by": "priya.shah@example.com"
+    },
+    "minutesAgo": 300
+   },
+   {
+    "by": "tom.okafor@example.com",
+    "key": "check/launch/status-page",
+    "value": {
+     "done": true,
+     "by": "tom.okafor@example.com"
+    },
+    "minutesAgo": 140
+   },
+   {
+    "by": "marcus.lee@example.com",
+    "key": "comments/main/00001760000000000-a1",
+    "value": {
+     "by": "marcus.lee@example.com",
+     "text": "Load test is booked for Wednesday night. I'd keep next Thursday as the fallback.",
+     "at": 0
+    },
+    "minutesAgo": 190
+   },
+   {
+    "by": "priya.shah@example.com",
+    "key": "comments/main/00001760000100000-b2",
+    "value": {
+     "by": "priya.shah@example.com",
+     "text": "Docs are done. The status page draft is linked in the checklist.",
+     "at": 0
+    },
+    "minutesAgo": 45
+   }
+  ]
+ },
+ {
+  "slug": "retro",
+  "label": "Retro board",
+  "title": "Sprint 42 retro",
+  "blurb": "A React app in one file: cards and votes sync live between everyone with the page open.",
+  "entry": "app.tsx",
+  "source": "import { useState } from \"react\";\nimport { Avatar, Input } from \"@a/ui\";\nimport { useSharedMap, useViewer } from \"@a/hooks\";\nimport { ThumbsUp } from \"lucide-react\";\n\ntype Card = { col: string; text: string; by: string | null };\nconst COLUMNS = [\"Went well\", \"To improve\", \"Actions\"];\n\nexport default function Retro() {\n  const cards = useSharedMap<Card>(\"card\");\n  const votes = useSharedMap<boolean>(\"vote\"); // vote/<card>/<email>\n  const { email, canWrite } = useViewer();\n  const [drafts, setDrafts] = useState<Record<string, string>>({});\n  const count = (id: string) => votes.entries.filter(([k]) => k.startsWith(`${id}/`)).length;\n  const mine = (id: string) => votes.get(`${id}/${email}`);\n\n  function add(col: string) {\n    const text = drafts[col]?.trim();\n    if (!text || !canWrite) return;\n    cards.set(crypto.randomUUID(), { col, text, by: email });\n    setDrafts({ ...drafts, [col]: \"\" });\n  }\n  function vote(id: string) {\n    const key = `${id}/${email}`;\n    mine(id) ? votes.delete(key) : votes.set(key, true);\n  }\n\n  return (\n    <div className=\"grid h-full content-start gap-4 p-5 sm:grid-cols-3\">\n      {COLUMNS.map((col) => (\n        <section key={col} className=\"flex flex-col gap-2\">\n          <h2 className=\"text-sm font-semibold text-muted-foreground\">{col}</h2>\n          {cards.entries\n            .filter(([, c]) => c.col === col)\n            .sort((a, b) => count(b[0]) - count(a[0]))\n            .map(([id, c]) => (\n              <div key={id} className=\"flex items-start gap-2 rounded-lg border border-border bg-card p-3 text-sm\">\n                <Avatar email={c.by ?? undefined} size=\"sm\" />\n                <span className=\"flex-1\">{c.text}</span>\n                <button\n                  className={`flex items-center gap-1 text-xs ${mine(id) ? \"text-primary\" : \"text-muted-foreground\"}`}\n                  disabled={!canWrite}\n                  onClick={() => vote(id)}\n                >\n                  <ThumbsUp className=\"size-3.5\" /> {count(id)}\n                </button>\n              </div>\n            ))}\n          <Input\n            placeholder=\"Add a card…\"\n            value={drafts[col] ?? \"\"}\n            disabled={!canWrite}\n            onChange={(e) => setDrafts({ ...drafts, [col]: e.target.value })}\n            onKeyDown={(e) => e.key === \"Enter\" && add(col)}\n          />\n        </section>\n      ))}\n    </div>\n  );\n}\n",
+  "html": "<span class=\"t-k\">import</span> { useState } <span class=\"t-k\">from</span> <span class=\"t-s\">&quot;react&quot;</span>;\n<span class=\"t-k\">import</span> { Avatar, Input } <span class=\"t-k\">from</span> <span class=\"t-s\">&quot;@a/ui&quot;</span>;\n<span class=\"t-k\">import</span> { useSharedMap, useViewer } <span class=\"t-k\">from</span> <span class=\"t-s\">&quot;@a/hooks&quot;</span>;\n<span class=\"t-k\">import</span> { ThumbsUp } <span class=\"t-k\">from</span> <span class=\"t-s\">&quot;lucide-react&quot;</span>;\n\n<span class=\"t-k\">type</span> Card = { col: string; text: string; by: string | <span class=\"t-k\">null</span> };\n<span class=\"t-k\">const</span> COLUMNS = [<span class=\"t-s\">&quot;Went well&quot;</span>, <span class=\"t-s\">&quot;To improve&quot;</span>, <span class=\"t-s\">&quot;Actions&quot;</span>];\n\n<span class=\"t-k\">export</span> <span class=\"t-k\">default</span> <span class=\"t-k\">function</span> Retro() {\n  <span class=\"t-k\">const</span> cards = useSharedMap<span class=\"t-t\">&lt;Card</span><span class=\"t-t\">&gt;</span>(<span class=\"t-s\">&quot;card&quot;</span>);\n  <span class=\"t-k\">const</span> votes = useSharedMap<span class=\"t-t\">&lt;boolean</span><span class=\"t-t\">&gt;</span>(<span class=\"t-s\">&quot;vote&quot;</span>); <span class=\"t-c\">// vote/&lt;card&gt;/&lt;email&gt;</span>\n  <span class=\"t-k\">const</span> { email, canWrite } = useViewer();\n  <span class=\"t-k\">const</span> [drafts, setDrafts] = useState<span class=\"t-t\">&lt;Record</span><span class=\"t-t\">&lt;string</span>, string<span class=\"t-t\">&gt;</span><span class=\"t-t\">&gt;</span>({});\n  <span class=\"t-k\">const</span> count = (id: string) =<span class=\"t-t\">&gt;</span> votes.entries.filter(([k]) =<span class=\"t-t\">&gt;</span> k.startsWith(<span class=\"t-s\">`${id}/`</span>)).length;\n  <span class=\"t-k\">const</span> mine = (id: string) =<span class=\"t-t\">&gt;</span> votes.get(<span class=\"t-s\">`${id}/${email}`</span>);\n\n  <span class=\"t-k\">function</span> add(col: string) {\n    <span class=\"t-k\">const</span> text = drafts[col]?.trim();\n    <span class=\"t-k\">if</span> (!text || !canWrite) <span class=\"t-k\">return</span>;\n    cards.set(crypto.randomUUID(), { col, text, by: email });\n    setDrafts({ ...drafts, [col]: <span class=\"t-s\">&quot;&quot;</span> });\n  }\n  <span class=\"t-k\">function</span> vote(id: string) {\n    <span class=\"t-k\">const</span> key = <span class=\"t-s\">`${id}/${email}`</span>;\n    mine(id) ? votes.delete(key) : votes.set(key, <span class=\"t-k\">true</span>);\n  }\n\n  <span class=\"t-k\">return</span> (\n    <span class=\"t-t\">&lt;div</span> <span class=\"t-a\">className</span>=<span class=\"t-s\">&quot;grid h-full content-start gap-4 p-5 sm:grid-cols-3&quot;</span><span class=\"t-t\">&gt;</span>\n      {COLUMNS.map((col) =<span class=\"t-t\">&gt;</span> (\n        <span class=\"t-t\">&lt;section</span> <span class=\"t-a\">key</span>={col} <span class=\"t-a\">className</span>=<span class=\"t-s\">&quot;flex flex-col gap-2&quot;</span><span class=\"t-t\">&gt;</span>\n          <span class=\"t-t\">&lt;h2</span> <span class=\"t-a\">className</span>=<span class=\"t-s\">&quot;text-sm font-semibold text-muted-foreground&quot;</span><span class=\"t-t\">&gt;</span>{col}<span class=\"t-t\">&lt;/h2</span><span class=\"t-t\">&gt;</span>\n          {cards.entries\n            .filter(([, c]) =<span class=\"t-t\">&gt;</span> c.col === col)\n            .sort((a, b) =<span class=\"t-t\">&gt;</span> count(b[<span class=\"t-n\">0</span>]) - count(a[<span class=\"t-n\">0</span>]))\n            .map(([id, c]) =<span class=\"t-t\">&gt;</span> (\n              <span class=\"t-t\">&lt;div</span> <span class=\"t-a\">key</span>={id} <span class=\"t-a\">className</span>=<span class=\"t-s\">&quot;flex items-start gap-2 rounded-lg border border-border bg-card p-3 text-sm&quot;</span><span class=\"t-t\">&gt;</span>\n                <span class=\"t-t\">&lt;Avatar</span> <span class=\"t-a\">email</span>={c.by ?? <span class=\"t-k\">undefined</span>} <span class=\"t-a\">size</span>=<span class=\"t-s\">&quot;sm&quot;</span> <span class=\"t-t\">/&gt;</span>\n                <span class=\"t-t\">&lt;span</span> <span class=\"t-a\">className</span>=<span class=\"t-s\">&quot;flex-1&quot;</span><span class=\"t-t\">&gt;</span>{c.text}<span class=\"t-t\">&lt;/span</span><span class=\"t-t\">&gt;</span>\n                <span class=\"t-t\">&lt;button</span>\n                  <span class=\"t-a\">className</span>={<span class=\"t-s\">`flex items-center gap-1 text-xs ${mine(id) ? &quot;text-primary&quot; : &quot;text-muted-foreground&quot;}`</span>}\n                  <span class=\"t-a\">disabled</span>={!canWrite}\n                  <span class=\"t-a\">onClick</span>={() =<span class=\"t-t\">&gt;</span> vote(id)}\n                <span class=\"t-t\">&gt;</span>\n                  <span class=\"t-t\">&lt;ThumbsUp</span> <span class=\"t-a\">className</span>=<span class=\"t-s\">&quot;size-3.5&quot;</span> <span class=\"t-t\">/&gt;</span> {count(id)}\n                <span class=\"t-t\">&lt;/button</span><span class=\"t-t\">&gt;</span>\n              <span class=\"t-t\">&lt;/div</span><span class=\"t-t\">&gt;</span>\n            ))}\n          <span class=\"t-t\">&lt;Input</span>\n            <span class=\"t-a\">placeholder</span>=<span class=\"t-s\">&quot;Add a card…&quot;</span>\n            <span class=\"t-a\">value</span>={drafts[col] ?? <span class=\"t-s\">&quot;&quot;</span>}\n            <span class=\"t-a\">disabled</span>={!canWrite}\n            <span class=\"t-a\">onChange</span>={(e) =<span class=\"t-t\">&gt;</span> setDrafts({ ...drafts, [col]: e.target.value })}\n            <span class=\"t-a\">onKeyDown</span>={(e) =<span class=\"t-t\">&gt;</span> e.key === <span class=\"t-s\">&quot;Enter&quot;</span> &amp;&amp; add(col)}\n          <span class=\"t-t\">/&gt;</span>\n        <span class=\"t-t\">&lt;/section</span><span class=\"t-t\">&gt;</span>\n      ))}\n    <span class=\"t-t\">&lt;/div</span><span class=\"t-t\">&gt;</span>\n  );\n}\n",
+  "data": [],
+  "seed": [
+   {
+    "by": "ana.ruiz@example.com",
+    "key": "card/c1",
+    "value": {
+     "col": "Went well",
+     "text": "Billing beta shipped a day early",
+     "by": "ana.ruiz@example.com"
+    }
+   },
+   {
+    "by": "tom.okafor@example.com",
+    "key": "card/c2",
+    "value": {
+     "col": "Went well",
+     "text": "Pairing on the migration",
+     "by": "tom.okafor@example.com"
+    }
+   },
+   {
+    "by": "marcus.lee@example.com",
+    "key": "card/c3",
+    "value": {
+     "col": "To improve",
+     "text": "Flaky e2e tests blocked two merges",
+     "by": "marcus.lee@example.com"
+    }
+   },
+   {
+    "by": "priya.shah@example.com",
+    "key": "card/c4",
+    "value": {
+     "col": "To improve",
+     "text": "Too many meetings on Wednesday",
+     "by": "priya.shah@example.com"
+    }
+   },
+   {
+    "by": "priya.shah@example.com",
+    "key": "card/c5",
+    "value": {
+     "col": "Actions",
+     "text": "Quarantine flaky tests automatically",
+     "by": "priya.shah@example.com"
+    }
+   },
+   {
+    "by": "ana.ruiz@example.com",
+    "key": "vote/c1/ana.ruiz@example.com",
+    "value": true
+   },
+   {
+    "by": "marcus.lee@example.com",
+    "key": "vote/c1/marcus.lee@example.com",
+    "value": true
+   },
+   {
+    "by": "tom.okafor@example.com",
+    "key": "vote/c3/tom.okafor@example.com",
+    "value": true
+   },
+   {
+    "by": "priya.shah@example.com",
+    "key": "vote/c3/priya.shah@example.com",
+    "value": true
+   },
+   {
+    "by": "ana.ruiz@example.com",
+    "key": "vote/c3/ana.ruiz@example.com",
+    "value": true
+   },
+   {
+    "by": "marcus.lee@example.com",
+    "key": "vote/c5/marcus.lee@example.com",
+    "value": true
+   }
+  ]
+ },
+ {
+  "slug": "costs",
+  "label": "Cost report",
+  "title": "Cloud costs: September",
+  "blurb": "A report from data files: sortable table, stacked chart and shared notes.",
+  "entry": "index.mdx",
+  "source": "# Cloud costs: September\n\n<Summary>Spend fell **14%** to $18.2k after CI moved to spot instances.</Summary>\n\n<Stats>\n  <Stat label=\"Total\" value=\"$18.2k\" delta=\"-14%\" invert />\n  <Stat label=\"Compute\" value=\"$11.0k\" delta=\"-22%\" invert />\n  <Stat label=\"Storage\" value=\"$4.1k\" delta=\"+6%\" invert />\n</Stats>\n\n<Chart type=\"bar\" data=\"monthly.json\" x=\"month\" y=\"compute storage network\" stacked height={220} />\n\n<Table\n  data=\"services.json\"\n  columns={[\"service\", \"team\", { key: \"cost\", format: \"currency\" }, { key: \"change\", format: \"percent\" }]}\n  sort=\"-cost\"\n  search\n/>\n\n<Callout tone=\"warning\" title=\"Storage keeps growing\">\n  Logs are kept for 90 days. Keeping 30 would save about $900 a month.\n</Callout>\n\n<Notes id=\"followups\" placeholder=\"Follow-ups for next month…\" rows={3} />\n",
+  "html": "<span class=\"t-h\"># Cloud costs: September</span>\n\n<span class=\"t-t\">&lt;Summary</span><span class=\"t-t\">&gt;</span>Spend fell <span class=\"t-b\">**14%**</span> to $18.2k after CI moved to spot instances.<span class=\"t-t\">&lt;/Summary</span><span class=\"t-t\">&gt;</span>\n\n<span class=\"t-t\">&lt;Stats</span><span class=\"t-t\">&gt;</span>\n  <span class=\"t-t\">&lt;Stat</span> <span class=\"t-a\">label</span>=<span class=\"t-s\">&quot;Total&quot;</span> <span class=\"t-a\">value</span>=<span class=\"t-s\">&quot;$18.2k&quot;</span> <span class=\"t-a\">delta</span>=<span class=\"t-s\">&quot;-14%&quot;</span> invert <span class=\"t-t\">/&gt;</span>\n  <span class=\"t-t\">&lt;Stat</span> <span class=\"t-a\">label</span>=<span class=\"t-s\">&quot;Compute&quot;</span> <span class=\"t-a\">value</span>=<span class=\"t-s\">&quot;$11.0k&quot;</span> <span class=\"t-a\">delta</span>=<span class=\"t-s\">&quot;-22%&quot;</span> invert <span class=\"t-t\">/&gt;</span>\n  <span class=\"t-t\">&lt;Stat</span> <span class=\"t-a\">label</span>=<span class=\"t-s\">&quot;Storage&quot;</span> <span class=\"t-a\">value</span>=<span class=\"t-s\">&quot;$4.1k&quot;</span> <span class=\"t-a\">delta</span>=<span class=\"t-s\">&quot;+6%&quot;</span> invert <span class=\"t-t\">/&gt;</span>\n<span class=\"t-t\">&lt;/Stats</span><span class=\"t-t\">&gt;</span>\n\n<span class=\"t-t\">&lt;Chart</span> <span class=\"t-a\">type</span>=<span class=\"t-s\">&quot;bar&quot;</span> <span class=\"t-a\">data</span>=<span class=\"t-s\">&quot;monthly.json&quot;</span> <span class=\"t-a\">x</span>=<span class=\"t-s\">&quot;month&quot;</span> <span class=\"t-a\">y</span>=<span class=\"t-s\">&quot;compute storage network&quot;</span> stacked <span class=\"t-a\">height</span>={<span class=\"t-n\">220</span>} <span class=\"t-t\">/&gt;</span>\n\n<span class=\"t-t\">&lt;Table</span>\n  <span class=\"t-a\">data</span>=<span class=\"t-s\">&quot;services.json&quot;</span>\n  <span class=\"t-a\">columns</span>={[<span class=\"t-s\">&quot;service&quot;</span>, <span class=\"t-s\">&quot;team&quot;</span>, { key: <span class=\"t-s\">&quot;cost&quot;</span>, format: <span class=\"t-s\">&quot;currency&quot;</span> }, { key: <span class=\"t-s\">&quot;change&quot;</span>, format: <span class=\"t-s\">&quot;percent&quot;</span> }]}\n  <span class=\"t-a\">sort</span>=<span class=\"t-s\">&quot;-cost&quot;</span>\n  search\n<span class=\"t-t\">/&gt;</span>\n\n<span class=\"t-t\">&lt;Callout</span> <span class=\"t-a\">tone</span>=<span class=\"t-s\">&quot;warning&quot;</span> <span class=\"t-a\">title</span>=<span class=\"t-s\">&quot;Storage keeps growing&quot;</span><span class=\"t-t\">&gt;</span>\n  Logs are kept for <span class=\"t-n\">90</span> days. Keeping <span class=\"t-n\">30</span> would save about $900 a month.\n<span class=\"t-t\">&lt;/Callout</span><span class=\"t-t\">&gt;</span>\n\n<span class=\"t-t\">&lt;Notes</span> <span class=\"t-a\">id</span>=<span class=\"t-s\">&quot;followups&quot;</span> <span class=\"t-a\">placeholder</span>=<span class=\"t-s\">&quot;Follow-ups for next month…&quot;</span> <span class=\"t-a\">rows</span>={<span class=\"t-n\">3</span>} <span class=\"t-t\">/&gt;</span>\n",
+  "data": [
+   "data/monthly.json",
+   "data/services.json"
+  ],
+  "seed": [
+   {
+    "by": "tom.okafor@example.com",
+    "key": "notes/followups",
+    "value": {
+     "text": "Cut log retention to 30 days (Tom)\nTag the search cluster by team",
+     "by": "tom.okafor@example.com",
+     "at": 0
+    },
+    "minutesAgo": 1500
+   }
+  ]
+ }
+]

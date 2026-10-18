@@ -1,6 +1,7 @@
 // Stateless MCP server (Streamable HTTP, JSON responses only). An agent acts as
 // the workspace member whose OAuth grant or agent token it presented, with that
 // person's access to each artifact.
+import { PRODUCT } from "../shared/brand.ts";
 import type { HubApi, SourceInfo, Workspace } from "./hub.ts";
 import type { Thread } from "../shared/protocol.ts";
 import { isValidPrincipal, sharePrincipal } from "./principal.ts";
@@ -14,7 +15,7 @@ import guideIntro from "../../docs/guide.md";
 import catalog from "../kit/CATALOG.md";
 
 export const SERVER_NAME = "artifacts";
-const SERVER_TITLE = "Artifacts";
+const SERVER_TITLE = PRODUCT;
 const SERVER_VERSION = "0.1.0";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -183,18 +184,18 @@ async function checkAndRecord(ctx: Ctx, id: string, force = false): Promise<{ ch
 export const TOOLS: Tool[] = [
   {
     name: "artifact_guide",
-    title: "Artifacts: authoring guide",
+    title: "artifacts.boo: authoring guide",
     description:
-      "Artifacts: returns the authoring guide and the component and hook reference. Read it once before writing your first artifact.",
+      "artifacts.boo: returns the authoring guide and the component and hook reference. Read it once before writing your first artifact.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true },
     run: async () => ({ text: `${guideIntro}\n\n${catalog}` }),
   },
   {
     name: "artifact_list",
-    title: "Artifacts: list",
+    title: "artifacts.boo: list",
     description:
-      "Artifacts: list the artifacts the user this agent acts for can see in this workspace (theirs, ones shared with them or the workspace, and for an admin every artifact), newest first, with their role and owner. Optional text filter. Archived artifacts are left out unless archived is true.",
+      "artifacts.boo: list the artifacts the user this agent acts for can see in this workspace (theirs, ones shared with them or the workspace, and for an admin every artifact), newest first, with their role and owner. Optional text filter. Archived artifacts are left out unless archived is true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -237,9 +238,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_create",
-    title: "Artifacts: create",
+    title: "artifacts.boo: create",
     description:
-      "Artifacts: create a new artifact from files and return its URL. Validates and compiles everything; nothing is saved if any file fails. Optionally share it in the same call. To change an existing artifact use artifact_edit instead.",
+      "artifacts.boo: create a new artifact from files and return its URL. Validates and compiles everything; nothing is saved if any file fails. Optionally share it in the same call. To change an existing artifact use artifact_edit instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -276,9 +277,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_read",
-    title: "Artifacts: read",
+    title: "artifacts.boo: read",
     description:
-      "Artifacts: without path, returns the artifact's version, file list with sizes, sharing and URL. With path, returns that file's text (optionally a 1-based line range). Read only what you need to edit.",
+      "artifacts.boo: without path, returns the artifact's version, file list with sizes, sharing and URL. With path, returns that file's text (optionally a 1-based line range). Read only what you need to edit.",
     inputSchema: {
       type: "object",
       properties: {
@@ -325,9 +326,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_grep",
-    title: "Artifacts: grep",
+    title: "artifacts.boo: grep",
     description:
-      "Artifacts: search an artifact's files (regex, case-insensitive) and return matching lines with line numbers. Use it to find exact text for artifact_edit without reading whole files.",
+      "artifacts.boo: search an artifact's files (regex, case-insensitive) and return matching lines with line numbers. Use it to find exact text for artifact_edit without reading whole files.",
     inputSchema: {
       type: "object",
       properties: { id, pattern: { type: "string" }, path: { type: "string", description: "Limit to one file." } },
@@ -346,9 +347,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_edit",
-    title: "Artifacts: edit file",
+    title: "artifacts.boo: edit file",
     description:
-      "Artifacts: change one file with exact find-and-replace edits, applied in order. Each oldText must match exactly once (whitespace included) unless replaceAll is set. All-or-nothing: if an edit misses or the result fails to compile, nothing is saved and the errors are returned. Prefer this for small code or text changes.",
+      "artifacts.boo: change one file with exact find-and-replace edits, applied in order. Each oldText must match exactly once (whitespace included) unless replaceAll is set. All-or-nothing: if an edit misses or the result fails to compile, nothing is saved and the errors are returned. Prefer this for small code or text changes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -379,9 +380,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_patch_data",
-    title: "Artifacts: patch data file",
+    title: "artifacts.boo: patch data file",
     description:
-      'Artifacts: change a data/*.json file with RFC 6902 JSON Patch operations, e.g. [{"op":"replace","path":"/2/price","value":"$4"}, {"op":"add","path":"/-","value":{...}}]. Cheapest way to update rows or values. All-or-nothing.',
+      'artifacts.boo: change a data/*.json file with RFC 6902 JSON Patch operations, e.g. [{"op":"replace","path":"/2/price","value":"$4"}, {"op":"add","path":"/-","value":{...}}]. Cheapest way to update rows or values. All-or-nothing.',
     inputSchema: {
       type: "object",
       properties: {
@@ -416,9 +417,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_write_files",
-    title: "Artifacts: write files",
+    title: "artifacts.boo: write files",
     description:
-      "Artifacts: add, fully replace, or delete (null) whole files in one atomic change. Use for new files or rewrites; use artifact_edit for small changes to existing files.",
+      "artifacts.boo: add, fully replace, or delete (null) whole files in one atomic change. Use for new files or rewrites; use artifact_edit for small changes to existing files.",
     inputSchema: {
       type: "object",
       properties: {
@@ -444,9 +445,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_update",
-    title: "Artifacts: update details or archive",
+    title: "artifacts.boo: update details or archive",
     description:
-      "Artifacts: change an artifact's title or description, archive or unarchive it, or turn rich link previews on or off. Archiving hides an artifact the user is done with from everyone's list; it stays readable at its link with its history and can be unarchived. Prefer archiving over artifact_delete unless the user explicitly asks to delete. With preview on, links pasted into Slack, iMessage and similar apps show the title, description and a screenshot; off (the default for private artifacts), they show a generic card.",
+      "artifacts.boo: change an artifact's title or description, archive or unarchive it, or turn rich link previews on or off. Archiving hides an artifact the user is done with from everyone's list; it stays readable at its link with its history and can be unarchived. Prefer archiving over artifact_delete unless the user explicitly asks to delete. With preview on, links pasted into Slack, iMessage and similar apps show the title, description and a screenshot; off (the default for private artifacts), they show a generic card.",
     inputSchema: {
       type: "object",
       properties: {
@@ -476,9 +477,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_share",
-    title: "Artifacts: share",
+    title: "artifacts.boo: share",
     description:
-      "Artifacts: share an artifact with people by email, with everyone at a domain (\"@example.com\") or with every workspace member (\"workspace\"), change roles, remove entries, or toggle a public read-only link. A person's own entry overrides their domain's role. Removal takes effect immediately. Each newly added person is emailed (notify: false to skip): someone new gets their own sign-in link, someone who has signed in before gets the page. Sign-in links only ever go to their person, never back to you. Returns the current sharing and who was emailed.",
+      "artifacts.boo: share an artifact with people by email, with everyone at a domain (\"@example.com\") or with every workspace member (\"workspace\"), change roles, remove entries, or toggle a public read-only link. A person's own entry overrides their domain's role. Removal takes effect immediately. Each newly added person is emailed (notify: false to skip): someone new gets their own sign-in link, someone who has signed in before gets the page. Sign-in links only ever go to their person, never back to you. Returns the current sharing and who was emailed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -523,9 +524,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_link",
-    title: "Artifacts: sign-in link",
+    title: "artifacts.boo: sign-in link",
     description:
-      "Artifacts: make a presigned link for the user this agent acts for that opens one artifact already signed in, with no login step: use it when handing the user a link. Other people get their own by email when you share with them (artifact_share). Valid 7 days by default (max 30). Anyone holding it acts as the user, so give it only to them.",
+      "artifacts.boo: make a presigned link for the user this agent acts for that opens one artifact already signed in, with no login step: use it when handing the user a link. Other people get their own by email when you share with them (artifact_share). Valid 7 days by default (max 30). Anyone holding it acts as the user, so give it only to them.",
     inputSchema: {
       type: "object",
       properties: {
@@ -553,9 +554,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_asset",
-    title: "Artifacts: images and files",
+    title: "artifacts.boo: images and files",
     description:
-      'Artifacts: upload (base64) or delete an image or other file used by an artifact, e.g. path "assets/logo.png". Reference it in MDX as ![alt](assets/logo.png) or in code with useAsset("assets/logo.png"). External image URLs are blocked, so upload images instead. Max 1.5 MB each, 20 MB per artifact.',
+      'artifacts.boo: upload (base64) or delete an image or other file used by an artifact, e.g. path "assets/logo.png". Reference it in MDX as ![alt](assets/logo.png) or in code with useAsset("assets/logo.png"). External image URLs are blocked, so upload images instead. Max 1.5 MB each, 20 MB per artifact.',
     inputSchema: {
       type: "object",
       properties: {
@@ -594,9 +595,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_source",
-    title: "Artifacts: live data source",
+    title: "artifacts.boo: live data source",
     description:
-      'Artifacts: keep a data/*.json file updated from a public HTTPS JSON URL on a schedule (every 15 min to 7 days). Optional pick extracts a dot path such as "data.items". The URL\'s host must be approved by a workspace admin (in the artifact\'s Manage panel or workspace settings) before anything is fetched; if it is not, tell the user to ask an admin to approve it. Also lists, removes or refreshes sources.',
+      'artifacts.boo: keep a data/*.json file updated from a public HTTPS JSON URL on a schedule (every 15 min to 7 days). Optional pick extracts a dot path such as "data.items". The URL\'s host must be approved by a workspace admin (in the artifact\'s Manage panel or workspace settings) before anything is fetched; if it is not, tell the user to ask an admin to approve it. Also lists, removes or refreshes sources.',
     inputSchema: {
       type: "object",
       properties: {
@@ -643,9 +644,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_state",
-    title: "Artifacts: shared state",
+    title: "artifacts.boo: shared state",
     description:
-      "Artifacts: read an artifact's live shared state (poll votes, checklist items, comments, useShared keys), and optionally set keys (null deletes). Viewers see changes immediately.",
+      "artifacts.boo: read an artifact's live shared state (poll votes, checklist items, comments, useShared keys), and optionally set keys (null deletes). Viewers see changes immediately.",
     inputSchema: {
       type: "object",
       properties: {
@@ -673,9 +674,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_activity",
-    title: "Artifacts: activity",
+    title: "artifacts.boo: activity",
     description:
-      "Artifacts: what people did since you last looked: new comment threads and replies (with the quoted text and block they point at), resolves, votes, checklist ticks, shared-state edits and new versions, oldest first. Pass the returned cursor as `since` next time to get only newer events. Omit `id` for every artifact. Use this to pick up feedback, then change the artifact (pass `resolves` with the thread ids you addressed) or reply with artifact_comment.",
+      "artifacts.boo: what people did since you last looked: new comment threads and replies (with the quoted text and block they point at), resolves, votes, checklist ticks, shared-state edits and new versions, oldest first. Pass the returned cursor as `since` next time to get only newer events. Omit `id` for every artifact. Use this to pick up feedback, then change the artifact (pass `resolves` with the thread ids you addressed) or reply with artifact_comment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -715,9 +716,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_threads",
-    title: "Artifacts: comment threads",
+    title: "artifacts.boo: comment threads",
     description:
-      "Artifacts: list an artifact's comment threads with every comment, what each points at (block id, quoted text, table row) and whether it is open, resolved or addressed. Open threads only unless includeResolved.",
+      "artifacts.boo: list an artifact's comment threads with every comment, what each points at (block id, quoted text, table row) and whether it is open, resolved or addressed. Open threads only unless includeResolved.",
     inputSchema: {
       type: "object",
       properties: { id, includeResolved: { type: "boolean" } },
@@ -737,9 +738,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_comment",
-    title: "Artifacts: comment",
+    title: "artifacts.boo: comment",
     description:
-      'Artifacts: reply to a comment thread, resolve or reopen it, or start a new thread (optionally anchored to a block id from artifact_threads, or to an exact quote). Your comments show as "Agent". Prefer fixing the artifact and passing `resolves` on the edit; reply when you need to answer a question or explain why you did not change something.',
+      'artifacts.boo: reply to a comment thread, resolve or reopen it, or start a new thread (optionally anchored to a block id from artifact_threads, or to an exact quote). Your comments show as "Agent". Prefer fixing the artifact and passing `resolves` on the edit; reply when you need to answer a question or explain why you did not change something.',
     inputSchema: {
       type: "object",
       properties: {
@@ -789,9 +790,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_errors",
-    title: "Artifacts: runtime errors",
+    title: "artifacts.boo: runtime errors",
     description:
-      "Artifacts: recent runtime errors reported by viewers' browsers (newest first). Check after a change if someone reports a problem.",
+      "artifacts.boo: recent runtime errors reported by viewers' browsers (newest first). Check after a change if someone reports a problem.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { readOnlyHint: true },
     need: "view",
@@ -805,8 +806,8 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_history",
-    title: "Artifacts: history",
-    description: "Artifacts: list stored versions (newest first, last 50) with what changed.",
+    title: "artifacts.boo: history",
+    description: "artifacts.boo: list stored versions (newest first, last 50) with what changed.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { readOnlyHint: true },
     need: "view",
@@ -817,8 +818,8 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_revert",
-    title: "Artifacts: revert",
-    description: "Artifacts: restore the files of an earlier version as a new version. Shared state is not changed.",
+    title: "artifacts.boo: revert",
+    description: "artifacts.boo: restore the files of an earlier version as a new version. Shared state is not changed.",
     inputSchema: {
       type: "object",
       properties: { id, version: { type: "integer", minimum: 1 } },
@@ -830,9 +831,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_check",
-    title: "Artifacts: render check",
+    title: "artifacts.boo: render check",
     description:
-      "Artifacts: render the current version in a headless browser, report runtime errors, and return a screenshot of the first screen. Writes already run the check; use this to see the page, re-check, or collect a queued result.",
+      "artifacts.boo: render the current version in a headless browser, report runtime errors, and return a screenshot of the first screen. Writes already run the check; use this to see the page, re-check, or collect a queued result.",
     inputSchema: {
       type: "object",
       properties: { id, screenshot: { type: "boolean", description: "Include the screenshot (default true)." } },
@@ -856,9 +857,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_delete",
-    title: "Artifacts: delete",
+    title: "artifacts.boo: delete",
     description:
-      "Artifacts: permanently delete an artifact, its history and its shared state. Only when the user explicitly asks to delete; to tidy up finished work, archive it with artifact_update instead.",
+      "artifacts.boo: permanently delete an artifact, its history and its shared state. Only when the user explicitly asks to delete; to tidy up finished work, archive it with artifact_update instead.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { destructiveHint: true },
     need: "owner",

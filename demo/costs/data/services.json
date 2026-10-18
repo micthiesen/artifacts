@@ -1,0 +1,10 @@
+[
+  { "service": "CI runners", "team": "Platform", "cost": 4210, "change": -0.41 },
+  { "service": "API cluster", "team": "Core", "cost": 3980, "change": -0.04 },
+  { "service": "Log storage", "team": "Platform", "cost": 2650, "change": 0.11 },
+  { "service": "Postgres", "team": "Core", "cost": 2120, "change": 0.02 },
+  { "service": "CDN egress", "team": "Web", "cost": 1890, "change": -0.03 },
+  { "service": "Search", "team": "Growth", "cost": 1460, "change": 0.05 },
+  { "service": "Backups", "team": "Platform", "cost": 1080, "change": 0.08 },
+  { "service": "Staging", "team": "Core", "cost": 810, "change": -0.18 }
+]

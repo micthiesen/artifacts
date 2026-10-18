@@ -304,7 +304,7 @@ async function sendWebhook(config: Record<string, unknown>, msg: NotifyMessage):
   const secret = str(config.secret);
   if (!url) return { ok: false, error: "Invalid webhook channel" };
   const u = new URL(url);
-  const headers: Record<string, string> = { "Content-Type": "application/json", "User-Agent": "Artifacts-Notify/1" };
+  const headers: Record<string, string> = { "Content-Type": "application/json", "User-Agent": "artifacts.boo-notify/1" };
   let body: string;
   if (isDiscordWebhook(u)) {
     body = JSON.stringify({

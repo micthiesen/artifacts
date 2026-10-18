@@ -4,22 +4,26 @@ import type { Build } from "./compile.ts";
 import type { ArtifactMeta } from "./hub.ts";
 import type { WorkspaceRole } from "./directory.ts";
 import type { FrameBoot, Role, ShellBoot } from "../shared/protocol.ts";
+import { PRODUCT } from "../shared/brand.ts";
+import demos from "./demos.json";
 
 const KIT = "/kit/v1";
 declare const __ASSET_VERSION__: string;
 const ASSET_VERSION = typeof __ASSET_VERSION__ === "string" ? __ASSET_VERSION__ : "dev";
-const kit = (file: string) => `${KIT}/${file}?v=${ASSET_VERSION}`;
+const kit = (file: string, version = ASSET_VERSION) => `${KIT}/${file}?v=${version}`;
 const asset = (path: string) => `${path}?v=${ASSET_VERSION}`;
 
-export const KIT_IMPORTS: Record<string, string> = {
-  react: kit("react.js"),
-  "react/jsx-runtime": kit("jsx-runtime.js"),
-  "react-dom/client": kit("react-dom-client.js"),
-  "@a/ui": kit("ui.js"),
-  "@a/hooks": kit("hooks.js"),
-  "lucide-react": kit("lucide.js"),
-  recharts: kit("recharts.js"),
-};
+function kitImports(version: string): Record<string, string> {
+  return {
+    react: kit("react.js", version),
+    "react/jsx-runtime": kit("jsx-runtime.js", version),
+    "react-dom/client": kit("react-dom-client.js", version),
+    "@a/ui": kit("ui.js", version),
+    "@a/hooks": kit("hooks.js", version),
+    "lucide-react": kit("lucide.js", version),
+    recharts: kit("recharts.js", version),
+  };
+}
 
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -41,7 +45,7 @@ const PAGE_CSP =
 const DARK_HEAD = `<meta name="color-scheme" content="dark">
 <style>html{background:oklch(0.16 0.017 275)}</style>`;
 
-function page(title: string, body: string, init: ResponseInit = {}): Response {
+function page(title: string, body: string, init: ResponseInit = {}, head = ""): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -51,13 +55,13 @@ ${DARK_HEAD}
 <meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
 <meta name="theme-color" content="#0b0d15">
-<meta name="apple-mobile-web-app-title" content="Artifacts">
+<meta name="apple-mobile-web-app-title" content="${PRODUCT}">
 <link rel="icon" href="${asset("/static/icons/icon.svg")}" type="image/svg+xml">
 <link rel="icon" href="${asset("/static/icons/favicon-32.png")}" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="${asset("/static/icons/apple-touch-icon.png")}">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="${asset("/static/shell.css")}">
-</head>
+${head}</head>
 <body>${body}</body>
 </html>`;
   const headers = new Headers(init.headers);
@@ -69,11 +73,21 @@ ${DARK_HEAD}
   return new Response(html, { ...init, headers });
 }
 
-/** Whose pages these are: the apex ("Artifacts") or a workspace (its name). */
+export { PRODUCT };
+
+/** Whose pages these are: the apex (PRODUCT) or a workspace (its name). */
 export type Brand = { name: string; home: string; apex: string };
 
+/** The ghost logo, drawn by CSS (a gradient through an SVG mask). */
+const GHOST = `<span class="ghost" aria-hidden="true"></span>`;
+
+/** The brand's name as a title: the product's own name gets its wordmark. */
+function brandName(brand: Brand): string {
+  return brand.name === PRODUCT ? `artifacts<span class="wordmark-tld">.boo</span>` : escapeHtml(brand.name);
+}
+
 function topBar(brand: Brand, right = ""): string {
-  return `<header class="bar"><span class="lead"><a class="mark" href="${escapeHtml(brand.home)}" aria-label="${escapeHtml(brand.name)}">◆</a><a class="title" href="${escapeHtml(brand.home)}">${escapeHtml(brand.name)}</a></span>${right}</header>`;
+  return `<header class="bar"><span class="lead"><a class="mark" href="${escapeHtml(brand.home)}" aria-label="${escapeHtml(brand.name)}">${GHOST}</a><a class="title" href="${escapeHtml(brand.home)}">${brandName(brand)}</a></span>${right}</header>`;
 }
 
 /** The avatar slot account.js mounts the menu into. `context` and the flags decide which links it offers. */
@@ -193,7 +207,7 @@ function activityBadge(a: { unseen?: boolean; unread?: number }): string {
  */
 export function previewPage(p: { url: string; origin: string; title?: string; description?: string; image?: string }): Response {
   const title = p.title ?? "Private artifact";
-  const description = p.title ? p.description || "Artifacts" : "Artifacts · sign in to view";
+  const description = p.title ? p.description || PRODUCT : `${PRODUCT} · sign in to view`;
   const image = p.image ?? `${p.origin}${asset("/static/icons/og.png")}`;
   const [w, h] = p.image ? [1024, 768] : [1200, 630];
   const html = `<!doctype html>
@@ -203,7 +217,7 @@ export function previewPage(p: { url: string; origin: string; title?: string; de
 <meta name="robots" content="noindex, nofollow">
 <meta name="description" content="${escapeHtml(description)}">
 <meta name="theme-color" content="#7c6cff">
-<meta property="og:site_name" content="Artifacts">
+<meta property="og:site_name" content="${PRODUCT}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${escapeHtml(p.url)}">
 <meta property="og:title" content="${escapeHtml(title)}">
@@ -223,51 +237,67 @@ export function previewPage(p: { url: string; origin: string; title?: string; de
   });
 }
 
-const REPO = "https://github.com/micthiesen/artifacts";
+const REPO = "https://github.com/micthiesen/artifacts.boo";
 
-const SAMPLE = `---
-title: Launch plan
----
-<Summary>Ship on the 14th unless the load test fails.</Summary>
+type Demo = { slug: string; label: string; title: string; blurb: string; entry: string; html: string; data: string[]; seed: unknown[]; link?: string };
+const DEMOS = demos as Demo[];
 
-\`\`\`mermaid
-flowchart LR
-  Freeze --> LoadTest --> Ship
-\`\`\`
+/** The splash's examples: source on one side, the real artifact running on the other. */
+function showcase(host: string): string {
+  const tabs = DEMOS.map(
+    (d, i) =>
+      `<button type="button" role="tab" id="tab-${d.slug}" aria-controls="demo-${d.slug}" aria-selected="${i === 0}"${i ? ' tabindex="-1"' : ""}>${escapeHtml(d.label)}<span>${d.entry.endsWith(".tsx") ? "React" : "MDX"}</span></button>`,
+  ).join("");
+  const panels = DEMOS.map(
+    (d, i) => `<div class="showcase-panel" role="tabpanel" id="demo-${d.slug}" aria-labelledby="tab-${d.slug}"${i ? " hidden" : ""}>
+<div class="showcase-window">
+<div class="splash-code showcase-code"><div class="splash-code-head"><span>${escapeHtml(d.entry)}</span><span class="muted">${d.data.map(escapeHtml).join(" · ") || "one file"}</span></div><pre tabindex="0"><code>${d.html}</code></pre></div>
+<div class="showcase-render"><div class="showcase-url"><span class="showcase-live" aria-hidden="true"></span>acme.${escapeHtml(host)}/a/${escapeHtml(d.slug)}</div><iframe sandbox="allow-scripts allow-forms allow-modals allow-downloads" title="${escapeHtml(d.title)}, rendered" data-src="${asset(`/demo/${d.slug}`)}" data-demo="${d.slug}"></iframe></div>
+</div>
+<p class="showcase-blurb muted">${escapeHtml(d.blurb)}${d.link ? ` <a href="${escapeHtml(d.link)}">Open it as a public page</a>.` : ""}</p>
+</div>`,
+  ).join("\n");
+  const seeds = Object.fromEntries(DEMOS.map((d) => [d.slug, d.seed]));
+  return `<section class="showcase" id="examples" aria-labelledby="examples-title">
+<h2 id="examples-title">What the agent writes, and what people open</h2>
+<p class="muted showcase-lede">Three real artifacts, compiled and rendered by the same code as any other. Vote, tick and type in them: nothing leaves your browser.</p>
+<div class="showcase-bar"><div class="showcase-tabs" role="tablist" aria-label="Examples">${tabs}</div>
+<div class="showcase-toggle" role="group" aria-label="Show"><button type="button" data-view="render" aria-pressed="true">Rendered</button><button type="button" data-view="code" aria-pressed="false">Source</button></div></div>
+${panels}
+<noscript><p class="muted">Turn on JavaScript to see the examples running.</p></noscript>
+</section>
+<script type="application/json" id="demo-seed">${scriptJson(seeds)}</script>
+<script type="module" src="${asset("/static/splash.js")}"></script>`;
+}
 
-<Chart data="signups.json" x="week" y="count" />
-
-<Poll id="date" options={["Oct 14", "Oct 21"]} />
-<Checklist id="launch" items={["Docs", "Status page", "Email"]} />`;
+/** What this is, in one sentence: the splash page and link previews of the apex. */
+export const DESCRIPTION = "Collaborative documents and little apps your agent can build, inspect and maintain.";
 
 /** The apex for someone who isn't signed in: what this is, for developers, and how to run it. */
 export function splashPage(brand: Brand, notice?: string): Response {
   const card = (title: string, body: string, points: string[]) =>
     `<div class="splash-card"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(body)}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
+  const host = brand.apex.replace(/^https?:\/\//, "") || PRODUCT;
   return page(
-    "Artifacts",
+    `${PRODUCT}: live pages your agent builds`,
     `${topBar(brand, `<a class="bar-link" href="${REPO}">GitHub</a><a class="button small secondary" href="/login">Sign in</a>`)}<main class="splash">
 <section class="splash-hero">
 ${notice ? `<p class="splash-notice" role="status">${escapeHtml(notice)}</p>` : ""}
-<p class="splash-kicker">Artifacts · source on GitHub · runs on Cloudflare</p>
-<h1>Collaborative documents and little apps your agent can build, inspect and maintain.</h1>
-<p class="splash-lede muted">Your agent writes MDX or React over MCP. People open a link, sign in with an emailed code, and get a live page: shared state, per-person state, presence and comments built in, with no backend to wire up.</p>
-<p class="splash-actions"><a class="button" href="${REPO}">View the source</a><a class="button secondary" href="#self-host">Self-host it</a></p>
+<p class="splash-kicker">Open source · runs on Cloudflare</p>
+<h1>${escapeHtml(DESCRIPTION)}</h1>
+<p class="splash-lede muted">Your agent writes MDX or React over MCP. People open a link, sign in with an emailed code, and get a live page: shared state, per-person state, presence and comments built in, with no backend to wire up. Everyone it isn't shared with never sees it.</p>
+<p class="splash-actions"><a class="button" href="#examples">See examples</a><a class="button secondary" href="${REPO}">View the source</a></p>
+<span class="splash-ghost" aria-hidden="true"></span>
 </section>
 
-<section class="splash-split" aria-label="An artifact">
-<div class="splash-code"><div class="splash-code-head"><span>index.mdx</span><span class="muted">what the agent writes</span></div><pre><code>${escapeHtml(SAMPLE)}</code></pre></div>
-<div class="splash-list">
-<h2>Live pages, not static HTML</h2>
-<ul>
-<li><strong>Shared and per-person state.</strong> <code>useShared</code>, <code>useSharedMap</code> and <code>useLocal</code> sync over a WebSocket; <code>useViewer</code> and <code>usePresence</code> know who's looking.</li>
-<li><strong>Components that do things.</strong> Polls, checklists, notes and comment threads work out of the box, alongside tables, charts and Mermaid diagrams.</li>
-<li><strong>Live data.</strong> A data file can refresh from a JSON URL on a schedule, once a person approves the host.</li>
-</ul>
-</div>
-</section>
+${showcase(host)}
 
 <section class="splash-grid" aria-label="What's different">
+${card("Live pages, not static HTML", "State, people and data are part of the page, not something to wire up.", [
+  "<code>useShared</code>, <code>useSharedMap</code> and <code>useLocal</code> sync over a WebSocket; <code>useViewer</code> and <code>usePresence</code> know who's looking",
+  "Polls, checklists, notes and comments work out of the box, alongside tables, charts and Mermaid diagrams",
+  "A data file can refresh from a JSON URL on a schedule, once a person approves the host",
+])}
 ${card("An edit-and-check loop for agents", "Agents change artifacts the way they change code, and find out when they broke something.", [
   "Ranged reads, grep, exact find-and-replace edits and JSON Patch, with version guards against stale writes",
   "Imports, components and syntax validated before anything is saved",
@@ -296,13 +326,15 @@ ${card("Isolated by construction", "Tenancy and untrusted code are handled by th
 </ul>
 </div>
 <div class="splash-code"><div class="splash-code-head"><span>terminal</span></div><pre><code>git clone ${REPO}
-cd artifacts &amp;&amp; bun install
+cd artifacts.boo &amp;&amp; bun install
 # set DOMAIN, OPERATOR_EMAILS, OPERATOR_TOKEN in .env
 bun run deploy</code></pre></div>
 </section>
 
 <footer class="splash-foot muted"><a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · <a href="/login">Sign in</a></footer>
 </main>`,
+    {},
+    `<meta name="description" content="${escapeHtml(DESCRIPTION)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}/">\n`,
   );
 }
 
@@ -331,7 +363,7 @@ export function loginPage(state: LoginState, brand: Brand, status = 200): Respon
 <div class="row"><input class="input code-input" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{8,9}" maxlength="9" required autofocus><button class="button" type="submit">Sign in</button></div>
 </form>
 <form method="post" action="/login" class="resend">${hidden}<input type="hidden" name="email" value="${escapeHtml(state.email ?? "")}"><button class="link" type="submit">Send a new code</button> <a href="/login?to=${encodeURIComponent(state.to)}&n=${encodeURIComponent(state.n)}&return=${encodeURIComponent(state.return)}">Use a different email</a></form>`;
-  return page("Sign in · Artifacts", `${topBar(brand)}<main class="content"><section class="empty">${body}<p class="muted fine">By signing in you agree to the <a href="/terms">terms</a>; see how we handle your data in <a href="/privacy">Privacy</a>.</p></section></main>`, { status });
+  return page(`Sign in · ${PRODUCT}`, `${topBar(brand)}<main class="content"><section class="empty">${body}<p class="muted fine">By signing in you agree to the <a href="/terms">terms</a>; see how we handle your data in <a href="/privacy">Privacy</a>.</p></section></main>`, { status });
 }
 
 /** The apex for someone signed in: their workspaces. */
@@ -351,7 +383,7 @@ export function workspacesPage(
     ? `<h1 class="page-title">Your workspaces</h1><ul class="list">${rows}</ul>`
     : `<section class="empty"><h1>No workspaces yet</h1><p class="muted">${escapeHtml(email)} isn't a member of a workspace. Artifacts shared with you open from the links you were sent.</p></section>`;
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
-  return page("Artifacts", `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>${POLICY_FOOTER}`);
+  return page(PRODUCT, `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>${POLICY_FOOTER}`);
 }
 
 /**
@@ -360,7 +392,7 @@ export function workspacesPage(
  */
 export function profilePage(email: string, context: "account" | "workspace", brand: Brand, webPush: boolean, pushover: boolean): Response {
   return page(
-    context === "account" ? "Account · Artifacts" : `Notifications · ${brand.name}`,
+    context === "account" ? `Account · ${PRODUCT}` : `Notifications · ${brand.name}`,
     `${topBar(brand, avatar(email, brand, context))}<main class="content profile" id="profile" data-context="${context}" data-webpush="${webPush ? "1" : ""}" data-pushover="${pushover ? "1" : ""}"><h1 class="page-title">${context === "account" ? "Account" : `Notifications in ${escapeHtml(brand.name)}`}</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/me.js")}"></script>`,
   );
 }
@@ -376,7 +408,7 @@ export function settingsPage(email: string, brand: Brand): Response {
 /** Operator console: workspaces, usage, backups. The client is admin.js. */
 export function adminPage(email: string, brand: Brand): Response {
   return page(
-    "Operator · Artifacts",
+    `Operator · ${PRODUCT}`,
     `${topBar(brand, avatar(email, brand, "account", { operator: true }))}<main class="content profile wide" id="admin"><h1 class="page-title">Workspaces</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/admin.js")}"></script>`,
   );
 }
@@ -443,7 +475,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
     privacy: {
       title: "Privacy",
       body: `
-<p>Artifacts at ${escapeHtml(brand.apex.replace(/^https:\/\//, ""))} is run by Michael Thiesen ("we"). This page says what we store, why, who else handles it, and how long we keep it. Questions or requests: ${mail}.</p>
+<p>${escapeHtml(brand.apex.replace(/^https:\/\//, ""))} is run by Michael Thiesen ("we"). This page says what we store, why, who else handles it, and how long we keep it. Questions or requests: ${mail}.</p>
 <h2>What we store</h2>
 <ul>
 <li><strong>Your email address</strong>, to sign you in with one-time codes, to know who an artifact is shared with, and to email you invitations, shares and notifications (on by default; you can turn notification emails off).</li>
@@ -484,9 +516,9 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
     terms: {
       title: "Terms",
       body: `
-<p>These terms cover using Artifacts at ${escapeHtml(brand.apex.replace(/^https:\/\//, ""))}, run by Michael Thiesen. Using the service means you accept them. Questions: ${mail}.</p>
+<p>These terms cover using ${escapeHtml(brand.apex.replace(/^https:\/\//, ""))}, run by Michael Thiesen. Using the service means you accept them. Questions: ${mail}.</p>
 <h2>Your content</h2>
-<p>You own what you and your agents put in Artifacts. You let us store it, render it and show it to the people you share it with, only to run the service. You're responsible for what your agents create and share in your name, and for having the right to share it.</p>
+<p>You own what you and your agents put in ${PRODUCT}. You let us store it, render it and show it to the people you share it with, only to run the service. You're responsible for what your agents create and share in your name, and for having the right to share it.</p>
 <h2>Acceptable use</h2>
 <ul>
 <li>No unlawful content, malware, phishing, or content that infringes others' rights.</li>
@@ -497,14 +529,14 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <h2>Workspaces and accounts</h2>
 <p>Workspace admins decide who belongs to a workspace and can manage everything in it. We may suspend or delete a workspace or content that breaks these terms, or to protect the service and its users, telling the admins where we can.</p>
 <h2>The service</h2>
-<p>Artifacts is provided as is, without warranties or a guaranteed level of availability. We back data up nightly but can't promise nothing is ever lost; keep copies of anything critical. To the extent the law allows, we aren't liable for indirect or consequential losses, and our total liability is limited to what you paid us in the last twelve months.</p>
+<p>${PRODUCT} is provided as is, without warranties or a guaranteed level of availability. We back data up nightly but can't promise nothing is ever lost; keep copies of anything critical. To the extent the law allows, we aren't liable for indirect or consequential losses, and our total liability is limited to what you paid us in the last twelve months.</p>
 <h2>Changes</h2>
 <p>We may change these terms; continuing to use the service after a change means you accept it. The date below shows the latest version.</p>`,
     },
     security: {
       title: "Security and data",
       body: `
-<p>How Artifacts keeps workspaces and readers safe, for anyone deciding whether to use it at work. The design is public in the <a href="https://github.com/micthiesen/artifacts">source on GitHub</a>. Report a vulnerability to ${mail}; please give us a chance to fix it before publishing.</p>
+<p>How ${PRODUCT} keeps workspaces and readers safe, for anyone deciding whether to use it at work. The design is public in the <a href="${REPO}">source on GitHub</a>. Report a vulnerability to ${mail}; please give us a chance to fix it before publishing.</p>
 <h2>Isolation</h2>
 <ul>
 <li>Each workspace is its own Cloudflare Durable Object with its own SQLite database, served from its own subdomain, so browser cookies and storage are separated by origin too.</li>
@@ -534,7 +566,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
     .map((k) => (k === kind ? `<strong>${sections[k].title}</strong>` : `<a href="/${k}">${sections[k].title}</a>`))
     .join(" · ");
   return page(
-    `${title} · Artifacts`,
+    `${title} · ${PRODUCT}`,
     `${topBar(brand)}<main class="content policy"><p class="muted policy-nav">${nav}</p><h1>${title}</h1>${body}<p class="muted policy-date">Last updated ${POLICY_UPDATED}.</p></main>`,
   );
 }
@@ -552,8 +584,8 @@ export function linkSwitchPage(url: URL, current: string, linked: string, brand:
 }
 
 export function messagePage(title: string, message: string, status: number, action?: { href: string; label: string }, brand?: Brand): Response {
-  const b = brand ?? { name: "Artifacts", home: "/", apex: "" };
-  const act = action ?? { href: "/", label: brand && brand.name !== "Artifacts" ? "All artifacts" : "Home" };
+  const b = brand ?? { name: PRODUCT, home: "/", apex: "" };
+  const act = action ?? { href: "/", label: brand && brand.name !== PRODUCT ? "All artifacts" : "Home" };
   return page(
     title,
     `${topBar(b)}<main class="content"><section class="empty"><h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p><p><a class="button" href="${escapeHtml(act.href)}">${escapeHtml(act.label)}</a></p></section></main>`,
@@ -565,7 +597,7 @@ export function shellPage(boot: ShellBoot, brand: Brand): Response {
   return page(
     boot.title,
     `<div class="shell">
-<header class="bar"><span class="lead"><a class="mark" href="/" title="${escapeHtml(brand.name)}" aria-label="${escapeHtml(brand.name)}">◆</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status"></span><span id="presence" class="presence"></span>${
+<header class="bar"><span class="lead"><a class="mark" href="/" title="${escapeHtml(brand.name)}" aria-label="${escapeHtml(brand.name)}">${GHOST}</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status"></span><span id="presence" class="presence"></span>${
       boot.viewer.email ? avatar(boot.viewer.email, brand, "workspace", { member: boot.member, scoped: boot.scoped }) : ""
     }</header>
 <div id="since" class="since" hidden></div>
@@ -577,7 +609,17 @@ export function shellPage(boot: ShellBoot, brand: Brand): Response {
 }
 
 export function frameCsp(origin: string, sandbox = true): string {
-  const kit = `${origin}${KIT}/`;
+  return cspFor({ kit: `${origin}${KIT}/`, assets: `${origin}/asset/`, ancestors: origin, sandbox });
+}
+
+/**
+ * The splash page's example frames (static assets, see scripts/build-demos.ts):
+ * the same policy, but they have no uploaded assets and are built before the
+ * domain is known, so the kit is 'self'. The sandbox keeps their origin opaque.
+ */
+export const DEMO_FRAME_CSP = cspFor({ kit: "'self'", assets: "", ancestors: "'self'", sandbox: true });
+
+function cspFor({ kit, assets, ancestors, sandbox }: { kit: string; assets: string; ancestors: string; sandbox: boolean }): string {
   return [
     // The render checker opens frames top-level with no cookies; Browser Run
     // doesn't run module scripts from an opaque origin, so check mode is the
@@ -588,14 +630,14 @@ export function frameCsp(origin: string, sandbox = true): string {
     `script-src 'unsafe-inline' data: ${kit}`,
     `style-src 'unsafe-inline' ${kit}`,
     `font-src ${kit} data:`,
-    `img-src data: blob: ${origin}/asset/`,
-    `media-src data: blob: ${origin}/asset/`,
+    `img-src data: blob:${assets && ` ${assets}`}`,
+    `media-src data: blob:${assets && ` ${assets}`}`,
     "connect-src 'none'",
     "frame-src 'none'",
     "worker-src 'none'",
     "form-action 'none'",
     "base-uri 'none'",
-    `frame-ancestors ${origin}`,
+    `frame-ancestors ${ancestors}`,
   ].join("; ");
 }
 
@@ -609,20 +651,7 @@ export function frameDocument(origin: string, meta: ArtifactMeta, build: Build, 
     ...(check ? { check: true } : {}),
     ...(Object.keys(assets).length ? { assets } : {}),
   };
-  const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-${DARK_HEAD}
-<link rel="stylesheet" href="${kit("kit.css")}">
-<style>${build.css.replace(/<\/style/gi, "<\\/style")}</style>
-<script type="importmap">${scriptJson({ imports: { ...KIT_IMPORTS, ...build.imports } })}</script>
-<script type="application/json" id="art-boot">${scriptJson(boot)}</script>
-<script type="module" src="${kit("boot.js")}"></script>
-</head>
-<body><div id="root"></div></body>
-</html>`;
+  const html = frameHtml(boot, build);
   return new Response(html, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
@@ -635,4 +664,25 @@ ${DARK_HEAD}
       "Cache-Control": "private, no-store, no-transform",
     },
   });
+}
+
+/**
+ * The frame document's HTML. The build also writes the splash page's examples
+ * with it (scripts/build-demos.ts), passing the kit's own version.
+ */
+export function frameHtml(boot: FrameBoot, build: Pick<Build, "css" | "imports">, version = ASSET_VERSION): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+${DARK_HEAD}
+<link rel="stylesheet" href="${kit("kit.css", version)}">
+<style>${build.css.replace(/<\/style/gi, "<\\/style")}</style>
+<script type="importmap">${scriptJson({ imports: { ...kitImports(version), ...build.imports } })}</script>
+<script type="application/json" id="art-boot">${scriptJson(boot)}</script>
+<script type="module" src="${kit("boot.js", version)}"></script>
+</head>
+<body><div id="root"></div></body>
+</html>`;
 }

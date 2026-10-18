@@ -14,5 +14,5 @@
     "isolatedModules": true,
     "resolveJsonModule": true
   },
-  "include": ["src/worker", "src/shared", "alchemy.run.ts", "types.d.ts"]
+  "include": ["src/worker", "src/shared", "demo/examples.ts", "alchemy.run.ts", "types.d.ts"]
 }

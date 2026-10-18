@@ -1,4 +1,4 @@
-// Artifacts Worker. The apex domain is the front door (splash, sign-in, your
+// artifacts.boo Worker. The apex domain is the front door (splash, sign-in, your
 // workspaces, notification settings, the operator console); every workspace is
 // served at its own subdomain, backed by its own Durable Object, and is its own
 // OAuth authorization server and MCP resource.
@@ -16,6 +16,8 @@ import {
   loginPage,
   messagePage,
   previewPage,
+  PRODUCT,
+  DESCRIPTION,
   profilePage,
   settingsPage,
   shellPage,
@@ -114,7 +116,7 @@ export default {
       const record = slug ? await workspaceRecord(env, slug, ctx) : null;
       response = record
         ? await providerFor(url.origin).fetch(request, env, ctx)
-        : messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
+        : messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: PRODUCT }, apexBrand(env));
     }
     await renewSession(request, env, response);
     if (response.status !== 101) {
@@ -154,7 +156,7 @@ function apexOrigin(env: Env): string {
 }
 
 function apexBrand(env: Env): Brand {
-  return { name: "Artifacts", home: "/", apex: apexOrigin(env) };
+  return { name: PRODUCT, home: "/", apex: apexOrigin(env) };
 }
 
 type Routable = Pick<WorkspaceRecord, "slug" | "name" | "suspended">;
@@ -233,7 +235,7 @@ function oauthFor(origin: string) {
     tokenEndpoint: "/oauth/token",
     clientRegistrationEndpoint: "/oauth/register",
     scopesSupported: ["artifacts"],
-    resourceMetadata: { resource: `${origin}/mcp`, resource_name: "Artifacts" },
+    resourceMetadata: { resource: `${origin}/mcp`, resource_name: PRODUCT },
     accessTokenTTL: 3600,
     refreshTokenTTL: 365 * 86400,
     // Grants live as long as the agent keeps using them.
@@ -280,8 +282,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (path === "/privacy" || path === "/terms" || path === "/security") return Response.redirect(`${apexOrigin(env)}${path}`, 301);
   const record = await workspaceRecord(env, slug);
   const brand: Brand = { name: record?.name ?? slug, home: "/", apex: apexOrigin(env) };
-  if (!record) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
-  if (record.suspended) return messagePage("Workspace suspended", `${record.name} is suspended. Contact whoever runs it.`, 403, { href: apexOrigin(env), label: "Artifacts" }, brand);
+  if (!record) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: PRODUCT }, apexBrand(env));
+  if (record.suspended) return messagePage("Workspace suspended", `${record.name} is suspended. Contact whoever runs it.`, 403, { href: apexOrigin(env), label: PRODUCT }, brand);
   const hub = workspaceHub(env, slug);
   // Pages and APIs check the workspace itself first (deleted, or offline for a restore). Frames,
   // assets and images carry their own short-lived tokens, and anything else is a 404, so neither
@@ -289,7 +291,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (/^\/($|archived$|me$|settings$|authorize$|switch$|login$|auth\/|s\/|a\/|api\/)/.test(path)) {
     const state = await hub.access(null, workspaceOrigin(env, slug));
     // A deleted workspace's object may still be cached here for a few seconds.
-    if (state.slug !== slug) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
+    if (state.slug !== slug) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: PRODUCT }, apexBrand(env));
     if (state.offline) {
       const res = messagePage("Back in a few minutes", `${record.name} is being restored from a backup. Try again in a few minutes.`, 503, { href: path, label: "Try again" }, brand);
       res.headers.set("Retry-After", "60");
@@ -484,24 +486,35 @@ async function noteSignIn(env: Env, slug: string, email: string) {
 
 // ---- apex: front door, sign-in, account and operator -------------------------------------
 
+const INDEXABLE = ["/", "/privacy", "/terms", "/security"];
+
+/** Opt a public apex page out of the default noindex (see the fetch handler). */
+function indexable(response: Response): Response {
+  response.headers.set("X-Robots-Tag", "all");
+  return response;
+}
+
 async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const brand = apexBrand(env);
   if (path === "/healthz") return new Response("ok");
-  if (path === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n", { headers: { "Content-Type": "text/plain" } });
-  if (PREVIEW_BOT.test(request.headers.get("User-Agent") ?? "")) return previewPage({ url: url.href, origin: url.origin, title: "Artifacts", description: "Collaborative documents and little apps your agent can build, inspect and maintain." });
+  // Search engines may index the front page and the policies, nothing else.
+  if (path === "/robots.txt") {
+    return new Response(`User-agent: *\n${INDEXABLE.map((p) => `Allow: ${p === "/" ? "/$" : p}\n`).join("")}Disallow: /\n`, { headers: { "Content-Type": "text/plain" } });
+  }
+  if (PREVIEW_BOT.test(request.headers.get("User-Agent") ?? "")) return previewPage({ url: url.href, origin: url.origin, title: PRODUCT, description: DESCRIPTION });
   const viewer = await currentViewer(request, env);
   const operator = viewer.email !== null && operatorEmails(env).has(viewer.email);
 
   if (path === "/") {
-    if (!viewer.email) return splashPage(brand);
+    if (!viewer.email) return indexable(splashPage(brand));
     const workspaces = (await directory(env).membershipsOf(viewer.email)).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) }));
     return workspacesPage(viewer.email, workspaces, operator, brand);
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
   if (path === "/privacy" || path === "/terms" || path === "/security") {
-    return policyPage(path.slice(1) as PolicyKind, brand, (env.OPERATOR_EMAILS ?? "").split(",")[0].trim());
+    return indexable(policyPage(path.slice(1) as PolicyKind, brand, (env.OPERATOR_EMAILS ?? "").split(",")[0].trim()));
   }
   if (path === "/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
@@ -989,7 +1002,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
       const result = await sendToChannel(
         channel.type,
         channel.config,
-        { title: "Artifacts", body: "Test notification: this channel works.", url: `${url.origin}/me`, tag: "test" },
+        { title: PRODUCT, body: "Test notification: this channel works.", url: `${url.origin}/me`, tag: "test" },
         env,
       );
       await dir.recordChannelResult(m[1], result);

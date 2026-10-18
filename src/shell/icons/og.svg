@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="30%" r="75%">
+      <stop offset="0" stop-color="#211e3d"/>
+      <stop offset="0.5" stop-color="#11131f"/>
+      <stop offset="1" stop-color="#0b0d15"/>
+    </radialGradient>
+    <linearGradient id="signal" x1="0.15" y1="0.1" x2="0.9" y2="0.95">
+      <stop offset="0" stop-color="#a29dff"/>
+      <stop offset="1" stop-color="#5ddae0"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#cbc8ff"/>
+      <stop offset="1" stop-color="#a6eef0"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#8f8cff" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#8f8cff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <circle cx="600" cy="245" r="190" fill="url(#halo)"/>
+  <path fill="url(#signal)" fill-rule="evenodd" transform="translate(600 245) scale(0.78) translate(-256 -260)" d="M156 228A100 100 0 0 1 356 228V358A33.333 33.333 0 0 1 289.333 358A33.333 33.333 0 0 1 222.667 358A33.333 33.333 0 0 1 156 358Z M199 244a17 25 0 1 0 34 0a17 25 0 1 0 -34 0Z M279 244a17 25 0 1 0 34 0a17 25 0 1 0 -34 0Z"/>
+  <text x="600" y="478" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="700" font-size="60" letter-spacing="-1.5" fill="url(#word)">artifacts.boo</text>
+  <text x="600" y="532" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="25" fill="#8b8fa8">Live pages your agent builds and maintains</text>
+</svg>
