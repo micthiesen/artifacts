@@ -14,7 +14,7 @@ import { migrate, type Migration } from "./migrate.ts";
 import { randomId, type DirectoryApi, type WorkspaceRole, type WorkspaceStats } from "./directory.ts";
 import { b64url } from "./session.ts";
 import { DATA_TABLES } from "./tables.ts";
-import { backupDates, clearTables, deletePrefix, exportPage, fromB64, importRows, nextBackupAt, readBackup, toB64, writeBackup, type Page } from "./snapshot.ts";
+import { backupDates, clearTables, deletePrefix, exportPage, fromB64, importRows, nextBackupAt, readBackup, SNAPSHOT_MAX_BYTES, toB64, writeBackup, type Page } from "./snapshot.ts";
 import {
   SHARED_STATE_MAX_BYTES,
   SHARED_VALUE_MAX_BYTES,
@@ -78,7 +78,7 @@ export type HubApi = AsyncMethods<
   Pick<
     Workspace,
     | "provision" | "access" | "info" | "rename" | "stats" | "destroy" | "members" | "setMember" | "createToken" | "tokens"
-    | "revokeToken" | "verifyAgentToken" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
+    | "revokeToken" | "verifyAgentToken" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
@@ -177,6 +177,9 @@ const MIGRATIONS: Migration[] = [
         id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL,
         data TEXT NOT NULL, due_at INTEGER NOT NULL);
     `),
+  // OAuth grants, mirrored here so settings can list and revoke them at once
+  // (the OAuth library's own list reads KV, which lags by up to a minute).
+  (sql) => sql.exec(`CREATE TABLE grants (id TEXT PRIMARY KEY, email TEXT NOT NULL, client TEXT NOT NULL, created_at TEXT NOT NULL)`),
 ];
 
 export class Workspace extends DurableObject {
@@ -359,6 +362,33 @@ export class Workspace extends DurableObject {
     return { email: row.email as string };
   }
 
+  /** An OAuth app a member connected (the grant itself lives in the OAuth KV). */
+  recordGrant(id: string, email: string, client: string) {
+    this.sql.exec(
+      `INSERT INTO grants (id, email, client, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+      id,
+      email,
+      client.slice(0, 120),
+      new Date().toISOString(),
+    );
+    this.markDirty();
+  }
+
+  grants(email?: string): { id: string; email: string; client: string; createdAt: string }[] {
+    const rows = email ? this.sql.exec(`SELECT * FROM grants WHERE email = ? ORDER BY created_at`, email) : this.sql.exec(`SELECT * FROM grants ORDER BY email, created_at`);
+    return rows.toArray().map((r) => ({ id: r.id as string, email: r.email as string, client: r.client as string, createdAt: r.created_at as string }));
+  }
+
+  /** Forget grants after they're revoked: one by id, or all of a person's. Returns what was forgotten. */
+  forgetGrants(filter: { id?: string; email: string }): string[] {
+    const rows = filter.id
+      ? this.sql.exec(`DELETE FROM grants WHERE id = ? AND email = ? RETURNING id`, filter.id, filter.email)
+      : this.sql.exec(`DELETE FROM grants WHERE email = ? RETURNING id`, filter.email);
+    const ids = rows.toArray().map((r) => r.id as string);
+    if (ids.length) this.markDirty();
+    return ids;
+  }
+
   // ---- reads -------------------------------------------------------------
 
   /**
@@ -374,29 +404,48 @@ export class Workspace extends DurableObject {
     };
   }
 
+  /**
+   * Everything this person can see, newest first, with their role and what's
+   * new for them. A fixed handful of queries however many artifacts there are.
+   */
   list(email: string | null): (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number })[] {
     if (!email) return [];
-    const ids =
-      this.memberRole(email) === "admin"
-        ? null
-        : new Set(this.sql.exec(this.visibleSql(email).sql, ...this.visibleSql(email).args).toArray().map((r) => r.id as string));
-    const rows = this.sql.exec(`SELECT * FROM artifacts ORDER BY updated_at DESC`).toArray();
-    return rows
-      .filter((r) => !ids || ids.has(r.id as string))
-      .map((r) => {
-        const meta = toMeta(r);
-        return { ...meta, role: this.roleFor(meta.id, email)!, ...this.activityFor(meta, email) };
-      });
-  }
-
-  /** Whether a viewer has a newer version to see and how many comments by others they haven't read. */
-  private activityFor(a: ArtifactMeta, email: string): { unseen: boolean; unread: number } {
-    const seen = this.sql.exec(`SELECT version, read_seq FROM seen WHERE email = ? AND artifact_id = ?`, email, a.id).toArray()[0];
-    if (!seen) return { unseen: true, unread: 0 };
-    const unread = this.sql
-      .exec(`SELECT COUNT(*) AS n FROM comments WHERE artifact_id = ? AND seq > ? AND by != ?`, a.id, seen.read_seq, email)
-      .one().n as number;
-    return { unseen: (seen.version as number) < a.version, unread };
+    const member = this.memberRole(email);
+    const principals = [email, domainOf(email), ...(member ? [WORKSPACE_PRINCIPAL] : [])];
+    // Most specific share wins: email, then domain, then workspace (same as roleFor).
+    const shared = new Map<string, Role>();
+    const rank = (p: string) => principals.indexOf(p);
+    const best = new Map<string, number>();
+    for (const r of this.sql.exec(`SELECT artifact_id, email, role FROM shares WHERE email IN (${principals.map(() => "?").join(", ")})`, ...principals)) {
+      const id = r.artifact_id as string;
+      if (!best.has(id) || rank(r.email as string) < best.get(id)!) {
+        best.set(id, rank(r.email as string));
+        shared.set(id, r.role as Role);
+      }
+    }
+    const seen = new Map(
+      this.sql.exec(`SELECT artifact_id, version, read_seq FROM seen WHERE email = ?`, email).toArray().map((r) => [r.artifact_id as string, r]),
+    );
+    const unread = new Map(
+      this.sql
+        .exec(
+          `SELECT c.artifact_id AS id, COUNT(*) AS n FROM comments c JOIN seen s ON s.artifact_id = c.artifact_id AND s.email = ?
+           WHERE c.seq > s.read_seq AND c.by != ? GROUP BY c.artifact_id`,
+          email,
+          email,
+        )
+        .toArray()
+        .map((r) => [r.id as string, r.n as number]),
+    );
+    const out: (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number })[] = [];
+    for (const r of this.sql.exec(`SELECT * FROM artifacts ORDER BY updated_at DESC`)) {
+      const meta = toMeta(r);
+      const role: Role | undefined = member === "admin" || meta.owner === email ? "owner" : shared.get(meta.id);
+      if (!role) continue;
+      const s = seen.get(meta.id);
+      out.push({ ...meta, role, unseen: s ? (s.version as number) < meta.version : true, unread: unread.get(meta.id) ?? 0 });
+    }
+    return out;
   }
 
   meta(id: string): (ArtifactMeta & { shares: ShareEntry[]; files: { path: string; bytes: number }[] }) | null {
@@ -1063,7 +1112,7 @@ export class Workspace extends DurableObject {
     this.dirty = false;
     let prefix: string;
     try {
-      prefix = await writeBackup(bucket, slug, DATA_TABLES, (t, after) => this.exportPage(t, after), BACKUPS_KEEP);
+      prefix = await writeBackup(bucket, slug, DATA_TABLES, (t, after) => this.exportPage(t, after), BACKUPS_KEEP, this.sql.databaseSize <= SNAPSHOT_MAX_BYTES);
     } catch (err) {
       // Try again in an hour (the alarm re-arms whatever happens).
       this.setSetting("backup_due_at", String(Date.now() + 3600_000));

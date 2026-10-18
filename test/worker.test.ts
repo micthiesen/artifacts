@@ -39,6 +39,14 @@ async function fetchAs(url: string, init: RequestInit & { cookie?: string } = {}
   return worker.fetch(new Request(url, { ...init, headers, redirect: "manual" }), env as never, ctx);
 }
 
+/** Where a response sends the browser: a redirect, or a continue page's meta refresh. */
+async function nextUrl(res: Response): Promise<string> {
+  const location = res.headers.get("Location");
+  if (location) return location;
+  const html = await res.clone().text();
+  return /http-equiv="refresh" content="0;url=([^"]+)"/.exec(html)![1].replace(/&amp;/g, "&");
+}
+
 function cookieOf(res: Response): string {
   const set = res.headers.get("Set-Cookie") ?? "";
   return set.split(";")[0];
@@ -62,8 +70,9 @@ async function signIn(email: string, to = "", ret = "/") {
   expect(sent.status).toBe(200);
   const code = /(\d{3}) (\d{3})/.exec(mail.at(-1)!.text)!.slice(1).join("");
   const done = await fetchAs(`${APEX}/login`, { method: "POST", body: form({ email, code }) });
-  expect(done.status).toBe(303);
-  const location = done.headers.get("Location")!;
+  // Straight to a page here, or a continue page on the way to a workspace.
+  expect(done.status).toBe(to ? 200 : 303);
+  const location = await nextUrl(done);
   const apexCookie = done.headers.getSetCookie().map((c) => c.split(";")[0]).find((c) => c.startsWith("__Host-art_session="))!;
   return { cookie: apexCookie, location, nonceCookie };
 }
@@ -242,8 +251,8 @@ test("OAuth: consent, code exchange with PKCE, then MCP as the member", async ()
   const handle = /name="handle" value="([^"]+)"/.exec(await page.text())![1];
   const consent = page.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
   const approved = await fetchAs(`${ACME}/authorize`, { method: "POST", cookie: `${cookie}; ${consent}`, headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ handle, decision: "approve" }) });
-  expect(approved.status).toBe(302);
-  const code = new URL(approved.headers.get("Location")!).searchParams.get("code")!;
+  expect(approved.status).toBe(200);
+  const code = new URL(await nextUrl(approved)).searchParams.get("code")!;
   const tokens = (await (
     await fetchAs(`${ACME}/oauth/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "" }, body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: "http://127.0.0.1:9/cb", client_id: reg.client_id, code_verifier: verifier, resource: `${ACME}/mcp` }) })
   ).json()) as { access_token: string };
@@ -260,4 +269,23 @@ test("OAuth: consent, code exchange with PKCE, then MCP as the member", async ()
   await fetchAs(`${ACME}/api/settings/members`, { method: "POST", cookie: `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: ADMIN, h: "acme.artifacts.test" })}`, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: MIA, role: null }) });
   const after = await fetchAs(`${ACME}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${tokens.access_token}`, "Content-Type": "application/json", Origin: "" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) });
   expect(after.status).toBe(401);
+});
+
+test("form posts from our own pages pass with Origin: null; cross-site ones don't", async () => {
+  const { sameOrigin } = await import("../src/worker/index.ts");
+  const url = new URL(`${APEX}/login`);
+  const req = (headers: Record<string, string>) => new Request(url, { method: "POST", headers });
+  expect(sameOrigin(req({ Origin: APEX }), url)).toBe(true);
+  expect(sameOrigin(req({ Origin: "null", "Sec-Fetch-Site": "same-origin" }), url)).toBe(true);
+  expect(sameOrigin(req({ "Sec-Fetch-Site": "same-origin" }), url)).toBe(true);
+  expect(sameOrigin(req({ Origin: "null", "Sec-Fetch-Site": "cross-site" }), url)).toBe(false);
+  expect(sameOrigin(req({ Origin: "null" }), url)).toBe(false);
+  expect(sameOrigin(req({ Origin: ACME, "Sec-Fetch-Site": "same-site" }), url)).toBe(false);
+  // The sign-in form as a browser sends it.
+  const res = await worker.fetch(
+    new Request(`${APEX}/login`, { method: "POST", headers: { Origin: "null", "Sec-Fetch-Site": "same-origin" }, body: new URLSearchParams({ email: MIA, to: "", n: "", return: "/" }), redirect: "manual" }),
+    env as never,
+    ctx,
+  );
+  expect(res.status).toBe(200);
 });

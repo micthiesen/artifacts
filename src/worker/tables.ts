@@ -2,7 +2,7 @@
 
 /** Tables that hold workspace data: exported, backed up and replaced on import, in this order. */
 export const DATA_TABLES = [
-  "members", "tokens", "allowed_hosts", "artifacts", "files", "history", "blobs", "builds", "shares", "state", "errors",
+  "members", "tokens", "grants", "allowed_hosts", "artifacts", "files", "history", "blobs", "builds", "shares", "state", "errors",
   "checks", "assets", "sources", "events", "threads", "comments", "watches", "seen", "outbox",
 ];
 // blobs comes after files and history: a backup isn't a point-in-time snapshot,

@@ -218,3 +218,26 @@ test("shares only take real principals and the view or edit roles", async () => 
   expect(() => h.hub.share(id, { add: [{ email: "not a principal", role: "view" }] })).toThrow("not an email");
   await expect(h.hub.setMember("workspace", "member", ADMIN)).rejects.toThrow("not an email");
 });
+
+test("small workspaces back up as a point-in-time snapshot", async () => {
+  const bucket = new FakeR2();
+  h = await createHub({ BACKUPS: bucket });
+  await h.hub.setMember(MEMBER, "member", ADMIN);
+  const id = await make();
+  // Make the first upload slow and edit the artifact while it's in flight.
+  const put = bucket.put.bind(bucket);
+  let edited = false;
+  bucket.put = async (k: string, v: string) => {
+    if (!edited) {
+      edited = true;
+      await h.hub.patchData(id, "data/rows.json", [{ op: "replace", path: "/0/a", value: 99 }]);
+    }
+    return put(k, v);
+  };
+  const prefix = await h.hub.backup();
+  const history = JSON.parse(bucket.objects.get(`${prefix}history/00000.json`)!);
+  const artifacts = JSON.parse(bucket.objects.get(`${prefix}artifacts/00000.json`)!);
+  // Both tables describe the same moment: version 1 everywhere, not a mix.
+  expect(artifacts[0].version).toBe(1);
+  expect(history.map((r: any) => r.version)).toEqual([1]);
+});

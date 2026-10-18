@@ -6,7 +6,7 @@ import { DurableObject } from "cloudflare:workers";
 import { migrate, type Migration } from "./migrate.ts";
 import type { ChannelType } from "./notify.ts";
 import { DIRECTORY_TABLES } from "./tables.ts";
-import { backupDates, clearTables, exportPage, importRows, nextBackupAt, readBackup, writeBackup, type Page } from "./snapshot.ts";
+import { backupDates, clearTables, exportPage, importRows, nextBackupAt, readBackup, SNAPSHOT_MAX_BYTES, writeBackup, type Page } from "./snapshot.ts";
 
 export type WorkspaceRole = "admin" | "member";
 
@@ -297,7 +297,7 @@ export class Directory extends DurableObject {
   async backup(): Promise<string | null> {
     this.sql.exec(`DELETE FROM settings WHERE key = 'backup_due_at'`);
     this.dirty = false;
-    return this.bucket ? writeBackup(this.bucket, BACKUP_ROOT, DIRECTORY_TABLES, (t, after) => this.exportPage(t, after), BACKUPS_KEEP) : null;
+    return this.bucket ? writeBackup(this.bucket, BACKUP_ROOT, DIRECTORY_TABLES, (t, after) => this.exportPage(t, after), BACKUPS_KEEP, this.sql.databaseSize <= SNAPSHOT_MAX_BYTES) : null;
   }
 
   async backups(): Promise<string[]> {

@@ -9,7 +9,7 @@ type Settings = {
   mcpUrl: string;
   members: { email: string; role: "admin" | "member"; addedAt: string }[];
   tokens: { id: string; email: string; label: string; createdAt: string; lastUsedAt: string | null }[];
-  apps: { id: string; client: string; createdAt: number | string }[];
+  apps: { id: string; client: string; createdAt: string }[];
   hosts: string[];
 };
 
@@ -75,7 +75,7 @@ async function load() {
   render();
 }
 
-const when = (v: string | number | null) => (v === null ? "never" : new Date(typeof v === "number" && v < 1e12 ? v * 1000 : v).toLocaleDateString());
+const when = (v: string | null) => (v === null ? "never" : new Date(v).toLocaleDateString());
 
 function render() {
   const admin = data.you.role === "admin";
@@ -117,7 +117,7 @@ function render() {
       h("p", { class: "muted" }, "Add this MCP server to Claude, Codex or any MCP client. It signs in with OAuth in your browser and then acts as you here."),
       h("div", { class: "reveal-row" }, h("code", { class: "reveal" }, data.mcpUrl), copyButton(data.mcpUrl)),
       h("h3", { class: "subhead" }, "Connected apps"),
-      data.apps.length ? apps : h("p", { class: "muted small" }, "None yet. A newly connected app can take a minute to show up here."),
+      data.apps.length ? apps : h("p", { class: "muted small" }, "None yet."),
       h("h3", { class: "subhead" }, "Agent tokens"),
       h("p", { class: "muted small" }, "For agents that can't open a browser: send the token as Authorization: Bearer <token> to the MCP URL."),
       mine.length ? tokens : h("p", { class: "muted small" }, "None yet."),

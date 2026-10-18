@@ -7,6 +7,7 @@ import { handleMcp, runOwnerTool, type Ctx } from "./mcp.ts";
 import {
   adminPage,
   consentPage,
+  continuePage,
   frameDocument,
   indexPage,
   loginPage,
@@ -262,7 +263,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (path === "/auth/callback") return authCallback(request, url, env);
   if (path === "/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
-    return new Response(null, { status: 303, headers: { Location: `${apexOrigin(env)}/signed-out`, "Set-Cookie": clearSessionCookie() } });
+    return continuePage(`${apexOrigin(env)}/signed-out`, new Headers({ "Set-Cookie": clearSessionCookie() }));
   }
   const presigned = /^\/s\/([A-Za-z0-9_.-]+)$/.exec(path);
   if (presigned) return presignedSignIn(presigned[1], url, env, hub, slug, brand);
@@ -429,7 +430,7 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
   const ret = safeNext(field("return") || null);
   const state = { to, n: nonce, return: ret };
   if (!form) {
-    if (viewer.email) return finishLogin(viewer.email, to, nonce, ret, env);
+    if (viewer.email) return finishLogin(viewer.email, to, nonce, ret, env, false);
     return loginPage({ ...state, step: "email" }, brand);
   }
   if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
@@ -439,7 +440,7 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
     if (!(await directory(env).verifyLogin(email, field("code")))) {
       return loginPage({ ...state, step: "code", email, error: "That code didn't work. Check it, or send a new one." }, brand, 400);
     }
-    const res = await finishLogin(email, to, nonce, ret, env);
+    const res = await finishLogin(email, to, nonce, ret, env, true);
     const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST });
     res.headers.append("Set-Cookie", sessionCookie(session));
     return res;
@@ -473,7 +474,7 @@ async function sendCode(env: Env, email: string, code: string) {
 }
 
 /** Send a signed-in browser on: to a workspace via a one-minute hand-off code, or to a page here. */
-async function finishLogin(email: string, to: string, nonce: string, ret: string, env: Env): Promise<Response> {
+async function finishLogin(email: string, to: string, nonce: string, ret: string, env: Env, fromForm: boolean): Promise<Response> {
   let target: URL | null = null;
   try {
     target = to ? new URL(to) : null;
@@ -485,7 +486,8 @@ async function finishLogin(email: string, to: string, nonce: string, ret: string
     const callback = new URL(`${target.origin}/auth/callback`);
     callback.searchParams.set("code", code);
     callback.searchParams.set("next", ret);
-    return new Response(null, { status: 303, headers: { Location: callback.href } });
+    // After the code form, a redirect to the workspace would be blocked (see continuePage).
+    return fromForm ? continuePage(callback.href) : new Response(null, { status: 303, headers: { Location: callback.href } });
   }
   return new Response(null, { status: 303, headers: { Location: ret } });
 }
@@ -572,8 +574,16 @@ export function safeNext(next: string | null): string {
   }
 }
 
-function sameOrigin(request: Request, url: URL): boolean {
-  return request.headers.get("Origin") === url.origin;
+/**
+ * Whether a state-changing request comes from our own page on this host. Form
+ * posts from our pages carry `Origin: null` (they're served with
+ * Referrer-Policy: no-referrer), so for those the browser's Sec-Fetch-Site,
+ * which a page can't set, has to say same-origin.
+ */
+export function sameOrigin(request: Request, url: URL): boolean {
+  const origin = request.headers.get("Origin");
+  if (origin === url.origin) return true;
+  return (origin === null || origin === "null") && request.headers.get("Sec-Fetch-Site") === "same-origin";
 }
 
 async function jsonBody(request: Request): Promise<Record<string, unknown>> {
@@ -601,13 +611,19 @@ async function authorize(request: Request, url: URL, env: Env, hub: HubApi, view
     const remember = { secret: env.CONSENT_SECRET, subject: userId };
     const complete = async (authRequest: Awaited<ReturnType<OAuthHelpers["parseAuthRequest"]>>, headers = new Headers()) => {
       const client = await oauth.lookupClient(authRequest.clientId);
+      const name = client?.clientName ?? authRequest.clientId;
       const { redirectTo } = await oauth.completeAuthorization({
         request: authRequest,
         userId,
-        metadata: { client: client?.clientName ?? authRequest.clientId, at: new Date().toISOString() },
+        metadata: { client: name, at: new Date().toISOString() },
         scope: authRequest.scope,
         props: { email: viewer.email!, slug: record.slug } satisfies McpProps,
       });
+      // The code is "<user>:<grant>:<secret>"; keep the grant so settings can show and revoke it.
+      const grantId = new URL(redirectTo).searchParams.get("code")?.split(":")[1];
+      if (grantId) await hub.recordGrant(grantId, viewer.email!, name);
+      // From the consent form the redirect to the client would be blocked (see continuePage).
+      if (request.method === "POST") return continuePage(redirectTo, headers);
       headers.set("Location", redirectTo);
       return new Response(null, { status: 302, headers });
     };
@@ -626,7 +642,7 @@ async function authorize(request: Request, url: URL, env: Env, hub: HubApi, view
       const handle = String(form.get("handle") ?? "");
       if (form.get("decision") !== "approve") {
         const denied = await oauth.denyConsent(request, handle);
-        return new Response(null, { status: 302, headers: denied.headers });
+        return continuePage(denied.redirectTo, denied.headers);
       }
       const approved = await oauth.approveConsent(request, handle, { remember: { ...remember, maxAgeSeconds: 90 * 86400 } });
       return complete(approved.request, approved.headers);
@@ -645,16 +661,22 @@ function grantUser(slug: string, email: string): string {
   return `${slug}/${email}`;
 }
 
-/** Revoke every OAuth grant a person holds in a workspace (when they leave it). */
-async function revokeGrants(env: Env, origin: string, slug: string, email: string) {
+/**
+ * Revoke every OAuth grant a person holds in a workspace (when they leave it):
+ * the ones the workspace recorded, and any the OAuth store lists (its list can
+ * lag a minute behind, which is why the workspace records them too).
+ */
+async function revokeGrants(env: Env, origin: string, slug: string, email: string, hub: HubApi) {
   const oauth = oauthApi(origin, env);
   const userId = grantUser(slug, email);
+  const ids = new Set(await hub.forgetGrants({ email }));
   let cursor: string | undefined;
   do {
     const page = await oauth.listUserGrants(userId, { cursor });
-    for (const g of page.items) await oauth.revokeGrant(g.id, userId);
+    for (const g of page.items) ids.add(g.id);
     cursor = page.cursor;
   } while (cursor);
+  for (const id of ids) await oauth.revokeGrant(id, userId);
 }
 
 // ---- workspace settings ------------------------------------------------------------------
@@ -681,14 +703,13 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
   try {
     const path = url.pathname;
     if (path === "/api/settings" && request.method === "GET") {
-      const grants = await oauth.listUserGrants(grantUser(slug, email));
       return Response.json({
         workspace: { slug, name, url: url.origin },
         you: { email, role: member },
         mcpUrl: `${url.origin}/mcp`,
         members: await hub.members(),
         tokens: await hub.tokens(admin ? undefined : email),
-        apps: grants.items.map((g) => ({ id: g.id, client: (g.metadata as { client?: string } | undefined)?.client ?? g.clientId, createdAt: g.createdAt })),
+        apps: (await hub.grants(email)).map((g) => ({ id: g.id, client: g.client, createdAt: g.createdAt })),
         hosts: await hub.allowedHosts(),
       });
     }
@@ -704,7 +725,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       const role = body.role === null ? null : (String(body.role) as WorkspaceRole);
       const target = String(body.email ?? "").trim().toLowerCase();
       const members = await hub.setMember(target, role, email);
-      if (role === null) await revokeGrants(env, url.origin, slug, target);
+      if (role === null) await revokeGrants(env, url.origin, slug, target, hub);
       return Response.json({ members });
     }
     if (path === "/api/settings/tokens" && request.method === "POST") {
@@ -714,6 +735,8 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
     if (token && request.method === "DELETE") return Response.json({ revoked: await hub.revokeToken(token[1], email) });
     const app = /^\/api\/settings\/apps\/([A-Za-z0-9_-]+)$/.exec(path);
     if (app && request.method === "DELETE") {
+      // Only your own: the grant must be one the workspace recorded for you.
+      if (!(await hub.forgetGrants({ id: app[1], email })).length) return Response.json({ error: "not found" }, { status: 404 });
       await oauth.revokeGrant(app[1], grantUser(slug, email));
       return Response.json({ revoked: true });
     }
@@ -919,7 +942,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer)
     }
     if (!action && request.method === "DELETE") {
       // Agents' OAuth grants live outside the workspace; end them first.
-      for (const m of await hub.members()) await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email);
+      for (const m of await hub.members()) await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email, hub);
       await hub.destroy();
       await dir.removeWorkspace(slug);
       return Response.json({ deleted: slug });

@@ -398,6 +398,28 @@ ${local}
   );
 }
 
+/**
+ * The answer to a form post that must end up on another origin. Our CSP's
+ * form-action also covers the redirect after a form submit, so a 303 there is
+ * blocked; a meta refresh is an ordinary navigation and isn't.
+ */
+export function continuePage(location: string, headers: Headers = new Headers()): Response {
+  let host = location;
+  try {
+    host = new URL(location).host;
+  } catch {
+    host = location;
+  }
+  headers.delete("Location");
+  const url = escapeHtml(location);
+  const res = page(
+    "Continuing…",
+    `<meta http-equiv="refresh" content="0;url=${url}"><main class="content"><section class="empty"><h1>Continuing to ${escapeHtml(host)}…</h1><p><a class="button" href="${url}">Continue</a></p></section></main>`,
+  );
+  for (const [k, v] of headers) if (k.toLowerCase() !== "content-type") res.headers.append(k, v);
+  return res;
+}
+
 export function messagePage(title: string, message: string, status: number, action?: { href: string; label: string }, brand?: Brand): Response {
   const b = brand ?? { name: "Artifacts", home: "/", apex: "" };
   const act = action ?? { href: "/", label: brand && brand.name !== "Artifacts" ? "All artifacts" : "Home" };

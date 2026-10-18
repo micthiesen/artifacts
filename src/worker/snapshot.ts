@@ -50,25 +50,46 @@ export function importRows(storage: DurableObjectStorage, tables: string[], tabl
   return rows.length;
 }
 
-/** Writes today's backup under <root>/<date>/ and keeps the newest `keep` dates. */
-export async function writeBackup(bucket: R2Bucket, root: string, tables: string[], page: (table: string, after: number) => Page, keep: number): Promise<string> {
+/** Below this size a backup reads everything before uploading, so it's a point-in-time snapshot. */
+export const SNAPSHOT_MAX_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Writes today's backup under <root>/<date>/ and keeps the newest `keep` dates.
+ * With `snapshot`, every page is read synchronously first (no other request can
+ * run in between), so the backup is consistent; otherwise pages are read and
+ * uploaded in turn, which bounds memory for big databases but lets writes land
+ * between pages.
+ */
+export async function writeBackup(
+  bucket: R2Bucket,
+  root: string,
+  tables: string[],
+  page: (table: string, after: number) => Page,
+  keep: number,
+  snapshot = false,
+): Promise<string> {
   const today = new Date().toISOString().slice(0, 10);
   const prefix = `${root}/${today}/`;
+  const counts: Record<string, number> = {};
+  const pages: { key: string; body: string }[] = [];
+  const read = function* () {
+    for (const table of tables) {
+      let after = 0;
+      let n = 0;
+      counts[table] = 0;
+      for (;;) {
+        const p = page(table, after);
+        if (p.rows.length) yield { key: `${prefix}${table}/${String(n++).padStart(5, "0")}.json`, body: JSON.stringify(p.rows) };
+        counts[table] += p.rows.length;
+        if (p.next === null) break;
+        after = p.next;
+      }
+    }
+  };
+  if (snapshot) for (const p of read()) pages.push(p);
   // A second backup today replaces the first rather than mixing with its pages.
   await deletePrefix(bucket, prefix);
-  const counts: Record<string, number> = {};
-  for (const table of tables) {
-    let after = 0;
-    let n = 0;
-    counts[table] = 0;
-    for (;;) {
-      const p = page(table, after);
-      if (p.rows.length) await bucket.put(`${prefix}${table}/${String(n++).padStart(5, "0")}.json`, JSON.stringify(p.rows));
-      counts[table] += p.rows.length;
-      if (p.next === null) break;
-      after = p.next;
-    }
-  }
+  for (const p of snapshot ? pages : read()) await bucket.put(p.key, p.body);
   // The manifest goes last, so a backup without one is incomplete.
   await bucket.put(`${prefix}manifest.json`, JSON.stringify({ root, at: new Date().toISOString(), tables: counts }));
   for (const old of (await backupDates(bucket, root)).slice(keep)) await deletePrefix(bucket, `${root}/${old}/`);
