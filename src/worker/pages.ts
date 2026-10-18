@@ -155,7 +155,9 @@ export function indexPage(
   }
   const script = `<script type="module" src="${asset("/static/home.js")}"></script>`;
   const title = archived ? `Archived · ${brand.name}` : brand.name;
-  return page(title, `${topBar(brand, account)}<main class="content">${body}</main>${script}`);
+  // Policies live on the apex; signed-out visitors may want them before signing in.
+  const foot = viewer.email ? "" : POLICY_FOOTER.replace(/href="\//g, `href="${escapeHtml(brand.apex)}/`);
+  return page(title, `${topBar(brand, account)}<main class="content">${body}</main>${foot}${script}`);
 }
 
 function list(artifacts: ListedArtifact[], summaries: Record<string, ShareSummary> | undefined, archived: boolean): string {
