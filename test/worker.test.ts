@@ -127,14 +127,26 @@ test("email sign-in hands the browser to the workspace, which sets its own sessi
   // Each host's session is its own: the apex cookie means nothing on the workspace and vice versa.
   expect(await (await fetchAs(`${ACME}/`, { cookie: acmeCookie })).text()).toContain("Nothing here yet");
   expect(await (await fetchAs(`${ACME}/`, { cookie: apexCookie })).text()).toContain("Sign in with your email");
-  const home = await (await fetchAs(`${APEX}/`, { cookie: apexCookie })).text();
+  // The apex front page is the splash for everyone; signed in, it links to your workspaces.
+  const front = await (await fetchAs(`${APEX}/`, { cookie: apexCookie })).text();
+  expect(front).toContain("Collaborative documents");
+  expect(front).toContain('href="/workspaces">Your workspaces</a>');
+  expect(front).toContain(`data-email="${MIA}"`);
+  const home = await (await fetchAs(`${APEX}/workspaces`, { cookie: apexCookie })).text();
   expect(home).toContain("Your workspaces");
   expect(home).toContain(`${ACME}/`);
-  expect(await (await fetchAs(`${APEX}/`, { cookie: acmeCookie })).text()).toContain("Collaborative documents");
+  const signedOut = await fetchAs(`${APEX}/workspaces`, { cookie: acmeCookie });
+  expect(signedOut.headers.get("Location")).toBe(`${APEX}/login?return=/workspaces`);
+  expect(await (await fetchAs(`${APEX}/`, { cookie: acmeCookie })).text()).toContain('href="/login">Sign in</a>');
 
   // Already signed in on the apex: the next workspace hand-off needs no code.
   const again = await fetchAs(`${APEX}/login?to=${encodeURIComponent(ACME)}&return=/settings`, { cookie: apexCookie });
   expect(again.headers.get("Location")).toStartWith(`${ACME}/auth/callback?code=`);
+});
+
+test("signing in on the apex itself ends at your workspaces unless told otherwise", async () => {
+  expect((await signIn(MIA, "", "")).location).toBe("/workspaces");
+  expect((await signIn(MIA, "", "/me")).location).toBe("/me");
 });
 
 test("a wrong code is refused and nothing is signed in", async () => {

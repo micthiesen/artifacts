@@ -507,8 +507,10 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   const viewer = await currentViewer(request, env);
   const operator = viewer.email !== null && operatorEmails(env).has(viewer.email);
 
-  if (path === "/") {
-    if (!viewer.email) return indexable(splashPage(brand));
+  // The front page is the same for everyone; signed in, it links to /workspaces.
+  if (path === "/") return indexable(splashPage(brand, undefined, viewer.email ? { email: viewer.email, operator } : undefined));
+  if (path === "/workspaces") {
+    if (!viewer.email) return Response.redirect(`${url.origin}/login?return=/workspaces`, 302);
     const workspaces = (await directory(env).membershipsOf(viewer.email)).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) }));
     return workspacesPage(viewer.email, workspaces, operator, brand);
   }
@@ -549,7 +551,8 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
   const field = (k: string) => String(form?.get(k) ?? url.searchParams.get(k) ?? "").trim();
   const to = field("to");
   const nonce = field("n");
-  const ret = safeNext(field("return") || null);
+  // Signing in on the apex itself ends at your workspaces; a workspace hand-off at its front page.
+  const ret = field("return") ? safeNext(field("return")) : to ? "/" : "/workspaces";
   const state = { to, n: nonce, return: ret };
   if (!form) {
     if (url.searchParams.get("switch") === "1") {

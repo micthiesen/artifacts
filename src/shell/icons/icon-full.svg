@@ -16,5 +16,5 @@
   </defs>
   <rect width="512" height="512" fill="url(#glow)"/>
   <circle cx="256" cy="256" r="170" fill="url(#halo)"/>
-  <path fill="url(#signal)" fill-rule="evenodd" transform="translate(0 -4)" d="M156 228A100 100 0 0 1 356 228V358A33.333 33.333 0 0 1 289.333 358A33.333 33.333 0 0 1 222.667 358A33.333 33.333 0 0 1 156 358Z M199 244a17 25 0 1 0 34 0a17 25 0 1 0 -34 0Z M279 244a17 25 0 1 0 34 0a17 25 0 1 0 -34 0Z"/>
+  <path fill="url(#signal)" fill-rule="evenodd" transform="translate(0 -4)" d="M141 228A115 100 0 0 1 371 228V358A38.333 33.333 0 0 1 294.333 358A38.333 33.333 0 0 1 217.667 358A38.333 33.333 0 0 1 141 358Z M193 244a18 25 0 1 0 36 0a18 25 0 1 0 -36 0Z M283 244a18 25 0 1 0 36 0a18 25 0 1 0 -36 0Z"/>
 </svg>

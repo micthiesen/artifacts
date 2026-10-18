@@ -98,7 +98,7 @@ button.link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .bar .mark:hover { text-decoration: none; background-color: var(--muted); }
 /* The ghost logo: the gradient seen through the ghost's shape (eyes cut out). */
 .ghost {
-  display: inline-block; width: 15px; height: 19px; flex: none; background: var(--signal);
+  display: inline-block; width: 17px; height: 19px; flex: none; background: var(--signal);
   -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
 }
 .wordmark-tld { background: var(--signal); -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -142,7 +142,7 @@ a.title:hover { text-decoration: none; }
 .account-menu a:hover, .account-menu button:hover, .account-menu [role=menuitem]:focus-visible { background: var(--muted); text-decoration: none; outline: none; }
 .account-menu .account-primary { color: var(--fg); font-weight: 600; }
 .account-menu .account-primary::before {
-  content: ""; display: inline-block; width: 10px; height: 13px; margin-right: .5rem; vertical-align: -1px; background: var(--signal);
+  content: ""; display: inline-block; width: 11.5px; height: 13px; margin-right: .5rem; vertical-align: -1px; background: var(--signal);
   -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
 }
 .account-menu .account-quiet { color: var(--muted-fg); }
@@ -621,7 +621,7 @@ div.thread-anchor { cursor: default; }
 @media (min-width: 1040px) {
   .splash-hero { max-width: none; padding-right: 20rem; }
   .splash-ghost {
-    display: block; position: absolute; right: 3.5rem; top: 50%; width: 8.5rem; height: 10.75rem; margin-top: -5.6rem;
+    display: block; position: absolute; right: 3.5rem; top: 50%; width: 9.5rem; height: 10.75rem; margin-top: -5.6rem;
     background: var(--signal); opacity: .92;
     -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
     animation: drift 7s ease-in-out infinite;

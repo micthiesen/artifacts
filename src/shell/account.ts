@@ -154,10 +154,10 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     if (member) link("/settings", "Workspace settings");
     link("/", "All artifacts");
     link(`${apex}/me`, "Account");
-    link(`${apex}/`, "Your workspaces");
+    link(`${apex}/workspaces`, "Your workspaces");
   } else {
     link("/me", "Account");
-    link("/", "Your workspaces");
+    link("/workspaces", "Your workspaces");
     if (operator) link("/admin", "Operator console");
   }
   const form = document.createElement("form");

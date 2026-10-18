@@ -20,7 +20,7 @@
   </defs>
   <rect width="1200" height="630" fill="url(#glow)"/>
   <circle cx="600" cy="245" r="190" fill="url(#halo)"/>
-  <path fill="url(#signal)" fill-rule="evenodd" transform="translate(600 245) scale(0.78) translate(-256 -260)" d="M156 228A100 100 0 0 1 356 228V358A33.333 33.333 0 0 1 289.333 358A33.333 33.333 0 0 1 222.667 358A33.333 33.333 0 0 1 156 358Z M199 244a17 25 0 1 0 34 0a17 25 0 1 0 -34 0Z M279 244a17 25 0 1 0 34 0a17 25 0 1 0 -34 0Z"/>
+  <path fill="url(#signal)" fill-rule="evenodd" transform="translate(600 245) scale(0.78) translate(-256 -260)" d="M141 228A115 100 0 0 1 371 228V358A38.333 33.333 0 0 1 294.333 358A38.333 33.333 0 0 1 217.667 358A38.333 33.333 0 0 1 141 358Z M193 244a18 25 0 1 0 36 0a18 25 0 1 0 -36 0Z M283 244a18 25 0 1 0 36 0a18 25 0 1 0 -36 0Z"/>
   <text x="600" y="478" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="700" font-size="60" letter-spacing="-1.5" fill="url(#word)">artifacts.boo</text>
   <text x="600" y="532" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="25" fill="#8b8fa8">Live pages your agent builds and maintains</text>
 </svg>

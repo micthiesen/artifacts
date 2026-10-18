@@ -273,14 +273,25 @@ ${panels}
 /** What this is, in one sentence: the splash page and link previews of the apex. */
 export const DESCRIPTION = "Collaborative documents and little apps your agent can build, inspect and maintain.";
 
-/** The apex for someone who isn't signed in: what this is, for developers, and how to run it. */
-export function splashPage(brand: Brand, notice?: string): Response {
+/**
+ * The apex front page, for everyone: what this is, for developers, and how to
+ * run it. Someone signed in also gets their account menu and a way to their
+ * workspaces (/workspaces).
+ */
+export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }): Response {
   const card = (title: string, body: string, points: string[]) =>
     `<div class="splash-card"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(body)}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
   const host = brand.apex.replace(/^https?:\/\//, "") || PRODUCT;
   return page(
     `${PRODUCT}: live pages your agent builds`,
-    `${topBar(brand, `<a class="bar-link" href="${REPO}">GitHub</a><a class="button small secondary" href="/login">Sign in</a>`)}<main class="splash">
+    `${topBar(
+      brand,
+      `<a class="bar-link" href="${REPO}">GitHub</a>${
+        viewer
+          ? `<a class="button small secondary" href="/workspaces">Your workspaces</a>${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}`
+          : `<a class="button small secondary" href="/login">Sign in</a>`
+      }`,
+    )}<main class="splash">
 <section class="splash-hero">
 ${notice ? `<p class="splash-notice" role="status">${escapeHtml(notice)}</p>` : ""}
 <p class="splash-kicker">Open source · runs on Cloudflare</p>
@@ -331,7 +342,7 @@ cd artifacts.boo &amp;&amp; bun install
 bun run deploy</code></pre></div>
 </section>
 
-<footer class="splash-foot muted"><a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · <a href="/login">Sign in</a></footer>
+<footer class="splash-foot muted"><a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
 </main>`,
     {},
     `<meta name="description" content="${escapeHtml(DESCRIPTION)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}/">\n`,
@@ -383,7 +394,7 @@ export function workspacesPage(
     ? `<h1 class="page-title">Your workspaces</h1><ul class="list">${rows}</ul>`
     : `<section class="empty"><h1>No workspaces yet</h1><p class="muted">${escapeHtml(email)} isn't a member of a workspace. Artifacts shared with you open from the links you were sent.</p></section>`;
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
-  return page(PRODUCT, `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>${POLICY_FOOTER}`);
+  return page(`Your workspaces · ${PRODUCT}`, `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>${POLICY_FOOTER}`);
 }
 
 /**
