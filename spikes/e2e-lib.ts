@@ -43,6 +43,21 @@ export async function rpc(method: string, params?: unknown, bearer = token) {
   return { status: res.status, headers: res.headers, body: res.status === 200 ? ((await res.json()) as any) : await res.text() };
 }
 
+/** A protocol 2026-07-28 request: version and capabilities in _meta, mirrored in headers. */
+export async function modern(method: string, params: Record<string, unknown> = {}) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+    Authorization: `Bearer ${token}`,
+    "MCP-Protocol-Version": "2026-07-28",
+    "Mcp-Method": method,
+  };
+  if (typeof params.name === "string") headers["Mcp-Name"] = params.name;
+  const body = { jsonrpc: "2.0", id: ++rpcId, method, params: { ...params, _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} } } };
+  const res = await fetch(`${origin}/mcp`, { method: "POST", headers, body: JSON.stringify(body) });
+  return { status: res.status, body: (await res.json()) as any };
+}
+
 export async function call(name: string, args: unknown) {
   const t = performance.now();
   const r = await rpc("tools/call", { name, arguments: args });

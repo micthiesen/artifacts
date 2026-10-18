@@ -90,8 +90,10 @@ export const EXAMPLES: Example[] = [
     slug: "costs",
     label: "Cost report",
     title: "Cloud costs: September",
-    blurb: "A report from data files: sortable table, stacked chart and shared notes.",
+    blurb: "A report from data files: sortable table, stacked chart, a budget form and shared notes.",
     seed: [
+      { by: ANA, key: `form/budget/${ANA}`, value: { values: { team: "Search", budget: 3200, logs: true }, by: ANA }, minutesAgo: 240 },
+      { by: MARCUS, key: `form/budget/${MARCUS}`, value: { values: { team: "Data", budget: 4500, logs: false }, by: MARCUS }, minutesAgo: 75 },
       {
         by: TOM,
         key: "notes/followups",

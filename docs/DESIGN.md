@@ -165,13 +165,22 @@ The hosted service is free in early access; the terms promise admins 30
 days' notice before anything costs money, and guests never need a plan.
 Pricing plans are kept privately.
 
+A workspace has a plan (`src/worker/plans.ts`): Team has no limits, Free
+caps artifacts, members and stored bytes. The workspace enforces them on
+writes and new members; deleting is always allowed, so a full workspace can
+make room, and someone joining by email domain past the member limit stays
+a guest. Existing and operator-made workspaces are on Team; the operator
+moves them. Self-serve signup is built but off (`SELF_SERVE`): someone
+signed in makes one Free workspace, agreeing to the current terms, with a
+daily cap across everyone.
+
 The code is under FSL-1.1-ALv2 (`LICENSE.md`): anyone may self-host it for
 their own organization, but not offer it as a competing hosted service, and
 each release becomes Apache 2.0 after two years.
 
 ## Deliberately not built yet
 
-Billing, self-serve workspace signup, SSO/SCIM, custom domains per workspace,
+Billing, turning on self-serve signup, SSO/SCIM, custom domains per workspace,
 custom roles and groups (sharing with `@domain` or the whole workspace covers
 most of it), audit-log export (the activity log already records the events)
 and R2 storage for large assets (only needed once files over the 2 MB SQLite

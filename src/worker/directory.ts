@@ -6,6 +6,7 @@ import { DurableObject } from "cloudflare:workers";
 import { migrate, type Migration } from "./migrate.ts";
 import type { ChannelType } from "./notify.ts";
 import { DIRECTORY_TABLES } from "./tables.ts";
+import type { PlanId } from "./plans.ts";
 import {
   backupRuns,
   createShadows,
@@ -36,7 +37,7 @@ export type WorkspaceRecord = {
   jobError: { message: string; at: string } | null;
 };
 
-export type WorkspaceStats = { artifacts: number; members: number; bytes: number; lastActivity: string | null };
+export type WorkspaceStats = { artifacts: number; members: number; bytes: number; lastActivity: string | null; plan?: PlanId };
 export type WorkspaceJob = { kind: string; phase?: string; error?: string; startedAt: string };
 
 /** A saved passkey as the account page lists it (no key material). */
@@ -55,7 +56,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -68,9 +69,19 @@ const RESERVED = new Set([
   "status", "help", "docs", "blog", "login", "signin", "account", "billing", "mcp", "oauth", "cdn", "ws", "root",
 ]);
 
+/** One person however they tag their address: name+anything@example.com is name@example.com. */
+export function personKey(email: string): string {
+  const [local, domain] = email.toLowerCase().split("@");
+  return `${local.split("+")[0]}@${domain}`;
+}
+
 export function validSlug(slug: string): boolean {
   return /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/.test(slug) && !slug.includes("--") && !RESERVED.has(slug);
 }
+
+/** Self-serve workspaces: how many one person may make, and how many everyone may make a day. */
+const SELF_SERVE_PER_PERSON = 1;
+const SELF_SERVE_PER_DAY = 50;
 
 const CODE_TTL_MS = 10 * 60_000;
 // Anyone can ask for a code, so cap what one client, one address and everyone together can make us send.
@@ -146,6 +157,8 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX passkeys_by_email ON passkeys (email);
       CREATE TABLE passkey_challenges (challenge TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
     `),
+  // Self-serve workspaces: who made one and which terms they agreed to.
+  (sql) => sql.exec(`ALTER TABLE workspaces ADD COLUMN created_by TEXT; ALTER TABLE workspaces ADD COLUMN terms_accepted TEXT;`),
 ];
 
 export class Directory extends DurableObject {
@@ -183,11 +196,34 @@ export class Directory extends DurableObject {
 
   // ---- workspaces --------------------------------------------------------------
 
-  async createWorkspace(slug: string, name: string): Promise<WorkspaceRecord> {
+  /**
+   * A workspace someone makes for themselves (self-serve, when it's on): one
+   * each (name+tag@ addresses count as the same person), and a cap per day
+   * across everyone, so signup can't mint workspaces in bulk. Checked and
+   * recorded in one step, so two requests at once can't both pass. Records
+   * the version of the terms they agreed to.
+   */
+  async createOwnWorkspace(email: string, slug: string, name: string, terms: string): Promise<WorkspaceRecord> {
+    const person = personKey(email);
+    const mine = this.sql.exec(`SELECT COUNT(*) AS n FROM workspaces WHERE created_by = ?`, person).one().n as number;
+    if (mine >= SELF_SERVE_PER_PERSON) throw new DirectoryError("You already made a workspace. Ask its admins to add people, or contact us for another.");
+    const today = this.sql.exec(`SELECT COUNT(*) AS n FROM workspaces WHERE created_by IS NOT NULL AND created_at > ?`, new Date(Date.now() - 86_400_000).toISOString()).one().n as number;
+    if (today >= SELF_SERVE_PER_DAY) throw new DirectoryError("We can't make more workspaces today. Try again tomorrow.");
+    return this.createWorkspace(slug, name, { createdBy: person, terms });
+  }
+
+  async createWorkspace(slug: string, name: string, own?: { createdBy: string; terms: string }): Promise<WorkspaceRecord> {
     if (RESERVED.has(slug)) throw new DirectoryError(`"${slug}" is reserved for the site itself; pick another workspace name`);
     if (!validSlug(slug)) throw new DirectoryError(`"${slug}" can't be a workspace name: use 3-32 lowercase letters, digits and single hyphens, starting with a letter`);
     if (this.workspace(slug)) throw new DirectoryError(`workspace ${slug} already exists`);
-    this.sql.exec(`INSERT INTO workspaces (slug, name, created_at) VALUES (?, ?, ?)`, slug, name.trim() || slug, new Date().toISOString());
+    this.sql.exec(
+      `INSERT INTO workspaces (slug, name, created_at, created_by, terms_accepted) VALUES (?, ?, ?, ?, ?)`,
+      slug,
+      name.trim() || slug,
+      new Date().toISOString(),
+      own?.createdBy ?? null,
+      own?.terms ?? null,
+    );
     this.markDirty();
     await this.publish();
     return this.workspace(slug)!;

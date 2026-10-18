@@ -9,10 +9,31 @@ import { domainOf, isValidPrincipal, sharePrincipal, WORKSPACE_PRINCIPAL } from 
 import { applyJsonPatch, applyTextEdits, EditError, grepFiles, type JsonPatchOp, type TextEdit } from "./edit.ts";
 import { diffBlocks, type BlockInfo } from "./blocks.ts";
 import { composeMessage, mentionedEmails, type OutboxItem } from "./notifications.ts";
-import { sendToChannel, type NotifyEnv } from "./notify.ts";
+import { isBlockedHost, sendToChannel, type NotifyEnv } from "./notify.ts";
+import { DEFAULT_PLAN, PLANS, isPlan, type PlanId } from "./plans.ts";
+import {
+  EVENT_ERRORS,
+  EventsFailure,
+  canonicalArgs,
+  cursorOf,
+  errorOf,
+  failureOf,
+  matches,
+  parseArgs,
+  secretBytes,
+  seqOf,
+  signWebhook,
+  subscriptionId,
+  toOccurrence,
+  type DeliveryError,
+  type EventArgs,
+  type EventName,
+  type LoggedEvent,
+  type Occurrence,
+} from "./events.ts";
 import { migrate, type Migration } from "./migrate.ts";
 import { randomId, type DirectoryApi, type WorkspaceRole, type WorkspaceStats } from "./directory.ts";
-import { b64url } from "./session.ts";
+import { b64url, timingSafeEqual } from "./session.ts";
 import { DATA_TABLES } from "./tables.ts";
 import {
   backupRuns,
@@ -118,7 +139,7 @@ export type HubApi = AsyncMethods<
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
     | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
-    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin"
+    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan"
   >
 > & { fetch(request: Request): Promise<Response> };
 
@@ -243,7 +264,50 @@ const MIGRATIONS: Migration[] = [
       -- People an admin removed: a join domain doesn't bring them back.
       CREATE TABLE removed_members (email TEXT PRIMARY KEY, removed_by TEXT, removed_at TEXT NOT NULL);
     `),
+  // MCP events: webhook subscriptions (soft state with a TTL of at most a day,
+  // not backed up) and callback URLs each person has proven they control.
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE event_subs (
+        id TEXT PRIMARY KEY, principal TEXT NOT NULL, url TEXT NOT NULL, name TEXT NOT NULL, args TEXT NOT NULL,
+        secret TEXT NOT NULL, old_secret TEXT, old_secret_until INTEGER, cursor_seq INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL, next_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0, suspended INTEGER NOT NULL DEFAULT 0, last_delivery_at TEXT,
+        last_error TEXT, failed_since TEXT, created_at TEXT NOT NULL);
+      CREATE INDEX event_subs_by_next ON event_subs (next_at);
+      CREATE INDEX event_subs_by_principal ON event_subs (principal);
+      CREATE TABLE event_receivers (principal TEXT NOT NULL, url TEXT NOT NULL, verified_until INTEGER NOT NULL, PRIMARY KEY (principal, url));
+      CREATE TABLE event_verifications (principal TEXT NOT NULL, at INTEGER NOT NULL);
+      CREATE INDEX event_verifications_by_principal ON event_verifications (principal, at);
+      -- events/poll and subscribe with maxAgeMs find where to start by time.
+      CREATE INDEX events_by_at ON events (at);
+    `),
 ];
+
+/** MCP event webhooks: how soon after activity they go out, how long a subscription lasts, how hard to retry. */
+const EVENT_DELAY_MS = 2_000;
+const HOUR_MS = 3600_000;
+const DAY_MS = 24 * HOUR_MS;
+const EVENT_TTL_DEFAULT_MS = HOUR_MS;
+const EVENT_TTL_MIN_MS = 60_000;
+const EVENT_TTL_MAX_MS = DAY_MS;
+const EVENT_SUBS_PER_PERSON = 20;
+/** Verification challenges one person may send an hour: each is a POST to a URL they chose. */
+const EVENT_VERIFICATIONS_PER_HOUR = 10;
+const EVENT_RETRY_MS = [10_000, 60_000, 5 * 60_000, 10 * 60_000];
+/** A subscription whose endpoint has failed this long stops until the client refreshes it. */
+const EVENT_SUSPEND_AFTER_MS = HOUR_MS;
+/** Log rows one delivery pass scans per subscription, and one poll scans. */
+const EVENT_SCAN = 200;
+const EVENT_POLL_SCAN = 500;
+const EVENT_POLL_MS = 60_000;
+/** One alarm spends at most this long on webhook deliveries, so a slow endpoint can't keep it awake. */
+const EVENT_DELIVERY_BUDGET_MS = 10_000;
+const RECEIVER_VERIFIED_MS = DAY_MS;
+/** Old secrets keep signing this long after a rotation, so in-flight deliveries still verify. */
+const SECRET_GRACE_MS = 10 * 60_000;
+const WEBHOOK_TIMEOUT_MS = 5_000;
+/** Text in event payloads is cut to this; the full answer is in shared state or the thread. */
+const EVENT_TEXT_MAX = 500;
 
 const PUBLIC_DAYS_MAX = 365;
 const JOIN_DOMAINS_MAX = 20;
@@ -291,7 +355,7 @@ export class Workspace extends DurableObject {
   }
 
   /** First-time setup by the operator: name the workspace and add its first admin. */
-  async provision(input: { slug: string; name: string; admin: string }) {
+  async provision(input: { slug: string; name: string; admin: string; plan?: PlanId }) {
     if (!this.ready) {
       migrate(this.ctx.storage, MIGRATIONS);
       this.ready = true;
@@ -305,6 +369,7 @@ export class Workspace extends DurableObject {
     this.setSetting("slug", input.slug);
     this.setSetting("name", input.name);
     if (!this.setting("created_at")) this.setSetting("created_at", new Date().toISOString());
+    if (input.plan) this.setSetting("plan", input.plan);
     await this.setMember(input.admin, "admin", null);
     return this.info();
   }
@@ -345,7 +410,67 @@ export class Workspace extends DurableObject {
       members: this.sql.exec(`SELECT COUNT(*) AS n FROM members`).one().n as number,
       bytes: this.sql.databaseSize,
       lastActivity: (this.sql.exec(`SELECT MAX(at) AS at FROM events`).one().at as string | null) ?? null,
+      plan: this.planId(),
     };
+  }
+
+  // ---- plan ---------------------------------------------------------------------
+
+  private planId(): PlanId {
+    const p = this.setting("plan");
+    return isPlan(p) ? p : DEFAULT_PLAN;
+  }
+
+  /** The plan, its limits and what the workspace uses of them. */
+  plan() {
+    const id = this.planId();
+    const { artifacts, members } = this.stats();
+    return { id, label: PLANS[id].label, limits: PLANS[id].limits, usage: { artifacts, members, bytes: this.storedBytes() } };
+  }
+
+  /** Operator only (no billing yet). */
+  async setPlan(id: PlanId) {
+    if (!isPlan(id)) throw new HubError(`unknown plan ${id}`);
+    this.setSetting("plan", id);
+    await this.directory().recordStats(this.info().slug, this.stats());
+    return this.plan();
+  }
+
+  /**
+   * What a workspace stores for its plan's storage limit: file contents,
+   * assets, shared state and screenshots. Unlike the database file's size, it
+   * falls as soon as something is deleted.
+   */
+  private storedBytes(): number {
+    const sum = (q: string) => this.sql.exec(q).one().n as number;
+    return (
+      sum(`SELECT COALESCE(SUM(length(content)), 0) AS n FROM blobs`) +
+      sum(`SELECT COALESCE(SUM(bytes), 0) AS n FROM assets`) +
+      sum(`SELECT COALESCE(SUM(length(value)), 0) AS n FROM state`) +
+      sum(`SELECT COALESCE(SUM(length(screenshot)), 0) AS n FROM checks`)
+    );
+  }
+
+  /** Refuses a write that would go past the plan. Deleting is always allowed, so a full workspace can make room. */
+  private withinPlan(kind: "artifacts" | "bytes" | "members" | "changesPerDay") {
+    const plan = PLANS[this.planId()];
+    const max = plan.limits[kind];
+    if (max === null) return;
+    const count = (q: string, ...args: SqlStorageValue[]) => this.sql.exec(q, ...args).one().n as number;
+    const used = {
+      artifacts: () => count(`SELECT COUNT(*) AS n FROM artifacts`),
+      members: () => count(`SELECT COUNT(*) AS n FROM members`),
+      bytes: () => this.storedBytes(),
+      changesPerDay: () => count(`SELECT COUNT(*) AS n FROM events WHERE at > ? AND type = 'version'`, new Date(Date.now() - DAY_MS).toISOString()),
+    }[kind]();
+    if (used < max) return;
+    const limit = {
+      artifacts: `${max} artifacts. Delete artifacts you no longer need to make room.`,
+      members: `${max} members. Remove a member to make room.`,
+      bytes: `${Math.round(max / 1024 / 1024)} MB of storage. Delete artifacts you no longer need to make room.`,
+      changesPerDay: `${max} saved changes a day. Try again later; changes save again as the oldest of today's fall out of the last 24 hours.`,
+    }[kind];
+    throw new HubError(`This workspace is on the ${plan.label} plan, which allows ${limit}`);
   }
 
   /** Deletes everything this workspace stores, including its backups. */
@@ -394,6 +519,7 @@ export class Workspace extends DurableObject {
     if (!isValidPrincipal(clean) || !clean.includes("@") || clean.startsWith("@")) throw new HubError(`"${email}" is not an email address`);
     if (role !== null && role !== "admin" && role !== "member") throw new HubError(`unknown role ${role}`);
     const current = this.memberRole(clean);
+    if (!current && role) this.withinPlan("members");
     if (current === "admin" && role !== "admin") {
       const admins = this.sql.exec(`SELECT COUNT(*) AS n FROM members WHERE role = 'admin'`).one().n as number;
       if (admins <= 1) throw new HubError("a workspace needs at least one admin");
@@ -404,6 +530,8 @@ export class Workspace extends DurableObject {
         // Their agents lose access with them, and what they owned passes to
         // whoever removed them (or the remaining admins), so nothing is stranded.
         this.sql.exec(`DELETE FROM tokens WHERE email = ?`, clean);
+        // Their event subscriptions end on the next alarm, with a terminated notice.
+        this.sql.exec(`UPDATE event_subs SET next_at = ?, suspended = 0 WHERE principal = ?`, Date.now(), clean);
         const heir = by && by !== clean ? by : (this.sql.exec(`SELECT email FROM members WHERE role = 'admin' ORDER BY email LIMIT 1`).toArray()[0]?.email as string);
         if (heir) this.sql.exec(`UPDATE artifacts SET owner = ? WHERE owner = ?`, heir, clean);
         this.sql.exec(
@@ -499,6 +627,12 @@ export class Workspace extends DurableObject {
     // Not while a restore or import is replacing the members.
     if (current || this.offline() || !this.joinsByDomain(email)) return current;
     if (this.sql.exec(`SELECT 1 FROM removed_members WHERE email = ?`, email).toArray().length) return null;
+    // A full plan leaves them a guest: they still see what's shared with them.
+    try {
+      this.withinPlan("members");
+    } catch {
+      return null;
+    }
     try {
       await this.setMember(email, "member", `auto:${email.split("@")[1]}`);
     } catch (err) {
@@ -754,6 +888,9 @@ export class Workspace extends DurableObject {
   // ---- writes ------------------------------------------------------------
 
   async create(input: { title: string; description?: string; files: Record<string, string>; owner: string; actor?: Actor }): Promise<WriteResult> {
+    this.withinPlan("artifacts");
+    this.withinPlan("bytes");
+    this.withinPlan("changesPerDay");
     const { build, errors } = await buildArtifact(input.files);
     if (!build) return { ok: false, errors };
     const hashes = await hashFiles(input.files);
@@ -1068,6 +1205,7 @@ export class Workspace extends DurableObject {
       }
     });
     await step("notifications", () => this.deliverDue());
+    await step("events", () => this.deliverEvents());
     await step("sources", async () => {
       const sourcesAt = this.nextSourceAt();
       if (sourcesAt !== null && sourcesAt <= Date.now()) await this.refreshSources();
@@ -1103,6 +1241,9 @@ export class Workspace extends DurableObject {
     if (due !== null) times.push(due);
     const source = this.nextSourceAt();
     if (source !== null) times.push(source);
+    // Webhooks: the next due delivery, or else the next subscription to expire (to sweep it).
+    const events = this.sql.exec(`SELECT MIN(MIN(COALESCE(next_at, expires_at), expires_at)) AS t FROM event_subs`).one().t as number | null;
+    if (events !== null) times.push(events);
     const backup = this.setting("backup_due_at");
     if (backup) times.push(Number(backup));
     const job = this.job();
@@ -1158,6 +1299,7 @@ export class Workspace extends DurableObject {
 
   putAsset(id: string, path: string, contentType: string, data: Uint8Array): { path: string; bytes: number } {
     this.requireArtifact(id);
+    this.withinPlan("bytes");
     const total = this.sql.exec(`SELECT COALESCE(SUM(bytes), 0) AS n FROM assets WHERE artifact_id = ? AND path != ?`, id, path).one().n as number;
     if (total + data.byteLength > ASSETS_MAX_BYTES) throw new HubError(`assets for this artifact would exceed ${ASSETS_MAX_BYTES / 1e6} MB`);
     this.sql.exec(
@@ -1612,6 +1754,8 @@ export class Workspace extends DurableObject {
 
   /** After a restore or import: mirror the members and stats to the directory (retried by the alarm if it's down), and back up the new state tonight. */
   private async afterLoad() {
+    // Subscriptions' cursors point into the log that was just replaced; clients resubscribe.
+    this.sql.exec(`DELETE FROM event_subs`);
     this.dirty = false;
     this.markDirty();
     this.setSetting("resync_due", "1");
@@ -1892,6 +2036,8 @@ export class Workspace extends DurableObject {
       );
     }
     this.markDirty();
+    // Webhook subscribers hear about it on the next alarm.
+    this.wakeSubscriptions(id);
     return seq;
   }
 
@@ -2218,6 +2364,289 @@ export class Workspace extends DurableObject {
     return this.ctx.getWebSockets(id).some((ws) => (ws.deserializeAttachment() as SocketTag).email === email);
   }
 
+  // ---- MCP events -------------------------------------------------------------
+
+  /** Occurrences of `name` after `seq` that `principal` may see, oldest first, scanning at most `scan` log rows. */
+  private occurrences(principal: string, name: EventName, args: EventArgs, after: number, scan: number, limit: number) {
+    const origin = this.setting("origin") ?? "";
+    const rows = this.sql
+      .exec(`SELECT e.*, a.title AS title FROM events e JOIN artifacts a ON a.id = e.artifact_id WHERE e.seq > ? ORDER BY e.seq LIMIT ?`, after, scan)
+      .toArray();
+    const out: Occurrence[] = [];
+    let last = after;
+    for (const r of rows) {
+      const e: LoggedEvent = {
+        seq: r.seq as number, at: r.at as string, artifact: r.artifact_id as string, title: r.title as string,
+        actor: (r.actor as string | null) ?? null, type: r.type as string, data: JSON.parse(r.data as string),
+      };
+      // The log keeps a short summary of state values; the answer itself is read from shared state.
+      const key = e.type === "state" ? String(e.data.key) : null;
+      const current = key && /^(approve|form|poll|comments)\//.test(key) ? this.sql.exec(`SELECT value FROM state WHERE artifact_id = ? AND key = ?`, e.artifact, key).toArray()[0] : undefined;
+      const o = toOccurrence(e, name, origin, current ? JSON.parse(current.value as string) : undefined, EVENT_TEXT_MAX);
+      if (o && matches(o, args) && this.canOpen(e.artifact, principal)) {
+        if (out.length >= limit) return { events: out, last, more: true };
+        out.push({ ...o, cursor: cursorOf(e.seq) });
+      }
+      last = e.seq;
+    }
+    return { events: out, last, more: rows.length === scan };
+  }
+
+  private latestSeq(): number {
+    return this.sql.exec(`SELECT COALESCE(MAX(seq), 0) AS n FROM events`).one().n as number;
+  }
+
+  /**
+   * Where replay starts for a client's cursor: the cursor itself, unless the log
+   * no longer reaches back that far or `maxAgeMs` cuts it shorter (truncated).
+   */
+  private replayFrom(cursor: unknown, maxAgeMs: unknown): { seq: number; truncated: boolean } {
+    const requested = seqOf(cursor);
+    const latest = this.latestSeq();
+    if (requested === null || requested >= latest) return { seq: Math.min(requested ?? latest, latest), truncated: false };
+    let floor = (this.sql.exec(`SELECT COALESCE(MIN(seq), 1) AS n FROM events`).one().n as number) - 1;
+    if (typeof maxAgeMs === "number" && maxAgeMs >= 0) {
+      const since = new Date(Date.now() - maxAgeMs).toISOString();
+      const first = this.sql.exec(`SELECT MIN(seq) AS n FROM events WHERE at >= ?`, since).one().n as number | null;
+      floor = Math.max(floor, (first ?? latest + 1) - 1);
+    }
+    return requested < floor ? { seq: floor, truncated: true } : { seq: requested, truncated: false };
+  }
+
+  private requireVisible(principal: string, args: EventArgs) {
+    if (args.artifact && !this.canOpen(args.artifact, principal)) {
+      throw new EventsFailure(EVENT_ERRORS.Forbidden, `No artifact ${args.artifact} that you can open.`);
+    }
+  }
+
+  /** events/poll: one subscription's events after its cursor; nothing is stored here. */
+  eventsPoll(principal: string, input: PollInput) {
+    return eventsResult(() => {
+      const { name, args } = parseArgs(input.name, input.arguments);
+      this.requireVisible(principal, args);
+      const from = this.replayFrom(input.cursor, input.maxAgeMs);
+      if (input.cursor === null || input.cursor === undefined) {
+        return { events: [], cursor: cursorOf(from.seq), truncated: false, hasMore: false, nextPollMs: EVENT_POLL_MS };
+      }
+      const max = typeof input.maxEvents === "number" && input.maxEvents >= 1 ? Math.min(Math.floor(input.maxEvents), 100) : 50;
+      const r = this.occurrences(principal, name, args, from.seq, EVENT_POLL_SCAN, max);
+      // Poll results carry the cursor once, at the top.
+      const events = r.events.map(({ cursor: _c, ...o }) => o);
+      return { events, cursor: cursorOf(r.last), truncated: from.truncated, hasMore: r.more, nextPollMs: EVENT_POLL_MS };
+    });
+  }
+
+  /**
+   * events/subscribe (webhook): create or refresh a subscription. A new
+   * callback URL must answer a signed challenge first, so nobody can point
+   * deliveries at someone else's endpoint.
+   */
+  async eventsSubscribe(principal: string, input: SubscribeInput) {
+    return eventsResult(async () => {
+      const { name, args } = parseArgs(input.name, input.arguments);
+      this.requireVisible(principal, args);
+      const delivery = input.delivery ?? {};
+      if (delivery.mode !== undefined && delivery.mode !== "webhook") {
+        throw new EventsFailure(EVENT_ERRORS.Unsupported, "events/subscribe is for webhook delivery; poll with events/poll.", { feature: "deliveryMode", value: delivery.mode });
+      }
+      const url = callbackUrl(delivery.url);
+      const secret = String(delivery.secret ?? "");
+      secretBytes(secret);
+      const from = this.replayFrom(input.cursor, input.maxAgeMs);
+      const id = await subscriptionId(principal, url, name, args);
+      const ttl = typeof input.ttlMs === "number" ? input.ttlMs : EVENT_TTL_DEFAULT_MS;
+      const now = Date.now();
+      const live = () => this.sql.exec(`SELECT * FROM event_subs WHERE id = ? AND expires_at > ?`, id, Date.now()).toArray()[0];
+      const roomFor = () => {
+        const mine = this.sql.exec(`SELECT COUNT(*) AS n FROM event_subs WHERE principal = ? AND expires_at > ?`, principal, Date.now()).one().n as number;
+        if (mine >= EVENT_SUBS_PER_PERSON) {
+          throw new EventsFailure(EVENT_ERRORS.ResourceExhausted, `At most ${EVENT_SUBS_PER_PERSON} event subscriptions per person; unsubscribe one first.`, { limit: "subscriptions", max: EVENT_SUBS_PER_PERSON });
+        }
+      };
+      let existing = live();
+      if (!existing) roomFor();
+      const verified = this.sql.exec(`SELECT verified_until FROM event_receivers WHERE principal = ? AND url = ?`, principal, url).toArray()[0];
+      // A new endpoint, or a new secret it hasn't proven it holds, answers a challenge first.
+      if (!verified || (verified.verified_until as number) < now || (existing && existing.secret !== secret)) {
+        this.sql.exec(`DELETE FROM event_verifications WHERE at < ?`, now - HOUR_MS);
+        const recent = this.sql.exec(`SELECT COUNT(*) AS n FROM event_verifications WHERE principal = ?`, principal).one().n as number;
+        if (recent >= EVENT_VERIFICATIONS_PER_HOUR) {
+          throw new EventsFailure(EVENT_ERRORS.ResourceExhausted, "Too many new webhook endpoints this hour; try again later.", { limit: "verifications", max: EVENT_VERIFICATIONS_PER_HOUR });
+        }
+        this.sql.exec(`INSERT INTO event_verifications (principal, at) VALUES (?, ?)`, principal, now);
+        await verifyReceiver(url, id, secret);
+        this.sql.exec(
+          `INSERT INTO event_receivers (principal, url, verified_until) VALUES (?, ?, ?) ON CONFLICT (principal, url) DO UPDATE SET verified_until = excluded.verified_until`,
+          principal,
+          url,
+          Date.now() + RECEIVER_VERIFIED_MS,
+        );
+        // Other requests may have run during the challenge.
+        existing = live();
+        if (!existing) roomFor();
+      }
+      // No subscription outlives a day: a client that stops refreshing is forgotten by then.
+      const expires = Date.now() + Math.min(Math.max(ttl, EVENT_TTL_MIN_MS), EVENT_TTL_MAX_MS);
+      if (existing) {
+        // A live subscription keeps its position and any retry in progress; a refresh revives a suspended one.
+        const rotated = existing.secret !== secret;
+        const pending = (existing.attempts as number) > 0 && existing.next_at !== null && !existing.suspended;
+        this.sql.exec(
+          `UPDATE event_subs SET secret = ?, old_secret = ?, old_secret_until = ?, expires_at = ?, suspended = 0, next_at = ? WHERE id = ?`,
+          secret,
+          rotated ? existing.secret : existing.old_secret,
+          rotated ? Date.now() + SECRET_GRACE_MS : existing.old_secret_until,
+          expires,
+          pending ? existing.next_at : Date.now() + EVENT_DELAY_MS,
+          id,
+        );
+      } else {
+        // New, or lapsed and not yet swept: delivery starts from the client's cursor.
+        this.sql.exec(`DELETE FROM event_subs WHERE id = ?`, id);
+        this.sql.exec(
+          `INSERT INTO event_subs (id, principal, url, name, args, secret, cursor_seq, expires_at, next_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id,
+          principal,
+          url,
+          name,
+          canonicalArgs(args),
+          secret,
+          from.seq,
+          expires,
+          Date.now() + EVENT_DELAY_MS,
+          new Date().toISOString(),
+        );
+      }
+      await this.armAlarm();
+      const row = this.sql.exec(`SELECT * FROM event_subs WHERE id = ?`, id).one();
+      return {
+        id,
+        refreshBefore: new Date(expires).toISOString(),
+        cursor: cursorOf(row.cursor_seq as number),
+        truncated: existing ? false : from.truncated,
+        ...(existing
+          ? {
+              deliveryStatus: {
+                active: true,
+                lastDeliveryAt: (row.last_delivery_at as string | null) ?? null,
+                lastError: (row.last_error as string | null) ?? null,
+                ...(row.failed_since ? { failedSince: row.failed_since as string } : {}),
+              },
+            }
+          : {}),
+      };
+    });
+  }
+
+  /** events/unsubscribe: stop a webhook subscription now. */
+  async eventsUnsubscribe(principal: string, input: UnsubscribeInput) {
+    return eventsResult(async () => {
+      const { name, args } = parseArgs(input.name, input.arguments);
+      const id = await subscriptionId(principal, callbackUrl(input.delivery?.url), name, args);
+      if (!this.sql.exec(`DELETE FROM event_subs WHERE id = ?`, id).rowsWritten) {
+        throw new EventsFailure(EVENT_ERRORS.NotFound, "No such subscription.", { kind: "subscription" });
+      }
+      return {};
+    });
+  }
+
+  /** Wakes the subscriptions an event could matter to: unfiltered ones, and those filtered to its artifact. */
+  private wakeSubscriptions(artifact: string) {
+    const woken = this.sql.exec(
+      `UPDATE event_subs SET next_at = ? WHERE next_at IS NULL AND suspended = 0 AND attempts = 0
+         AND (json_extract(args, '$.artifact') IS NULL OR json_extract(args, '$.artifact') = ?)`,
+      Date.now() + EVENT_DELAY_MS,
+      artifact,
+    ).rowsWritten;
+    if (woken) void this.armAlarm();
+  }
+
+  /**
+   * Webhook delivery, from the alarm: each due subscription gets its events in
+   * order, one POST each, within a time budget so a slow endpoint can't keep
+   * the workspace awake. Expired subscriptions are dropped first.
+   */
+  async deliverEvents(now = Date.now()) {
+    this.sql.exec(`DELETE FROM event_subs WHERE expires_at <= ?`, now);
+    this.sql.exec(`DELETE FROM event_receivers WHERE verified_until <= ?`, now);
+    const due = this.sql.exec(`SELECT * FROM event_subs WHERE next_at IS NOT NULL AND next_at <= ? ORDER BY next_at LIMIT 50`, now).toArray();
+    const deadline = Date.now() + EVENT_DELIVERY_BUDGET_MS;
+    let sends = 0;
+    for (const sub of due) {
+      if (Date.now() >= deadline || sends >= SENDS_PER_ALARM) break;
+      try {
+        sends += await this.deliverTo(sub, now, deadline, SENDS_PER_ALARM - sends);
+      } catch (err) {
+        // One broken subscription doesn't hold up the rest; it tries again later.
+        console.error("event delivery failed", err);
+        this.sql.exec(`UPDATE event_subs SET next_at = ? WHERE id = ?`, now + EVENT_RETRY_MS[1], sub.id);
+      }
+    }
+    return sends;
+  }
+
+  /** Delivers one subscription's pending events; returns how many POSTs it made. */
+  private async deliverTo(sub: Record<string, SqlStorageValue>, now: number, deadline: number, maxSends: number): Promise<number> {
+    const id = sub.id as string;
+    const principal = sub.principal as string;
+    const url = sub.url as string;
+    const secrets = [sub.secret as string, ...(sub.old_secret && (sub.old_secret_until as number) > now ? [sub.old_secret as string] : [])];
+    if (!this.memberRole(principal)) {
+      // Removed from the workspace: say so once, and forget the subscription.
+      const body = JSON.stringify({ type: "terminated", error: { code: EVENT_ERRORS.Forbidden, message: "Forbidden", data: { reason: "Access revoked" } } });
+      await postWebhook(url, id, `msg_terminated_${randomId(12)}`, body, secrets);
+      this.sql.exec(`DELETE FROM event_subs WHERE id = ?`, id);
+      return 1;
+    }
+    const batch = this.occurrences(principal, sub.name as EventName, JSON.parse(sub.args as string) as EventArgs, sub.cursor_seq as number, EVENT_SCAN, 20);
+    let cursor = sub.cursor_seq as number;
+    let sends = 0;
+    let failure: DeliveryError | null = null;
+    let stopped = false;
+    for (const o of batch.events) {
+      if (sends >= maxSends || Date.now() >= deadline) {
+        stopped = true;
+        break;
+      }
+      sends++;
+      const result = await postWebhook(url, id, o.eventId, JSON.stringify(o), secrets);
+      // 410 (the receiver doesn't want it) and 413 (too large) aren't retried.
+      if (result.ok || result.status === 410 || result.status === 413) {
+        cursor = seqOf(o.cursor)!;
+        if (result.ok) this.sql.exec(`UPDATE event_subs SET last_delivery_at = ?, last_error = NULL, failed_since = NULL WHERE id = ?`, new Date().toISOString(), id);
+        continue;
+      }
+      failure = result.error!;
+      break;
+    }
+    if (failure) {
+      const attempts = (sub.attempts as number) + 1;
+      // Out of retries: give up on that event (its cursor still lets the client replay it) and go on.
+      const giveUp = attempts > EVENT_RETRY_MS.length;
+      if (giveUp) cursor = seqOf(batch.events.find((o) => seqOf(o.cursor)! > cursor)!.cursor)!;
+      const failedSince = (sub.failed_since as string | null) ?? new Date(now).toISOString();
+      // Failing for an hour: stop until the client refreshes, which is its sign it still wants these.
+      const suspend = now - Date.parse(failedSince) >= EVENT_SUSPEND_AFTER_MS;
+      this.sql.exec(
+        `UPDATE event_subs SET cursor_seq = ?, attempts = ?, next_at = ?, suspended = ?, last_error = ?, failed_since = ? WHERE id = ?`,
+        cursor,
+        giveUp ? 0 : attempts,
+        suspend ? null : now + (giveUp ? EVENT_DELAY_MS : EVENT_RETRY_MS[attempts - 1]),
+        suspend ? 1 : 0,
+        failure,
+        failedSince,
+        id,
+      );
+      return sends;
+    }
+    // Every scanned row is handled, matching or not, so the cursor moves past all of them.
+    if (!stopped) cursor = Math.max(cursor, batch.last);
+    // Anything logged while the POSTs were in flight couldn't wake this row (it was already due), so look again.
+    const more = batch.more || stopped || cursor < this.latestSeq();
+    this.sql.exec(`UPDATE event_subs SET cursor_seq = ?, attempts = 0, next_at = ? WHERE id = ?`, cursor, more ? Date.now() + 1000 : null, id);
+    return sends;
+  }
+
   // ---- internals -------------------------------------------------------------
 
   private async change(
@@ -2236,8 +2665,12 @@ export class Workspace extends DurableObject {
     });
     if (baseVersion !== undefined && baseVersion !== current) return stale(current, baseVersion);
     const files = this.files(id);
+    const before = Object.values(files).reduce((n, t) => n + t.length, 0);
     try {
       mutate(files);
+      // Over the storage limit, edits that don't add bytes still go through, so people can trim.
+      if (Object.values(files).reduce((n, t) => n + t.length, 0) > before) this.withinPlan("bytes");
+      this.withinPlan("changesPerDay");
     } catch (err) {
       if (err instanceof EditError || err instanceof HubError) {
         return { ok: false, version: current, errors: [{ path: "", message: err.message }] };
@@ -2534,6 +2967,14 @@ function cleanAnchor(anchor: Anchor | null): Anchor | null {
  * Server-side checks and stamps for the kit's collab keys written by a person.
  * Other keys pass through unchanged.
  */
+/**
+ * The version a person answered on: the page they had open says (a tab left
+ * open on an old version answers that one), never later than the artifact.
+ */
+function seenVersion(claimed: unknown, current: number): number {
+  return typeof claimed === "number" && Number.isInteger(claimed) && claimed >= 1 && claimed <= current ? claimed : current;
+}
+
 /** `approve/<id>/<email>` and `form/<id>/<email>`: one decision or form response per person. */
 const RESPONSE_KEY = /^(approve|form)\/([^/]+)\/(.+)$/;
 const RESPONSE_ID = /^[\w.-]{1,64}$/;
@@ -2567,7 +3008,7 @@ function stampCollab(
       if (value.decision !== "approve" && value.decision !== "changes") throw new HubError('a decision is "approve" or "changes"');
       const note = typeof value.note === "string" ? value.note.trim() : "";
       if (note.length > COMMENT_MAX_CHARS) throw new HubError(`notes are limited to ${COMMENT_MAX_CHARS} characters`);
-      return { decision: value.decision, ...(note ? { note } : {}), by, at: Date.now(), version };
+      return { decision: value.decision, ...(note ? { note } : {}), by, at: Date.now(), version: seenVersion(value.version, version) };
     }
     const values = value.values;
     if (!values || typeof values !== "object" || Array.isArray(values)) throw new HubError("a form response needs values");
@@ -2578,7 +3019,7 @@ function stampCollab(
       if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") throw new HubError(`form field "${name.slice(0, 40)}" must be text, a number or true/false`);
       if (typeof v === "string" && v.length > COMMENT_MAX_CHARS) throw new HubError(`form field "${name.slice(0, 40)}" is limited to ${COMMENT_MAX_CHARS} characters`);
     }
-    return { values, by, at: Date.now(), version };
+    return { values, by, at: Date.now(), version: seenVersion(value.version, version) };
   }
   if (key.startsWith("comments/")) {
     if (exists && existingBy !== null && existingBy !== by && role !== "owner") {
@@ -2595,4 +3036,86 @@ function stampCollab(
     return key.startsWith("notes/") ? { ...value, by, at: Date.now() } : { ...value, by };
   }
   return value;
+}
+
+export type PollInput = { name: string; arguments?: unknown; cursor?: unknown; maxAgeMs?: unknown; maxEvents?: unknown };
+export type SubscribeInput = {
+  name: string;
+  arguments?: unknown;
+  delivery?: { mode?: unknown; url?: unknown; secret?: unknown };
+  cursor?: unknown;
+  maxAgeMs?: unknown;
+  ttlMs?: unknown;
+};
+export type UnsubscribeInput = { name: string; arguments?: unknown; delivery?: { url?: unknown } };
+
+/** The answer to an events/* call as a value: errors keep their code and data, which a thrown Error loses over RPC. */
+export type EventsResult<T> = { result: T } | { error: { code: number; message: string; data?: Record<string, unknown> } };
+
+async function eventsResult<T>(fn: () => T | Promise<T>): Promise<EventsResult<T>> {
+  try {
+    return { result: await fn() };
+  } catch (err) {
+    if (err instanceof EventsFailure) return { error: { code: err.code, message: err.message, ...(err.data ? { data: err.data } : {}) } };
+    throw err;
+  }
+}
+
+/** A webhook callback URL: https, a public host, no credentials or fragment. */
+function callbackUrl(raw: unknown): string {
+  let u: URL;
+  try {
+    u = new URL(String(raw ?? ""));
+  } catch {
+    throw new EventsFailure(EVENT_ERRORS.InvalidParams, "delivery.url must be an https URL.");
+  }
+  // The default https port only, so subscribing can't be used to knock on arbitrary services.
+  if (u.protocol !== "https:" || u.port || u.username || u.password || isBlockedHost(u.hostname)) {
+    throw new EventsFailure(EVENT_ERRORS.InvalidParams, "delivery.url must be an https URL on a public host and the default port, without credentials.");
+  }
+  u.hash = "";
+  return u.href;
+}
+
+/**
+ * One signed POST (Standard Webhooks headers plus X-MCP-Subscription-Id), never
+ * following redirects. Failures are reported only as the SEP's categories.
+ */
+async function postWebhook(url: string, subscription: string, messageId: string, body: string, secrets: string[], readBody = false) {
+  // Checked again at delivery: the host must still be public.
+  if (isBlockedHost(new URL(url).hostname)) return { ok: false, status: 0, error: "connection_refused" as DeliveryError };
+  const timestamp = Math.floor(Date.now() / 1000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      redirect: "manual",
+      signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "artifacts.boo-events/1",
+        "webhook-id": messageId,
+        "webhook-timestamp": String(timestamp),
+        "webhook-signature": await signWebhook(secrets, messageId, timestamp, body),
+        "X-MCP-Subscription-Id": subscription,
+      },
+      body,
+    });
+    const ok = res.status >= 200 && res.status < 300;
+    // Only a verification answer is read; other bodies are dropped unread.
+    if (!readBody) await res.body?.cancel();
+    return { ok, status: res.status, error: ok ? undefined : failureOf(res.status), res };
+  } catch (err) {
+    return { ok: false, status: 0, error: errorOf(err) };
+  }
+}
+
+/** The challenge handshake: the endpoint must echo a fresh nonce from a signed verification POST. */
+async function verifyReceiver(url: string, subscription: string, secret: string) {
+  const challenge = randomId(24);
+  const r = await postWebhook(url, subscription, `msg_verification_${randomId(12)}`, JSON.stringify({ type: "verification", challenge }), [secret], true);
+  let echoed: unknown = null;
+  if (r.ok && r.res) echoed = ((await r.res.json().catch(() => null)) as { challenge?: unknown } | null)?.challenge;
+  if (!r.ok || typeof echoed !== "string" || !timingSafeEqual(echoed, challenge)) {
+    throw new EventsFailure(EVENT_ERRORS.CallbackEndpointError, "The callback URL didn't answer the verification challenge.", { reason: r.ok ? "challenge_failed" : r.error });
+  }
 }

@@ -1,7 +1,7 @@
 // End-to-end check of comments, activity, visits, previews and notifications
 // against a deployed Worker, in a throwaway workspace.
 // Usage: bun spikes/e2e-collab.ts   (reads DOMAIN and OPERATOR_TOKEN from .env)
-import { apex, call, check, cookieFor, finish, origin, owner, setup } from "./e2e-lib.ts";
+import { apex, call, check, cookieFor, finish, modern, origin, owner, setup } from "./e2e-lib.ts";
 
 await setup();
 const viewer = `e2e-viewer-${Date.now()}@example.com`;
@@ -87,6 +87,10 @@ check(
   readersText.includes(`${viewer} (view): saw v2 (current)`) && readersText.includes(`${editor} (edit): hasn't opened it`),
   readersText,
 );
+const discover = await modern("server/discover");
+check("2026-07-28 discover advertises MCP events", discover.status === 200 && discover.body.result?.capabilities?.extensions?.["io.modelcontextprotocol/events"] !== undefined && discover.body.result?.resultType === "complete", discover.body);
+const start = await modern("events/poll", { name: "artifact.answered", arguments: { artifact: id }, cursor: null });
+check("events/poll starts from now", Array.isArray(start.body.result?.events) && typeof start.body.result?.cursor === "string", start.body);
 const editorCookie = await cookieFor(editor);
 const ed = socket(id, editorCookie);
 await ed.opened;
@@ -97,6 +101,12 @@ ed.send({ t: "set", cid: "a2", key: `approve/go/${viewer}`, value: { decision: "
 check("nobody can decide for someone else", Boolean(await ed.next((m) => m.t === "rejected" && m.cid === "a2")));
 ed.ws.close();
 const decided = await call("artifact_activity", { id, limit: 5 });
+const polled = await modern("events/poll", { name: "artifact.answered", arguments: { artifact: id }, cursor: start.body.result?.cursor });
+check(
+  "events/poll returns the decision as an event",
+  polled.body.result?.events?.length === 1 && polled.body.result.events[0].data.decision === "changes" && polled.body.result.events[0].data.by === editor,
+  polled.body,
+);
 check("activity shows the decision", /requested changes in approval "go": “Cheaper plan first”/.test(decided.content[0].text), decided.content[0].text);
 const agentDecides = await call("artifact_state", { id, set: { [`approve/go/${owner}`]: { decision: "approve" } } });
 check("an agent can't decide for its person", agentDecides.isError === true && /only be made by people/.test(agentDecides.content[0].text), agentDecides.content);

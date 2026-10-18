@@ -4,7 +4,7 @@
 // list polls while one is running. Typed values are kept across re-renders
 // (keyed by data-key), and a failed action only shows its notice.
 
-type Stats = { artifacts: number; members: number; bytes: number; lastActivity: string | null };
+type Stats = { artifacts: number; members: number; bytes: number; lastActivity: string | null; plan?: "free" | "team" };
 type Job = { kind: "backup" | "restore" | "import"; phase?: string; progress?: string; error?: string; startedAt: string };
 type Workspace = {
   slug: string;
@@ -186,7 +186,7 @@ function render() {
         "p",
         { class: "small" },
         s
-          ? `${s.artifacts} artifacts · ${s.members} members · ${size(s.bytes)} · last activity ${s.lastActivity ? stamp(s.lastActivity) : "none"} · stats from ${w.statsAt ? stamp(w.statsAt) : "never"}`
+          ? `${s.plan === "free" ? "Free" : "Team"} plan · ${s.artifacts} artifacts · ${s.members} members · ${size(s.bytes)} · last activity ${s.lastActivity ? stamp(s.lastActivity) : "none"} · stats from ${w.statsAt ? stamp(w.statsAt) : "never"}`
           : "No stats yet.",
       ),
     );
@@ -218,6 +218,10 @@ function render() {
         "div",
         { class: "channel-actions" },
         btn("Refresh stats", () => act(() => api(`/api/admin/workspaces/${w.slug}/stats`, { body: {} }))),
+        btn(s?.plan === "free" ? "Move to Team" : "Move to Free", () => {
+          const plan = s?.plan === "free" ? "team" : "free";
+          return act(() => api(`/api/admin/workspaces/${w.slug}/plan`, { body: { plan } }), `${w.slug} is now on the ${plan === "free" ? "Free" : "Team"} plan.`);
+        }),
         backup,
         btn("Backups…", () =>
           act(async () => {

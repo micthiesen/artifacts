@@ -6,6 +6,7 @@ import { useShared, useSharedMap, useViewer } from "../hooks.ts";
 import { Avatar, AvatarGroup, Badge, Button, Input, Label, Textarea } from "./primitives.tsx";
 import { Checkbox, Select, Tooltip } from "./controls.tsx";
 import { Table } from "./table.tsx";
+import { getBoot } from "../store.ts";
 import { cn, displayName, relativeTime, slugify, useNow } from "./utils.ts";
 
 function ReadOnlyNote({ email }: { email: string | null }) {
@@ -363,7 +364,7 @@ export function Notes({ id, placeholder = "Write shared notes…", rows = 6, cla
 
 // ---- Approval ---------------------------------------------------------------------
 
-type Decision = { decision: "approve" | "changes"; note?: string; by?: string; at?: number };
+type Decision = { decision: "approve" | "changes"; note?: string; by?: string; at?: number; version?: number };
 
 /**
  * Sign-off. Each person's decision lives at `approve/<id>/<email>` as
@@ -388,12 +389,17 @@ export function Approval({
   const now = useNow();
   const mine = viewer.email ? map.get(viewer.email) : undefined;
   const [note, setNote] = React.useState("");
+  // A decision made on an earlier version than this page no longer counts: the page changed since.
+  const pageVersion = getBoot()?.version ?? 0;
+  const stale = (d: Decision | undefined) => Boolean(d && typeof d.version === "number" && d.version < pageVersion);
   const decisions = map.entries
     .filter(([, d]) => d && (d.decision === "approve" || d.decision === "changes"))
     .sort((a, b) => (a[1].at ?? Infinity) - (b[1].at ?? Infinity));
+  const current = decisions.filter(([, d]) => !stale(d));
+  const outdated = decisions.length - current.length;
   const required = (approvers ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const approved = new Set(decisions.filter(([, d]) => d.decision === "approve").map(([email]) => email));
-  const changes = decisions.filter(([, d]) => d.decision === "changes");
+  const approved = new Set(current.filter(([, d]) => d.decision === "approve").map(([email]) => email));
+  const changes = current.filter(([, d]) => d.decision === "changes");
   const waiting = required.filter((e) => !map.get(e));
   const status =
     changes.length > 0
@@ -404,14 +410,18 @@ export function Approval({
           : { tone: "neutral" as const, text: `Waiting on ${required.filter((e) => !approved.has(e)).length} of ${required.length}` }
         : approved.size
           ? { tone: "positive" as const, text: `Approved by ${approved.size}` }
-          : { tone: "neutral" as const, text: "No decisions yet" };
+          : outdated
+            ? { tone: "neutral" as const, text: "Changed since the last decision" }
+            : { tone: "neutral" as const, text: "No decisions yet" };
 
   function decide(decision: Decision["decision"]) {
     if (!viewer.canWrite || !viewer.email) return;
     const text = note.trim();
-    // Clicking your current decision again without a new note changes nothing (and keeps its note).
-    if (mine?.decision === decision && !text) return;
-    map.set(viewer.email, { decision, ...(text ? { note: text } : {}) });
+    // Clicking your current decision again without a new note changes nothing (and keeps its note),
+    // unless it was made on an earlier version: then it confirms it for this one.
+    if (mine?.decision === decision && !text && !stale(mine)) return;
+    // The version on screen: the server records that, so an old tab approves what it showed.
+    map.set(viewer.email, { decision, ...(text ? { note: text } : {}), ...(pageVersion ? { version: pageVersion } : {}) });
     setNote("");
   }
 
@@ -435,8 +445,9 @@ export function Approval({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
                   <span className="font-medium">{email === viewer.email ? "You" : displayName(email)}</span>
-                  <span className={d.decision === "approve" ? "text-positive" : "text-caution"}>
+                  <span className={stale(d) ? "text-muted-foreground" : d.decision === "approve" ? "text-positive" : "text-caution"}>
                     {d.decision === "approve" ? "approved" : "requested changes"}
+                    {stale(d) && ` v${d.version}`}
                   </span>
                   {d.at && (
                     <span className="text-[13px] text-muted-foreground" title={new Date(d.at).toLocaleString()}>
@@ -444,7 +455,8 @@ export function Approval({
                     </span>
                   )}
                 </div>
-                {d.note && <p className="mt-0.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap">{d.note}</p>}
+                {d.note && <p className={cn("mt-0.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap", stale(d) && "text-muted-foreground")}>{d.note}</p>}
+                {stale(d) && <p className="mt-0.5 text-[13px] text-muted-foreground">The page has changed since, so this needs a new look.</p>}
               </div>
             </li>
           ))}
@@ -470,10 +482,10 @@ export function Approval({
             />
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" size="sm" onClick={() => decide("approve")}>
-                <Check /> {mine?.decision === "approve" ? "Approved" : "Approve"}
+                <Check /> {mine?.decision === "approve" && !stale(mine) ? "Approved" : "Approve"}
               </Button>
               <Button type="button" size="sm" variant="outline" onClick={() => decide("changes")}>
-                {mine?.decision === "changes" ? "Changes requested" : "Request changes"}
+                {mine?.decision === "changes" && !stale(mine) ? "Changes requested" : "Request changes"}
               </Button>
               {mine && (
                 <Button
@@ -510,7 +522,7 @@ export type FormField = {
   hint?: string;
 };
 type FormValue = string | number | boolean;
-type FormResponse = { values: Record<string, FormValue>; by?: string; at?: number };
+type FormResponse = { values: Record<string, FormValue>; by?: string; at?: number; version?: number };
 
 function emptyValue(f: FormField): FormValue {
   return f.type === "checkbox" ? false : "";
@@ -584,7 +596,8 @@ export function Form({
         return fail(f, `${label} must be an email address.`);
       } else out[f.name] = v;
     }
-    map.set(viewer.email, { values: out });
+    const version = getBoot()?.version;
+    map.set(viewer.email, { values: out, ...(version ? { version } : {}) });
     setEditing(false);
   }
 

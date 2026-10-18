@@ -15,6 +15,12 @@ type Settings = {
   hosts: string[];
   /** Email domains whose people join as members when they first sign in. */
   joinDomains: string[];
+  plan: {
+    id: string;
+    label: string;
+    limits: { artifacts: number | null; bytes: number | null; members: number | null; changesPerDay: number | null };
+    usage: { artifacts: number; bytes: number; members: number };
+  };
 };
 type Notice = { tone: "ok" | "error"; text: string; signIn?: boolean; reveal?: string; snippet?: string };
 
@@ -188,6 +194,17 @@ function clientSetup() {
 function render() {
   const admin = data.you.role === "admin";
   const sections: HTMLElement[] = [h("h1", { class: "page-title" }, data.workspace.name)];
+  // Only plans with limits say anything: there's nothing to buy yet.
+  const { limits, usage } = data.plan;
+  if (limits.artifacts !== null || limits.bytes !== null || limits.members !== null) {
+    const mb = (b: number) => (b < 1024 * 1024 ? "under 1 MB" : `${Math.round(b / 1024 / 1024)} MB`);
+    const parts = [
+      limits.artifacts !== null && `${usage.artifacts} of ${limits.artifacts} artifacts`,
+      limits.members !== null && `${usage.members} of ${limits.members} members`,
+      limits.bytes !== null && `${mb(usage.bytes)} of ${mb(limits.bytes)}`,
+    ].filter((p): p is string => Boolean(p));
+    sections.push(h("p", { class: "muted plan-usage" }, `${data.plan.label} plan: ${parts.join(" · ")}. People you share artifacts with don't count.`));
+  }
   if (notice) {
     sections.push(noticeNode(notice));
   }
@@ -216,6 +233,13 @@ function render() {
       h("h2", {}, "Connect an agent"),
       h("p", { class: "muted" }, "Add this workspace's MCP server to your agent. It signs in with OAuth in your browser and then acts as you here."),
       clientSetup(),
+      h(
+        "p",
+        { class: "muted small snippet-label" },
+        "To have your agent act on answers as they come in, use MCP events or a scheduled run: ",
+        h("a", { href: "https://github.com/micthiesen/artifacts.boo/blob/main/docs/AUTOMATIONS.md" }, "automation recipes"),
+        ".",
+      ),
       h("h3", { class: "subhead" }, "Connected apps"),
       data.apps.length ? apps : h("p", { class: "muted small" }, "None yet."),
       h("h3", { class: "subhead" }, "Agent tokens"),

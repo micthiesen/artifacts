@@ -53,6 +53,8 @@ export default Alchemy.Stack(
         return (part === "public" ? ecdh.getPublicKey() : ecdh.getPrivateKey()).toString("base64url");
       });
     const pushoverToken = yield* optional("PUSHOVER_TOKEN");
+    // "on" opens self-serve workspace signup; off unless set in .env.
+    const selfServe = yield* optional("SELF_SERVE");
 
     const worker = yield* Cloudflare.Worker("Artifacts", {
       name,
@@ -89,6 +91,7 @@ export default Alchemy.Stack(
         VAPID_PRIVATE_KEY: Output.map(vapid("private"), Redacted.make),
         VAPID_SUBJECT: `mailto:${operators.split(",")[0].trim()}`,
         ...(pushoverToken ? { PUSHOVER_TOKEN: Redacted.make(pushoverToken) } : {}),
+        ...(selfServe ? { SELF_SERVE: selfServe } : {}),
       },
     });
 

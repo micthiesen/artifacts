@@ -21,4 +21,17 @@
   Logs are kept for 90 days. Keeping 30 would save about $900 a month.
 </Callout>
 
+## October budgets
+
+<Form
+  id="budget"
+  title="Your team's October budget"
+  description="One answer per team lead. You can change yours until the 25th."
+  fields={[
+    { name: "team", label: "Team", type: "select", options: ["Platform", "Search", "Data", "Web"], required: true },
+    { name: "budget", label: "Budget ($)", type: "number", required: true },
+    { name: "logs", label: "Cut log retention to 30 days", type: "checkbox" },
+  ]}
+/>
+
 <Notes id="followups" placeholder="Follow-ups for next month…" rows={3} />

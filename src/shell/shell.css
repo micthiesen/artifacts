@@ -750,3 +750,13 @@ div.thread-anchor { cursor: default; }
   .content { padding-left: 1rem; padding-right: 1rem; }
   .card-section { padding: 1rem .9rem 1.1rem; }
 }
+.create-workspace { margin-top: 1.5rem; }
+.create-form { display: grid; gap: .85rem; max-width: 30rem; }
+.create-form .field { display: grid; gap: .3rem; font-weight: 550; font-size: 14px; }
+.create-form .slug-row { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.create-form .slug-row .input { flex: 1 1 8rem; min-width: 0; }
+.create-form .slug-suffix { font-weight: 400; overflow-wrap: anywhere; }
+.create-form .check { display: flex; align-items: flex-start; gap: .5rem; font-size: 14px; }
+.create-form .check input { margin-top: .2rem; }
+.create-form .button { justify-self: start; }
+.plan-usage { margin: -.5rem 0 1.25rem; font-size: 14px; }

@@ -23,6 +23,7 @@ links, OAuth consent, Web Push keys).
 | `OPERATOR_EMAILS` | Comma-separated emails that see the operator console at `/admin` |
 | `OPERATOR_TOKEN` | A random string; the operator API's bearer token for local scripts |
 | `PUSHOVER_TOKEN` | Optional: one Pushover application token shared by every user's Pushover channel |
+| `SELF_SERVE` | Optional: `on` lets anyone signed in make one Free workspace from "Your workspaces". Off unless set. Free workspaces are capped at 300 saved changes a day (each runs a render check), which bounds what one can cost |
 
 ## Deploy and first workspace
 
@@ -42,6 +43,7 @@ wildcard DNS record, so deploy prod first.
 
 - **Backups:** each workspace backs itself up to R2 at 10:00 UTC on days it changed, keeping 30 runs, as a resumable job. The operator console starts a backup, or a restore (which backs up first and takes the workspace offline until it's loaded), and shows each job's progress.
 - **Off-Cloudflare copy:** `bun scripts/export.ts <slug|directory>` writes `exports/<slug>-<time>.json`; `bun scripts/import.ts <slug|directory> <file>` replaces that data with it (the workspace is offline while it loads).
+- **Plans:** workspaces are on Team (no limits) unless the operator console moves them to Free; self-serve workspaces start on Free. Limits live in `src/worker/plans.ts`. Nothing is charged yet.
 - **Fixing a workspace:** from `/admin`, add or replace its admins (say, a mistyped first admin) without a role inside it.
 - **Schema changes:** add a numbered migration (`src/worker/migrate.ts`); each workspace applies it the first time it wakes after the deploy. Migrations only go forward: once objects have migrated, older code refuses to run against them, so fix forward rather than rolling back.
 - **Demo workspace:** `bun scripts/seed-demo.ts` creates a `demo` workspace whose members are example people, publishes the examples in `demo/` as public artifacts with their starting votes and comments, and writes their links to `demo/links.json` for the splash page (commit it, then deploy). Run it again after changing an example; `--reseed` rewrites the shared state too.

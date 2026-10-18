@@ -5,6 +5,7 @@ import type { ArtifactMeta } from "./hub.ts";
 import type { WorkspaceRole } from "./directory.ts";
 import type { FrameBoot, Role, ShellBoot } from "../shared/protocol.ts";
 import { PRODUCT } from "../shared/brand.ts";
+import { PLANS } from "./plans.ts";
 import demos from "./demos.json";
 import demoLinks from "../../demo/links.json";
 
@@ -314,7 +315,7 @@ ${card("An edit-and-check loop for agents", "Agents change artifacts the way the
 ])}
 ${card("People answer, agents close the loop", "An artifact can ask for a decision and get it back, not just be read.", [
   "Approvals, form responses and comments anchored to exact text, each signed with the person's verified email",
-  "The agent reads every answer over MCP, a webhook can wake it when one arrives, and fixes are marked addressed in the version that made them",
+  "The agent reads every answer over MCP, and MCP events or a webhook can wake it when one arrives; fixes are marked addressed in the version that made them",
   "Owners and agents see who has read which version; readers see what changed since their last visit",
 ])}
 ${card("Isolated by construction", "Tenancy and untrusted code are handled by the platform, not by convention.", [
@@ -342,7 +343,7 @@ cd artifacts.boo &amp;&amp; bun install
 bun run deploy</code></pre></div>
 </section>
 
-<footer class="splash-foot muted">${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
+<footer class="splash-foot muted">${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/docs/AUTOMATIONS.md">Automations</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
 </main>`,
     {},
     `<meta name="description" content="${escapeHtml(DESCRIPTION)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}/">\n`,
@@ -405,6 +406,8 @@ export function workspacesPage(
   workspaces: { slug: string; name: string; role: WorkspaceRole | "guest"; suspended: boolean; url: string }[],
   operator: boolean,
   brand: Brand,
+  /** Self-serve signup, when it's on: the form's state and the workspace host suffix. */
+  create: { error?: string; name?: string; slug?: string; suffix: string } | null = null,
 ): Response {
   const rows = workspaces
     .map(
@@ -416,7 +419,26 @@ export function workspacesPage(
     ? `<h1 class="page-title">Your workspaces</h1><ul class="list">${rows}</ul>`
     : `<section class="empty"><h1>No workspaces yet</h1><p class="muted">${escapeHtml(email)} isn't a member of a workspace. Artifacts shared with you open from the links you were sent.</p></section>`;
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
-  return page(`Your workspaces · ${PRODUCT}`, `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>${POLICY_FOOTER}`);
+  return page(
+    `Your workspaces · ${PRODUCT}`,
+    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${create ? createForm(create) : ""}${admin}</main>${POLICY_FOOTER}`,
+  );
+}
+
+/** Make a Free workspace (self-serve). Posts back to /workspaces. */
+function createForm(c: { error?: string; name?: string; slug?: string; suffix: string }): string {
+  const free = PLANS.free.limits;
+  return `<section class="card-section create-workspace">
+<h2>Create a workspace</h2>
+<p class="muted">A workspace is where your agent publishes artifacts for you and your team. It's free for up to ${free.artifacts} artifacts, ${free.members} members and ${Math.round((free.bytes ?? 0) / 1024 / 1024)} MB; people you share artifacts with never need an account or a plan.</p>
+${c.error ? `<p class="notice error" role="alert">${escapeHtml(c.error)}</p>` : ""}
+<form method="post" action="/workspaces" class="create-form">
+<label class="field"><span>Name</span><input class="input" name="name" required maxlength="80" autocomplete="organization" value="${escapeHtml(c.name ?? "")}" placeholder="Acme"></label>
+<label class="field"><span>Address</span><span class="slug-row"><input class="input" name="slug" required pattern="[a-z][a-z0-9\\-]{1,30}[a-z0-9]" maxlength="32" autocapitalize="none" spellcheck="false" value="${escapeHtml(c.slug ?? "")}" placeholder="acme"><span class="muted slug-suffix">${escapeHtml(c.suffix)}</span></span></label>
+<label class="check"><input type="checkbox" name="terms" required> <span>I agree to the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.</span></label>
+<button class="button" type="submit">Create workspace</button>
+</form>
+</section>`;
 }
 
 /**
@@ -499,7 +521,7 @@ export function continuePage(location: string, headers: Headers = new Headers())
 
 export type PolicyKind = "privacy" | "terms" | "security";
 
-const POLICY_UPDATED = "2026-10-18";
+export const POLICY_UPDATED = "2026-10-18";
 
 /** Privacy, terms, and security and data: what this hosted instance does with your data and expects of you. */
 export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Response {
@@ -516,7 +538,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <li><strong>Passkeys</strong>, if you save any: each one's public key, a name for it (such as "iCloud Keychain"), and when it was added and last used. The private key never leaves your device or password manager.</li>
 <li><strong>Artifacts</strong>: the files your agent writes (up to 50 versions each), images and data files, and live data fetched from hosts a workspace admin approved.</li>
 <li><strong>What people do on an artifact</strong>: comments, votes, approvals, form responses, checklists, notes and other shared state; which version you last saw and which comments you've read; an activity log (the latest 5,000 events per artifact).</li>
-<li><strong>Workspace membership</strong>: who belongs to which workspace and in what role, and when members last signed in.</li>
+<li><strong>Workspace membership</strong>: who belongs to which workspace and in what role, and when members last signed in; for a workspace someone made themselves, who made it and which version of the terms they agreed to.</li>
 <li><strong>Agent access</strong>: OAuth grants and personal agent tokens, stored only as hashes, with when each was last used.</li>
 <li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
 <li><strong>Render checks</strong>: after each change a headless browser renders the artifact; we keep the result, a screenshot and any errors. Viewers' browsers also report runtime errors (the latest 30 per artifact).</li>

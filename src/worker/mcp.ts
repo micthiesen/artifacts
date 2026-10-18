@@ -2,7 +2,8 @@
 // the workspace member whose OAuth grant or agent token it presented, with that
 // person's access to each artifact.
 import { PRODUCT } from "../shared/brand.ts";
-import type { HubApi, SourceInfo, Workspace } from "./hub.ts";
+import type { EventsResult, HubApi, PollInput, SourceInfo, SubscribeInput, UnsubscribeInput, Workspace } from "./hub.ts";
+import { EVENT_ERRORS, EVENT_TYPES, EVENTS_EXTENSION } from "./events.ts";
 import type { Thread } from "../shared/protocol.ts";
 import { isValidPrincipal, sharePrincipal } from "./principal.ts";
 import { describeCheck, type RenderCheck } from "./check.ts";
@@ -1038,66 +1039,191 @@ async function runTool(tool: Tool, args: Json, ctx: Ctx): Promise<ToolResult> {
 
 type RpcRequest = { jsonrpc: "2.0"; id?: string | number | null; method: string; params?: Json };
 
+/** Protocol versions with per-request metadata (no initialize handshake). */
+const MODERN_VERSIONS = ["2026-07-28"];
+const META_VERSION = "io.modelcontextprotocol/protocolVersion";
+const META_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
+const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
+/** Methods whose Mcp-Name header carries params.name. */
+const NAMED_METHODS = new Set(["tools/call", "events/poll", "events/stream", "events/subscribe", "events/unsubscribe"]);
+
+function serverInfo(ctx: Ctx) {
+  // Named for the workspace, so someone in several can tell their connections apart.
+  return { name: `${SERVER_NAME}-${ctx.slug}`, title: ctx.workspace ? `${SERVER_TITLE} · ${ctx.workspace}` : SERVER_TITLE, version: SERVER_VERSION };
+}
+
+/** Tools, plus MCP events under both the extension key (SEP-3415) and the earlier `events` key some clients read. */
+const CAPABILITIES = { tools: { listChanged: false }, extensions: { [EVENTS_EXTENSION]: {} }, events: {} };
+
 export async function handleMcp(request: Request, ctx: Ctx): Promise<Response> {
   if (request.method !== "POST") {
     return new Response("Use POST for MCP requests.", { status: 405, headers: { Allow: "POST" } });
   }
-  let body: RpcRequest | RpcRequest[];
+  let body: unknown;
   try {
     body = await request.json();
   } catch {
     return rpcResponse({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
   }
-  const batch = Array.isArray(body) ? body : [body];
-  const responses = (await Promise.all(batch.map((msg) => handleMessage(msg, ctx)))).filter(Boolean);
-  if (responses.length === 0) return new Response(null, { status: 202 });
-  return rpcResponse(Array.isArray(body) ? responses : responses[0]);
+  const header = request.headers.get("MCP-Protocol-Version");
+  const modernHeader = header !== null && MODERN_VERSIONS.includes(header);
+  if (Array.isArray(body)) {
+    // Batches are legacy only; 2026-07-28 has none.
+    if (modernHeader) return rpcResponse({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Batches aren't part of protocol 2026-07-28" } }, 400);
+    const responses = (await Promise.all(body.filter(isRpcRequest).map((msg) => handleMessage(msg, ctx)))).filter(Boolean);
+    return responses.length ? rpcResponse(responses) : new Response(null, { status: 202 });
+  }
+  if (!isRpcRequest(body)) return rpcResponse({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid request" } }, 400);
+  const meta = isRecord(body.params?._meta) ? body.params._meta : undefined;
+  if (meta?.[META_VERSION] !== undefined || modernHeader) return handleModern(request, body, ctx);
+  const response = await handleMessage(body, ctx);
+  return response ? rpcResponse(response) : new Response(null, { status: 202 });
 }
 
-function rpcResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
+function isRecord(v: unknown): v is Json {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function isRpcRequest(v: unknown): v is RpcRequest {
+  return isRecord(v) && typeof v.method === "string" && (v.params === undefined || isRecord(v.params));
+}
+
+function rpcResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
+}
+
+/** Decodes a header value that may use the `=?base64?...?=` sentinel. */
+function headerValue(raw: string | null): string | null {
+  const m = raw === null ? null : /^=\?base64\?([A-Za-z0-9+/]*={0,2})\?=$/.exec(raw);
+  if (!m) return raw;
+  try {
+    return new TextDecoder().decode(Uint8Array.from(atob(m[1]), (c) => c.charCodeAt(0)));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Protocol 2026-07-28: every request carries its version and capabilities in
+ * _meta, mirrored in headers that must match the body; results carry
+ * resultType and the server's identity.
+ */
+async function handleModern(request: Request, msg: RpcRequest, ctx: Ctx): Promise<Response> {
+  const id = msg.id ?? null;
+  const error = (status: number, code: number, message: string, data?: unknown) =>
+    rpcResponse({ jsonrpc: "2.0", id, error: { code, message, ...(data !== undefined ? { data } : {}) } }, status);
+  const meta = isRecord(msg.params?._meta) ? msg.params._meta : {};
+  const version = meta[META_VERSION];
+  const header = request.headers.get("MCP-Protocol-Version");
+  if (typeof version !== "string") return error(400, -32602, `Missing ${META_VERSION} in params._meta`);
+  if (!MODERN_VERSIONS.includes(version)) {
+    return error(400, -32022, "Unsupported protocol version", { supported: [...MODERN_VERSIONS, ...PROTOCOL_VERSIONS], requested: version });
+  }
+  if (header !== version) return error(400, -32020, `Header mismatch: MCP-Protocol-Version ${header ?? "(missing)"} does not match ${version}`);
+  if (!isRecord(meta[META_CAPABILITIES])) return error(400, -32602, `Missing ${META_CAPABILITIES} in params._meta`);
+  if (request.headers.get("Mcp-Method") !== msg.method) return error(400, -32020, `Header mismatch: Mcp-Method does not match ${msg.method}`);
+  if (NAMED_METHODS.has(msg.method) && headerValue(request.headers.get("Mcp-Name")) !== String(msg.params?.name ?? "")) {
+    return error(400, -32020, "Header mismatch: Mcp-Name does not match params.name");
+  }
+  if (msg.id === undefined) return new Response(null, { status: 202 });
+  const done = (result: Json) => rpcResponse({ jsonrpc: "2.0", id, result: { ...result, resultType: "complete", _meta: { [META_SERVER_INFO]: serverInfo(ctx) } } });
+  switch (msg.method) {
+    case "server/discover":
+      return done({
+        supportedVersions: [...MODERN_VERSIONS, ...PROTOCOL_VERSIONS],
+        capabilities: CAPABILITIES,
+        instructions: INSTRUCTIONS,
+        ttlMs: 3600_000,
+        cacheScope: "private",
+      });
+    case "tools/list":
+      return done({ tools: toolList(), ttlMs: 3600_000, cacheScope: "private" });
+    // The transport only fixes statuses for malformed requests (400) and unknown methods (404);
+    // other failures are ordinary JSON-RPC errors on a 200, as before.
+    case "tools/call": {
+      const tool = TOOL_MAP.get(String(msg.params?.name));
+      if (!tool) return error(200, -32602, `Unknown tool ${msg.params?.name}`);
+      return done(await callTool(tool, msg, ctx));
+    }
+    default: {
+      if (!msg.method.startsWith("events/")) return error(404, -32601, `Method not found: ${msg.method}`);
+      const r = await eventsMethod(msg, ctx);
+      return "result" in r ? done(r.result) : error(r.error.code === -32601 ? 404 : 200, r.error.code, r.error.message, r.error.data);
+    }
+  }
+}
+
+function toolList() {
+  return TOOLS.map(({ name, title, description, inputSchema, annotations }) => ({ name, title, description, inputSchema, annotations }));
+}
+
+async function callTool(tool: Tool, msg: RpcRequest, ctx: Ctx): Promise<Json> {
+  try {
+    const r = await runTool(tool, (msg.params?.arguments as Json) ?? {}, ctx);
+    return {
+      content: [{ type: "text", text: r.text }, ...(r.images ?? []).map((data) => ({ type: "image", data, mimeType: "image/jpeg" }))],
+      ...(r.structured !== undefined ? { structuredContent: r.structured } : {}),
+      isError: r.isError ?? false,
+    };
+  } catch (err) {
+    return { content: [{ type: "text", text: publicMessage(err).message }], isError: true };
+  }
+}
+
+/** MCP events (SEP-3415): poll and webhook delivery. Push needs a held-open stream per subscriber, which this server doesn't keep. */
+async function eventsMethod(msg: RpcRequest, ctx: Ctx): Promise<EventsResult<Json>> {
+  const p = msg.params ?? {};
+  const name = typeof p.name === "string" ? p.name : "";
+  try {
+    switch (msg.method) {
+      case "events/list":
+        // Cacheable like tools/list: the set of event types only changes with a deploy.
+        return { result: { events: EVENT_TYPES, ttlMs: 3600_000, cacheScope: "private" } };
+      case "events/poll":
+        return await ctx.hub.eventsPoll(ctx.person, { ...p, name } satisfies PollInput);
+      case "events/subscribe":
+        return await ctx.hub.eventsSubscribe(ctx.person, { ...p, name, delivery: isRecord(p.delivery) ? p.delivery : undefined } satisfies SubscribeInput);
+      case "events/unsubscribe":
+        return await ctx.hub.eventsUnsubscribe(ctx.person, { ...p, name, delivery: isRecord(p.delivery) ? p.delivery : undefined } satisfies UnsubscribeInput);
+      case "events/stream":
+        return { error: { code: EVENT_ERRORS.Unsupported, message: "Push delivery isn't offered; use events/poll or a webhook.", data: { feature: "deliveryMode", value: "push" } } };
+      default:
+        return { error: { code: -32601, message: `Method not found: ${msg.method}` } };
+    }
+  } catch (err) {
+    return { error: { code: -32603, message: publicMessage(err).message } };
+  }
 }
 
 async function handleMessage(msg: RpcRequest, ctx: Ctx): Promise<Json | null> {
   const isNotification = msg.id === undefined;
   const reply = (result: unknown) => (isNotification ? null : { jsonrpc: "2.0", id: msg.id, result });
-  const fail = (code: number, message: string) => (isNotification ? null : { jsonrpc: "2.0", id: msg.id, error: { code, message } });
+  const fail = (code: number, message: string, data?: unknown) =>
+    isNotification ? null : { jsonrpc: "2.0", id: msg.id, error: { code, message, ...(data !== undefined ? { data } : {}) } };
   switch (msg.method) {
     case "initialize": {
       const requested = String(msg.params?.protocolVersion ?? "");
       return reply({
         protocolVersion: PROTOCOL_VERSIONS.includes(requested) ? requested : PROTOCOL_VERSIONS[0],
-        capabilities: { tools: { listChanged: false } },
-        // Named for the workspace, so someone in several can tell their connections apart.
-        serverInfo: { name: `${SERVER_NAME}-${ctx.slug}`, title: ctx.workspace ? `${SERVER_TITLE} · ${ctx.workspace}` : SERVER_TITLE, version: SERVER_VERSION },
+        capabilities: CAPABILITIES,
+        serverInfo: serverInfo(ctx),
         instructions: INSTRUCTIONS,
       });
     }
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({
-        tools: TOOLS.map(({ name, title, description, inputSchema, annotations }) => ({ name, title, description, inputSchema, annotations })),
-      });
+      return reply({ tools: toolList() });
     case "tools/call": {
       const tool = TOOL_MAP.get(String(msg.params?.name));
       if (!tool) return fail(-32602, `Unknown tool ${msg.params?.name}`);
-      try {
-        const r = await runTool(tool, (msg.params?.arguments as Json) ?? {}, ctx);
-        return reply({
-          content: [
-            { type: "text", text: r.text },
-            ...(r.images ?? []).map((data) => ({ type: "image", data, mimeType: "image/jpeg" })),
-          ],
-          ...(r.structured !== undefined ? { structuredContent: r.structured } : {}),
-          isError: r.isError ?? false,
-        });
-      } catch (err) {
-        return reply({ content: [{ type: "text", text: publicMessage(err).message }], isError: true });
-      }
+      return reply(await callTool(tool, msg, ctx));
     }
-    default:
+    default: {
       if (isNotification) return null;
-      return fail(-32601, `Method not found: ${msg.method}`);
+      if (!msg.method.startsWith("events/")) return fail(-32601, `Method not found: ${msg.method}`);
+      const r = await eventsMethod(msg, ctx);
+      return "result" in r ? reply(r.result) : fail(r.error.code, r.error.message, r.error.data);
+    }
   }
 }

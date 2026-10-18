@@ -24,11 +24,13 @@ import {
   shellPage,
   splashPage,
   workspacesPage,
+  POLICY_UPDATED,
   type Brand,
 } from "./pages.ts";
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { publicMessage } from "./errors.ts";
+import { isPlan } from "./plans.ts";
 import { PasskeyError, registrationOptions, signInOptions, verifyRegistration, verifySignIn } from "./passkeys.ts";
 export { isTestAddress };
 import {
@@ -74,6 +76,8 @@ export type Env = {
   APEX_ORIGIN?: string;
   /** Appended to a slug to make its host, e.g. ".artifacts.boo" ("acme.artifacts.boo"). */
   WORKSPACE_SUFFIX: string;
+  /** "on" lets anyone signed in make a Free workspace from /workspaces. Off unless set. */
+  SELF_SERVE?: string;
   /** Sender address for sign-in codes. */
   MAIL_FROM: string;
   /** Pushover application token shared by every user's Pushover channel. */
@@ -519,8 +523,21 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   if (path === "/") return indexable(splashPage(brand, undefined, viewer.email ? { email: viewer.email, operator } : undefined));
   if (path === "/workspaces") {
     if (!viewer.email) return Response.redirect(`${url.origin}/login?return=/workspaces`, 302);
-    const workspaces = (await directory(env).membershipsOf(viewer.email)).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) }));
-    return workspacesPage(viewer.email, workspaces, operator, brand);
+    const selfServe = env.SELF_SERVE === "on";
+    const list = async () => (await directory(env).membershipsOf(viewer.email!)).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) }));
+    const create = (state: { error?: string; name?: string; slug?: string } = {}) => (selfServe ? { ...state, suffix: env.WORKSPACE_SUFFIX } : null);
+    if (request.method === "POST") {
+      if (!selfServe) return new Response("not found", { status: 404 });
+      if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
+      const form = await request.formData().catch(() => new FormData());
+      const name = String(form.get("name") ?? "").trim().slice(0, 80);
+      const slug = String(form.get("slug") ?? "").trim().toLowerCase();
+      const made = await createOwnWorkspace(env, viewer.email, { name, slug, terms: form.get("terms") === "on" });
+      if ("location" in made) return continuePage(made.location);
+      const res = workspacesPage(viewer.email, await list(), operator, brand, create({ error: made.error, name, slug }));
+      return new Response(res.body, { status: 400, headers: res.headers });
+    }
+    return workspacesPage(viewer.email, await list(), operator, brand, create());
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
   if (path === "/login/passkey/options" && request.method === "POST") {
@@ -553,6 +570,33 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   }
   if (path.startsWith("/api/admin/")) return operatorApi(request, url, env, viewer, ctx);
   return messagePage("Not found", "There's nothing here.", 404, undefined, brand);
+}
+
+/**
+ * Self-serve: make a Free workspace with this person as its admin, then send
+ * them into it, signed in, at its settings (where the agent gets connected).
+ */
+async function createOwnWorkspace(env: Env, email: string, input: { name: string; slug: string; terms: boolean }): Promise<{ location: string } | { error: string }> {
+  if (!input.name) return { error: "Give the workspace a name." };
+  if (!validSlug(input.slug)) return { error: "Pick an address of 3-32 lowercase letters, digits and single hyphens, starting with a letter." };
+  if (!input.terms) return { error: "Agree to the terms and privacy policy to continue." };
+  try {
+    await directory(env).createOwnWorkspace(email, input.slug, input.name, POLICY_UPDATED);
+  } catch (err) {
+    return { error: publicMessage(err).message };
+  }
+  const hub = workspaceHub(env, input.slug);
+  try {
+    await hub.provision({ slug: input.slug, name: input.name, admin: email, plan: "free" });
+  } catch (err) {
+    console.error("provisioning a self-serve workspace failed", err);
+    // Nothing half-made stays behind, and the slot is free to try again.
+    await hub.destroy(input.slug).catch((e) => console.error("cleaning up the workspace failed", e));
+    await directory(env).removeWorkspace(input.slug).catch((e) => console.error("removing the workspace record failed", e));
+    return { error: "Something went wrong making the workspace. Try again." };
+  }
+  forgetWorkspaces();
+  return { location: `${workspaceOrigin(env, input.slug)}/login?return=${encodeURIComponent("/settings")}` };
 }
 
 /**
@@ -902,6 +946,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         apps: (await hub.grants(email)).map((g) => ({ id: g.id, client: g.client, createdAt: g.createdAt })),
         hosts: await hub.allowedHosts(),
         joinDomains: await hub.joinDomains(),
+        plan: await hub.plan(),
       });
     }
     const body = await jsonBody(request);
@@ -1193,6 +1238,11 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       if (role === null) await revokeGrants(env, workspaceOrigin(env, slug), slug, target, hub);
       const emailed = role !== null && !existed && (await invite(env, hub, target, { workspace: (await hub.access(null)).name, url: workspaceOrigin(env, slug), by: null, role }));
       return Response.json({ members, emailed });
+    }
+    // Plans are set by hand until there's billing.
+    if (action === "plan" && request.method === "POST") {
+      if (!isPlan(body.plan)) return Response.json({ error: "plan must be free or team" }, { status: 400 });
+      return Response.json({ plan: await hub.setPlan(body.plan) });
     }
     // Like fixing admins: put back a data host an admin removed by mistake.
     if (action === "hosts" && request.method === "POST") {
