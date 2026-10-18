@@ -439,10 +439,18 @@ export function initOwnerMenu(
           if (!email) return;
           const role = roleSelect.value as ShareRole;
           void act("add", "sharing", async () => {
-            await tool("artifact_share", { add: [{ email, role }] });
+            const r = await tool("artifact_share", { add: [{ email, role }] });
             drafts.delete("add-email");
+            const emailed = (r.data?.emailed as Record<string, string> | undefined)?.[email];
             return {
-              text: email === "workspace" ? "Shared with everyone in the workspace." : email.startsWith("@") ? `Shared with everyone at ${email.slice(1)}.` : `Shared with ${email}. We emailed them a link.`,
+              text:
+                email === "workspace"
+                  ? "Shared with everyone in the workspace."
+                  : email.startsWith("@")
+                    ? `Shared with everyone at ${email.slice(1)}.`
+                    : emailed === "not emailed"
+                      ? `Shared with ${email}, but we couldn't email them (today's email limit). Send them the page link yourself.`
+                      : `Shared with ${email}. We emailed them a link.`,
             };
           });
         },

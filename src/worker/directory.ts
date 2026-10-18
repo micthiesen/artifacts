@@ -9,7 +9,15 @@ import { DIRECTORY_TABLES } from "./tables.ts";
 import type { PlanId } from "./plans.ts";
 import { planFor, type BillingUpdate } from "./billing.ts";
 
-export type BillingRecord = { provider: string; customerId: string | null; subscriptionId: string | null; status: string; periodEnd: string | null; updatedAt: string };
+export type BillingRecord = {
+  provider: string;
+  customerId: string | null;
+  subscriptionId: string | null;
+  status: string;
+  periodEnd: string | null;
+  updatedAt: string;
+  payerEmail: string | null;
+};
 import {
   backupRuns,
   createShadows,
@@ -33,6 +41,8 @@ export type WorkspaceRecord = {
   slug: string;
   name: string;
   createdAt: string;
+  /** Self-serve: who made it (as personKey), so they alone can delete it themselves. */
+  createdBy: string | null;
   suspended: boolean;
   stats: WorkspaceStats | null;
   statsAt: string | null;
@@ -59,7 +69,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "billing" | "applyBilling" | "billingPlan" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "billing" | "applyBilling" | "billingPlan" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -84,6 +94,8 @@ export function validSlug(slug: string): boolean {
 
 /** Self-serve workspaces: how many one person may make, and how many everyone may make a day. */
 const SELF_SERVE_PER_PERSON = 1;
+/** Deleting one and making another is fine now and then, not on a loop. */
+const SELF_SERVE_PER_PERSON_MONTH = 3;
 const SELF_SERVE_PER_DAY = 50;
 
 const CODE_TTL_MS = 10 * 60_000;
@@ -172,6 +184,16 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX billing_by_subscription ON billing (subscription_id);
       CREATE TABLE billing_events (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
     `),
+  // Who pays: only they may open the payment provider's portal, which shows their card and everything they pay for.
+  (sql) => sql.exec(`ALTER TABLE billing ADD COLUMN payer_email TEXT`),
+  // Every self-serve workspace ever made, kept after it's deleted, so deleting and remaking can't get round the caps.
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE self_serve_log (person TEXT NOT NULL, slug TEXT NOT NULL, at TEXT NOT NULL);
+      CREATE INDEX self_serve_by_person ON self_serve_log (person, at);
+      CREATE INDEX self_serve_by_at ON self_serve_log (at);
+      INSERT INTO self_serve_log (person, slug, at) SELECT created_by, slug, created_at FROM workspaces WHERE created_by IS NOT NULL;
+    `),
 ];
 
 export class Directory extends DurableObject {
@@ -216,13 +238,24 @@ export class Directory extends DurableObject {
    * recorded in one step, so two requests at once can't both pass. Records
    * the version of the terms they agreed to.
    */
-  async createOwnWorkspace(email: string, slug: string, name: string, terms: string): Promise<WorkspaceRecord> {
+  /** Whether this person may still make a workspace themselves: one at a time, and a few a month. */
+  canMakeWorkspace(email: string): boolean {
     const person = personKey(email);
-    const mine = this.sql.exec(`SELECT COUNT(*) AS n FROM workspaces WHERE created_by = ?`, person).one().n as number;
-    if (mine >= SELF_SERVE_PER_PERSON) throw new DirectoryError("You already made a workspace. Ask its admins to add people, or contact us for another.");
-    const today = this.sql.exec(`SELECT COUNT(*) AS n FROM workspaces WHERE created_by IS NOT NULL AND created_at > ?`, new Date(Date.now() - 86_400_000).toISOString()).one().n as number;
+    const now = (this.sql.exec(`SELECT COUNT(*) AS n FROM workspaces WHERE created_by = ?`, person).one().n as number) < SELF_SERVE_PER_PERSON;
+    const month = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    return now && (this.sql.exec(`SELECT COUNT(*) AS n FROM self_serve_log WHERE person = ? AND at > ?`, person, month).one().n as number) < SELF_SERVE_PER_PERSON_MONTH;
+  }
+
+  async createOwnWorkspace(email: string, slug: string, name: string, terms: string, contact = ""): Promise<WorkspaceRecord> {
+    const person = personKey(email);
+    if (!this.canMakeWorkspace(email)) {
+      throw new DirectoryError(`You already made a workspace. Add people to it from its settings${contact ? `, or email ${contact} for another` : ""}.`);
+    }
+    const today = this.sql.exec(`SELECT COUNT(*) AS n FROM self_serve_log WHERE at > ?`, new Date(Date.now() - 86_400_000).toISOString()).one().n as number;
     if (today >= SELF_SERVE_PER_DAY) throw new DirectoryError("We can't make more workspaces today. Try again tomorrow.");
-    return this.createWorkspace(slug, name, { createdBy: person, terms });
+    const made = await this.createWorkspace(slug, name, { createdBy: person, terms });
+    this.sql.exec(`INSERT INTO self_serve_log (person, slug, at) VALUES (?, ?, ?)`, person, slug, made.createdAt);
+    return made;
   }
 
   async createWorkspace(slug: string, name: string, own?: { createdBy: string; terms: string }): Promise<WorkspaceRecord> {
@@ -271,6 +304,7 @@ export class Directory extends DurableObject {
           status: r.status as string,
           periodEnd: (r.period_end as string | null) ?? null,
           updatedAt: r.updated_at as string,
+          payerEmail: (r.payer_email as string | null) ?? null,
         }
       : null;
   }
@@ -301,8 +335,10 @@ export class Directory extends DurableObject {
       if (newer && takesOver && starts) {
         if (other) console.error(`billing: ${slug} moved from subscription ${row!.subscription_id} to ${u.subscriptionId}; check the old one is canceled`);
         this.sql.exec(
-          `INSERT INTO billing (slug, provider, customer_id, subscription_id, status, period_end, event_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO billing (slug, provider, customer_id, subscription_id, status, period_end, event_at, updated_at, payer_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (slug) DO UPDATE SET provider = excluded.provider, customer_id = COALESCE(excluded.customer_id, customer_id),
+             payer_email = CASE WHEN excluded.customer_id IS NOT NULL AND excluded.customer_id IS NOT customer_id THEN excluded.payer_email
+               ELSE COALESCE(excluded.payer_email, payer_email) END,
              subscription_id = COALESCE(excluded.subscription_id, subscription_id), status = excluded.status,
              period_end = COALESCE(excluded.period_end, period_end), event_at = excluded.event_at, updated_at = excluded.updated_at`,
           slug,
@@ -313,6 +349,7 @@ export class Directory extends DurableObject {
           u.periodEnd,
           u.at,
           new Date().toISOString(),
+          u.payerEmail,
         );
         this.markDirty();
       }
@@ -322,9 +359,9 @@ export class Directory extends DurableObject {
   }
 
   /** The plan a workspace's stored subscription pays for, or null when it has none (the operator sets its plan). */
-  billingPlan(slug: string): PlanId | null {
+  billingPlan(slug: string): { plan: PlanId; until: string | null } | null {
     const row = this.sql.exec(`SELECT status, period_end FROM billing WHERE slug = ?`, slug).toArray()[0];
-    return row ? planFor(row.status as string, (row.period_end as string | null) ?? null).plan : null;
+    return row ? planFor(row.status as string, (row.period_end as string | null) ?? null) : null;
   }
 
   async setSuspended(slug: string, suspended: boolean) {
@@ -783,6 +820,7 @@ function toWorkspace(r: Record<string, SqlStorageValue>): WorkspaceRecord {
     slug: r.slug as string,
     name: r.name as string,
     createdAt: r.created_at as string,
+    createdBy: (r.created_by as string | null) ?? null,
     suspended: Boolean(r.suspended),
     stats: r.stats ? (JSON.parse(r.stats as string) as WorkspaceStats) : null,
     statsAt: (r.stats_at as string | null) ?? null,

@@ -57,3 +57,6 @@ the same way.
 Prompt for an agent: "Read this artifacts.boo export (JSON Lines, described
 at docs/EXPORT.md) and write each artifact's current files to a folder named
 after its title."
+
+To load an export into a workspace of your own deployment (this replaces
+everything in that workspace): `bun scripts/import.ts <slug> <file>.jsonl`.

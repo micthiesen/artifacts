@@ -11,6 +11,7 @@ import { diffBlocks, type BlockInfo } from "./blocks.ts";
 import { composeMessage, mentionedEmails, type OutboxItem } from "./notifications.ts";
 import { isBlockedHost, sendToChannel, type NotifyEnv } from "./notify.ts";
 import { DEFAULT_PLAN, PLANS, isPlan, type PlanId } from "./plans.ts";
+import { cleanQuery, listing, queryWords, type InContent } from "./listing.ts";
 import {
   EVENT_ERRORS,
   EventsFailure,
@@ -133,13 +134,13 @@ export type HubApi = AsyncMethods<
   Pick<
     Workspace,
     | "provision" | "access" | "info" | "rename" | "stats" | "destroy" | "members" | "setMember" | "createToken" | "tokens"
-    | "revokeToken" | "verifyAgentToken" | "signedIn" | "closeSockets" | "allowMail" | "indexData" | "openArtifact" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
+    | "revokeToken" | "verifyAgentToken" | "signedIn" | "closeSockets" | "allowMail" | "indexData" | "listPage" | "openArtifact" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
     | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
-    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault"
+    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault" | "visibleCount"
   >
 > & { fetch(request: Request): Promise<Response> };
 
@@ -314,6 +315,7 @@ const WEBHOOK_TIMEOUT_MS = 5_000;
 const EVENT_TEXT_MAX = 500;
 
 const PINS_PER_PERSON = 100;
+const WATCHES_SHOWN = 50;
 /** A Durable Object's SQLite holds 10 GB; writes stop short of it. */
 const DATABASE_CAPACITY_BYTES = 9.5 * 1024 * 1024 * 1024;
 const PUBLIC_DAYS_MAX = 365;
@@ -496,13 +498,14 @@ export class Workspace extends DurableObject {
       changesPerDay: () => count(`SELECT COUNT(*) AS n FROM events WHERE at > ? AND type = 'version'`, new Date(Date.now() - DAY_MS).toISOString()),
     }[kind]();
     if (used < max) return;
-    const limit = {
-      artifacts: `${max} artifacts. Delete artifacts you no longer need to make room.`,
-      members: `${max} members. Remove a member to make room.`,
-      bytes: `${max >= 1024 ** 3 ? `${max / 1024 ** 3} GB` : `${Math.round(max / 1024 / 1024)} MB`} of storage. Delete artifacts you no longer need to make room.`,
-      changesPerDay: `${max} saved changes a day. Try again later; changes save again as the oldest of today's fall out of the last 24 hours.`,
-    }[kind];
-    throw new HubError(`This workspace is on the ${plan.label} plan, which allows ${limit}`);
+    const size = max >= 1024 ** 3 ? `${max / 1024 ** 3} GB` : `${Math.round(max / 1024 / 1024)} MB`;
+    const limit = { artifacts: `${max} artifacts`, members: `${max} members`, bytes: `${size} of storage`, changesPerDay: `${max} saved changes a day` }[kind];
+    // Read by people and by agents: say who can fix it, and never suggest deleting anything (that's a person's call).
+    const fix =
+      kind === "changesPerDay"
+        ? "Try again later: changes save again as the oldest of today's fall out of the last 24 hours."
+        : `A workspace admin can ${kind === "members" ? "remove a member" : "delete artifacts nobody needs"}${this.planId() === "free" ? " or move the workspace to Team" : ""}. Agents: tell the person; don't delete anything to make room.`;
+    throw new HubError(`This workspace is on the ${plan.label} plan, which allows ${limit}. ${fix}`);
   }
 
   /** Deletes everything this workspace stores, including its backups. */
@@ -596,14 +599,25 @@ export class Workspace extends DurableObject {
    * false when it's used up. `by` also counts against that person's own daily
    * share allowance, so one member can't use the workspace to send bulk mail.
    */
-  allowMail(n: number, by?: string): boolean {
+  /**
+   * Today's email allowance. Invitations and shares ("invite") may use the
+   * whole cap; notifications only what's left above the part set aside for
+   * invitations, so a busy day of notifications can't stop someone being
+   * invited.
+   */
+  allowMail(n: number, by?: string, kind: "invite" | "notify" = "invite"): boolean {
     const day = new Date().toISOString().slice(0, 10);
-    const used = JSON.parse(this.setting("mail_sent") ?? "{}") as { day?: string; n?: number; by?: Record<string, number> };
-    const today = used.day === day ? used : { day, n: 0, by: {} };
+    const used = JSON.parse(this.setting("mail_sent") ?? "{}") as { day?: string; n?: number; notify?: number; by?: Record<string, number> };
+    const today = used.day === day ? used : { day, n: 0, notify: 0, by: {} };
     const mine = by ? (today.by?.[by] ?? 0) : 0;
-    const cap = Math.min(MAIL_PER_DAY, PLANS[this.planId()].limits.emailsPerDay);
+    const limits = PLANS[this.planId()].limits;
+    const cap = Math.min(MAIL_PER_DAY, limits.emailsPerDay);
     if ((today.n ?? 0) + n > cap || (by && mine + n > SHARE_MAIL_PER_PERSON)) return false;
-    this.setSetting("mail_sent", JSON.stringify({ day, n: (today.n ?? 0) + n, by: by ? { ...today.by, [by]: mine + n } : today.by }));
+    if (kind === "notify" && (today.notify ?? 0) + n > cap - limits.inviteEmailsPerDay) return false;
+    this.setSetting(
+      "mail_sent",
+      JSON.stringify({ day, n: (today.n ?? 0) + n, notify: (today.notify ?? 0) + (kind === "notify" ? n : 0), by: by ? { ...today.by, [by]: mine + n } : today.by }),
+    );
     return true;
   }
 
@@ -1335,7 +1349,9 @@ export class Workspace extends DurableObject {
 
   putAsset(id: string, path: string, contentType: string, data: Uint8Array): { path: string; bytes: number } {
     this.requireArtifact(id);
-    this.withinPlan("bytes");
+    // Replacing a file with one no bigger doesn't add to storage, so it works even over the limit.
+    const previous = this.sql.exec(`SELECT bytes FROM assets WHERE artifact_id = ? AND path = ?`, id, path).toArray()[0]?.bytes as number | undefined;
+    if (previous === undefined || data.byteLength > previous) this.withinPlan("bytes");
     const total = this.sql.exec(`SELECT COALESCE(SUM(bytes), 0) AS n FROM assets WHERE artifact_id = ? AND path != ?`, id, path).one().n as number;
     if (total + data.byteLength > ASSETS_MAX_BYTES) throw new HubError(`assets for this artifact would exceed ${ASSETS_MAX_BYTES / 1e6} MB`);
     this.sql.exec(
@@ -1520,10 +1536,37 @@ export class Workspace extends DurableObject {
   // ---- owner overview ------------------------------------------------------------
 
   /** Everything the index page needs, in one call: membership, the list, and sharing for what you manage. */
-  async indexData(email: string) {
+  /** One page of the artifact list for this person (see listing.ts), with sharing summaries for its rows. */
+  async indexData(email: string, view: { archived?: boolean; q?: unknown; page?: unknown } = {}) {
     const member = await this.autoJoin(email);
-    const artifacts = this.list(email);
-    return { member, artifacts, summaries: this.shareSummaries(email, artifacts) };
+    const page = listing(this.list(email), { archived: view.archived === true, q: view.q, page: view.page, inContent: this.contentSearch(view.q) });
+    return { member, ...page, summaries: this.shareSummaries(email, page.rows) };
+  }
+
+  /**
+   * For a search: which artifacts' current files contain each word. One scan of the stored text per word, only
+   * when someone searches; what each person may see is still decided by list().
+   */
+  private contentSearch(q: unknown): InContent | undefined {
+    const words = queryWords(cleanQuery(q));
+    if (!words.length) return undefined;
+    const hits = new Map<string, Set<string>>();
+    for (const w of words) {
+      const ids = this.sql
+        .exec(
+          `SELECT DISTINCT f.artifact_id AS id FROM files f JOIN blobs b ON b.artifact_id = f.artifact_id AND b.hash = f.hash WHERE instr(lower(b.content), ?) > 0`,
+          w,
+        )
+        .toArray()
+        .map((r) => r.id as string);
+      hits.set(w, new Set(ids));
+    }
+    return (id, w) => hits.get(w)?.has(id) ?? false;
+  }
+
+  /** One page of what this person can see, searched here so only that page crosses to the Worker. A page past the end is empty. */
+  listPage(email: string, view: { archived?: boolean; q?: unknown; page?: unknown } = {}) {
+    return listing(this.list(email), { archived: view.archived === true, q: view.q, page: view.page, clamp: false, inContent: this.contentSearch(view.q) });
   }
 
   /**
@@ -1540,10 +1583,13 @@ export class Workspace extends DurableObject {
   }
 
   /** Sharing summary per artifact, for the people who manage them on the index. */
-  shareSummaries(email: string, listed = this.list(email)): Record<string, { shares: ShareEntry[]; public: boolean; publicUntil: string | null }> {
+  shareSummaries(email: string, listed: { id: string; role: Role; public: boolean; publicUntil: string | null }[]): Record<string, { shares: ShareEntry[]; public: boolean; publicUntil: string | null }> {
     const out: Record<string, { shares: ShareEntry[]; public: boolean; publicUntil: string | null }> = {};
     for (const a of listed) if (a.role === "owner") out[a.id] = { shares: [], public: a.public, publicUntil: a.publicUntil };
-    for (const s of this.sql.exec(`SELECT artifact_id, email, role FROM shares ORDER BY email`)) {
+    const ids = Object.keys(out);
+    if (!ids.length) return out;
+    // Only the listed rows' shares, so a page of 50 doesn't read every share in the workspace.
+    for (const s of this.sql.exec(`SELECT artifact_id, email, role FROM shares WHERE artifact_id IN (${ids.map(() => "?").join(", ")}) ORDER BY email`, ...ids)) {
       out[s.artifact_id as string]?.shares.push({ email: s.email as string, role: s.role as ShareEntry["role"] });
     }
     return out;
@@ -2270,12 +2316,20 @@ export class Workspace extends DurableObject {
       this.sql.exec(`SELECT artifact_id, level FROM watches WHERE email = ?`, email).toArray().map((r) => [r.artifact_id as string, r.level as WatchLevel]),
     );
     const fallback = this.watchDefault(email);
-    return this.list(email).map((a) => ({
+    const all = this.list(email).filter((a) => !a.archivedAt);
+    // Everything set apart, plus the most recent of the rest: thousands of artifacts mustn't make one huge page.
+    const shown = [...all.filter((a) => levels.has(a.id)), ...all.filter((a) => !levels.has(a.id)).slice(0, WATCHES_SHOWN)];
+    return shown.map((a) => ({
       id: a.id,
       title: a.title,
       level: levels.get(a.id) ?? fallback ?? defaultLevel(a.owner === email),
       custom: levels.has(a.id),
     }));
+  }
+
+  /** How many active artifacts this person can see (the notifications page lists only some). */
+  visibleCount(email: string): number {
+    return this.list(email).filter((a) => !a.archivedAt).length;
   }
 
   /** This person's default level for the whole workspace, or null for the standard one (everything on what you own, replies and mentions elsewhere). */
@@ -2470,7 +2524,8 @@ export class Workspace extends DurableObject {
       const msg = composeMessage({ title: art.title as string, artifactId: id, origin, items, nameOf: (e) => names[e] ?? null });
       for (const c of mine) {
         // Notification emails share the workspace's daily email allowance.
-        if (c.type === "email" && !this.allowMail(1)) continue;
+        // Over today's email allowance, other channels (push, webhooks) still carry it.
+        if (c.type === "email" && !this.allowMail(1, undefined, "notify")) continue;
         sends++;
         const result = await sendToChannel(c.type, c.config, msg, this.hubEnv).catch((err: Error) => ({ ok: false as const, error: err.message }));
         results.push({ id: c.id, result });

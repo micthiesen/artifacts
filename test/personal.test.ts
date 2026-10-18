@@ -165,3 +165,16 @@ test("a workspace default silences or widens notifications; a per-artifact choic
     globalThis.fetch = real;
   }
 });
+
+test("searching the list finds words in artifacts' contents too, only among what you can see", async () => {
+  const a = await h.hub.create({ title: "Plan", files: { "index.mdx": "# Plan\n\nThe Concentrates recipe uses citric acid.\n" }, owner: ADMIN });
+  const b = await h.hub.create({ title: "Other", files: { "index.mdx": "# Other\n\nNothing here.\n", "data/x.json": '{"note":"citric"}' }, owner: ADMIN });
+  if (!a.ok || !b.ok) throw new Error("create");
+  const ids = (q: string, who = ADMIN) => h.hub.listPage(who, { q }).rows.map((r) => r.id).sort();
+  expect(ids("citric")).toEqual([a.id, b.id].sort());
+  // Every word must appear somewhere in the artifact: title or contents.
+  expect(ids("plan CONCENTRATES")).toEqual([a.id]);
+  expect(ids("other concentrates")).toEqual([]);
+  // Someone without access finds nothing.
+  expect(ids("citric", "stranger@else.com")).toEqual([]);
+});

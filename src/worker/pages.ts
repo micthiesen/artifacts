@@ -6,6 +6,7 @@ import type { WorkspaceRole } from "./directory.ts";
 import type { FrameBoot, Role, ShellBoot } from "../shared/protocol.ts";
 import { PRODUCT } from "../shared/brand.ts";
 import { PLANS } from "./plans.ts";
+import type { Listing } from "./listing.ts";
 import { TEAM_PRICE } from "./billing.ts";
 import demos from "./demos.json";
 import demoLinks from "../../demo/links.json";
@@ -145,33 +146,55 @@ type ListedArtifact = ArtifactMeta & { role: Role; unseen?: boolean; unread?: nu
  */
 export function indexPage(
   viewer: { email: string; member: WorkspaceRole | null },
-  all: ListedArtifact[],
+  view: Listing<ListedArtifact>,
   brand: Brand,
   summaries?: Record<string, ShareSummary>,
   archived = false,
 ): Response {
   const account = `${avatar(viewer.email, brand, "workspace", { member: Boolean(viewer.member) })}${ACCOUNT_SCRIPT}`;
-  const artifacts = all.filter((a) => Boolean(a.archivedAt) === archived);
-  if (archived) artifacts.sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
-  const archivedCount = archived ? 0 : all.length - artifacts.length;
+  const artifacts = view.rows;
+  const here = archived ? "/archived" : "/";
+  const href = (page: number, q = view.q) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (page > 1) params.set("page", String(page));
+    const qs = params.toString();
+    return `${here}${qs ? `?${qs}` : ""}`;
+  };
+  const archivedCount = archived ? 0 : view.archivedCount;
   // Always present (hidden at zero) so archiving the first row can reveal it.
   const archivedLink = `<p class="archived-link"${archivedCount ? "" : " hidden"}><a href="/archived">${ICON_ARCHIVE}Archived · <span data-archived-count>${archivedCount}</span></a></p>`;
+  const inView = archived ? view.archivedCount : view.activeCount;
+  // Search once there's enough to search, or while a search is on.
+  const search =
+    inView > 8 || view.q
+      ? `<form class="list-search" method="get" action="${here}" role="search"><input class="input" type="search" name="q" value="${escapeHtml(view.q)}" placeholder="Search ${archived ? "archived artifacts" : "artifacts"}" aria-label="Search artifacts" maxlength="100" autocomplete="off">${
+          view.q ? `<a class="list-search-clear" href="${here}">Clear</a>` : ""
+        }</form>`
+      : "";
+  const results = view.q ? `<p class="muted list-count">${view.total} ${view.total === 1 ? "match" : "matches"} for “${escapeHtml(view.q)}”</p>` : "";
+  const pager =
+    view.pages > 1
+      ? `<nav class="pager" aria-label="Pages">${view.page > 1 ? `<a href="${escapeHtml(href(view.page - 1))}" rel="prev">← Newer</a>` : `<span></span>`}<span class="muted">Page ${view.page} of ${view.pages}</span>${
+          view.page < view.pages ? `<a href="${escapeHtml(href(view.page + 1))}" rel="next">Older →</a>` : `<span></span>`
+        }</nav>`
+      : "";
+  const noMatch = `<section class="empty"><h1>No matches</h1><p class="muted">Nothing ${archived ? "archived " : ""}matches “${escapeHtml(view.q)}”. <a href="${here}">Show all</a></p></section>`;
   let body: string;
   if (archived) {
-    body = `<p class="back-link"><a href="/">← All artifacts</a></p><h1 class="page-title">Archived</h1><p class="muted page-lede">Hidden from the main list. They still open at their links, with history and comments.</p>${
-      list(artifacts, summaries, true)
-    }<p class="muted archive-empty" data-list-empty${artifacts.length ? " hidden" : ""}>Nothing archived.</p>`;
-  } else if (!artifacts.length) {
+    body = `<p class="back-link"><a href="/">← All artifacts</a></p><h1 class="page-title">Archived</h1><p class="muted page-lede">Hidden from the main list. They still open at their links, with history and comments.</p>${search}${results}${
+      view.q && !artifacts.length ? noMatch : list(artifacts, summaries, true)
+    }${pager}<p class="muted archive-empty" data-list-empty${artifacts.length || view.q ? " hidden" : ""}>Nothing archived.</p>`;
+  } else if (!view.activeCount) {
     const nothing = viewer.member
       ? `<section class="empty"><h1>Nothing here yet</h1><p class="muted">Ask your agent to make an artifact: connect it from <a href="/settings">workspace settings</a>. Artifacts shared with you show up here too.</p></section>`
       : `<section class="empty"><h1>Nothing here yet</h1><p class="muted">Artifacts in ${escapeHtml(brand.name)} shared with ${escapeHtml(viewer.email)} will show up here.</p></section>`;
-    body = all.length ? `<section class="empty"><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}` : nothing;
+    body = view.archivedCount ? `<section class="empty"><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}` : nothing;
   } else {
-    body = `<h1 class="page-title">Artifacts</h1>${list(artifacts, summaries, false)}<section class="empty" data-list-empty hidden><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}`;
+    body = `<h1 class="page-title">Artifacts</h1>${search}${results}${view.q && !artifacts.length ? noMatch : list(artifacts, summaries, false)}${pager}<section class="empty" data-list-empty hidden><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}`;
   }
   const script = `<script type="module" src="${asset("/static/home.js")}"></script>`;
   const title = archived ? `Archived · ${brand.name}` : brand.name;
-  // Policies live on the apex; signed-out visitors may want them before signing in.
   return page(title, `${topBar(brand, account)}<main class="content">${body}</main>${script}`);
 }
 

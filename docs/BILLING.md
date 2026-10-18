@@ -33,19 +33,30 @@ webhook and no billing in settings; the operator sets plans by hand.
     touched by stray events.
   - `checkout.completed`, `subscription.active`, `.paid`, `.trialing` (status
     active or trialing): **Team**.
-  - `subscription.canceled`: Team until the end of the period already paid
-    for, then Free on its own (Creem's portal cancels at period end but sends
-    `canceled` straight away, with the period's end); `.paused`: **Free**.
+  - `subscription.canceled`, `.paused`: Team until the end of the period
+    already paid for, then Free on its own (Creem's portal cancels at period
+    end but sends `canceled` straight away, with the period's end);
+    `.scheduled_cancel` likewise.
   - `subscription.past_due`, `.unpaid`, `.expired`: Team stays while Creem
-    retries the payment; `.scheduled_cancel`: Team stays until the period
-    ends, then `.canceled` arrives.
+    retries the payment, for up to 14 days past the paid period, then Free.
+    Settings asks the payer to update their card.
 - **Manage billing** in settings opens Creem's customer portal (card,
-  invoices, cancel).
+  invoices, cancel), for the person who paid only: the portal shows their
+  card and everything they pay for. Other admins see who that is. To move
+  billing to someone else, they cancel and the new person subscribes.
+- **No paying twice:** Upgrade is hidden while a subscription exists (even
+  a paused or overdue one) and stays off right after a checkout until the
+  payment is confirmed; the server refuses a second checkout too.
 - Deleting a workspace with a live subscription is refused (cancel it in
   Creem first, or delete with `?force=1`); deleting removes its billing
-  record, so a later workspace with the same address starts clean.
-- Moving to Free keeps everything; past Free's limits the workspace can't
-  add more until it trims or upgrades again.
+  record, so a later workspace with the same address starts clean. Whoever
+  made a self-serve workspace can delete it from settings once nothing is
+  billed, and then make another.
+- Moving to Free keeps everything: every artifact still opens, can be
+  edited, shared and commented on. Past Free's limits nothing new can be
+  added (artifacts, members, storage) until it trims or upgrades again;
+  replacing a file with one no bigger still works. Free also sends fewer
+  emails, 20 of its 50 a day kept for invitations and shares.
 
 ## Turning it on
 

@@ -32,7 +32,7 @@ import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { publicMessage } from "./errors.ts";
 import { isPlan } from "./plans.ts";
-import { BillingError, billingOn, billingReady, portalLink, readEvent, startCheckout, TEAM_PRICE, verifyWebhook } from "./billing.ts";
+import { BillingError, billingOn, billingReady, planFor, portalLink, readEvent, startCheckout, subscriptionLive, TEAM_PRICE, verifyWebhook } from "./billing.ts";
 import { checkLayout } from "./layout.ts";
 import { exportRun, latestManifest } from "./snapshot.ts";
 import { DATA_TABLES } from "./tables.ts";
@@ -49,7 +49,7 @@ import {
   timingSafeEqual,
   verifyToken,
 } from "./session.ts";
-import { validSlug, WORKSPACE_LIST_KEY, type DirectoryApi, type WorkspaceRecord, type WorkspaceRole } from "./directory.ts";
+import { personKey, validSlug, WORKSPACE_LIST_KEY, type DirectoryApi, type WorkspaceRecord, type WorkspaceRole } from "./directory.ts";
 import type { HubApi, Workspace } from "./hub.ts";
 import type { Directory } from "./directory.ts";
 import type { Role } from "../shared/protocol.ts";
@@ -167,6 +167,11 @@ export function slugOf(hostname: string, env: Pick<Env, "WORKSPACE_SUFFIX">): st
 
 export function workspaceOrigin(env: Pick<Env, "WORKSPACE_SUFFIX">, slug: string): string {
   return `https://${slug}${env.WORKSPACE_SUFFIX}`;
+}
+
+/** Where people reach us: the first operator address. */
+function contactEmail(env: Env): string {
+  return (env.OPERATOR_EMAILS ?? "").split(",")[0].trim();
 }
 
 function apexOrigin(env: Env): string {
@@ -355,8 +360,9 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (path === "/" || path === "/archived") {
     // Signed in on the apex already, this comes straight back signed in here.
     if (!viewer.email) return signIn(path);
-    const data = await hub.indexData(viewer.email);
-    return indexPage({ email: viewer.email, member: data.member }, data.artifacts, brand, data.summaries, path === "/archived");
+    const archived = path === "/archived";
+    const data = await hub.indexData(viewer.email, { archived, q: url.searchParams.get("q"), page: url.searchParams.get("page") });
+    return indexPage({ email: viewer.email, member: data.member }, data, brand, data.summaries, archived);
   }
   if (path === "/me") {
     if (!viewer.email) return signIn("/me");
@@ -535,7 +541,9 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
     if (!viewer.email) return Response.redirect(`${url.origin}/login?return=/workspaces`, 302);
     const selfServe = env.SELF_SERVE === "on";
     const list = async () => (await directory(env).membershipsOf(viewer.email!)).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) }));
-    const create = (state: { error?: string; name?: string; slug?: string } = {}) => (selfServe ? { ...state, suffix: env.WORKSPACE_SUFFIX } : null);
+    // Once they've made their one workspace, there's no form to fill in only to be told no.
+    const create = async (state: { error?: string; name?: string; slug?: string } = {}) =>
+      selfServe && (state.error || (await directory(env).canMakeWorkspace(viewer.email!))) ? { ...state, suffix: env.WORKSPACE_SUFFIX } : null;
     if (request.method === "POST") {
       if (!selfServe) return new Response("not found", { status: 404 });
       if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
@@ -544,10 +552,10 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
       const slug = String(form.get("slug") ?? "").trim().toLowerCase();
       const made = await createOwnWorkspace(env, viewer.email, { name, slug, terms: form.get("terms") === "on" });
       if ("location" in made) return continuePage(made.location);
-      const res = workspacesPage(viewer.email, await list(), operator, brand, create({ error: made.error, name, slug }));
+      const res = workspacesPage(viewer.email, await list(), operator, brand, await create({ error: made.error, name, slug }));
       return new Response(res.body, { status: 400, headers: res.headers });
     }
-    return workspacesPage(viewer.email, await list(), operator, brand, create());
+    return workspacesPage(viewer.email, await list(), operator, brand, await create());
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
   if (path === "/login/passkey/options" && request.method === "POST") {
@@ -556,7 +564,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   }
   if (path === "/login/passkey" && request.method === "POST") return passkeyLogin(request, url, env);
   if (path === "/privacy" || path === "/terms" || path === "/security") {
-    return indexable(policyPage(path.slice(1) as PolicyKind, brand, (env.OPERATOR_EMAILS ?? "").split(",")[0].trim()));
+    return indexable(policyPage(path.slice(1) as PolicyKind, brand, contactEmail(env)));
   }
   // Billing: the pricing page and the payment provider's webhook, only while billing is on.
   if (path === "/pricing" && billingOn(env)) return indexable(pricingPage(brand, env.SELF_SERVE === "on", viewer.email ? { email: viewer.email, operator } : undefined));
@@ -586,12 +594,18 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
 }
 
 /** What settings shows an admin about paying: the price, whether checkout works yet, and the subscription. */
+/** Self-serve workspaces belong to whoever made them. */
+async function ownWorkspace(env: Env, slug: string, email: string): Promise<boolean> {
+  const record = await directory(env).workspace(slug);
+  return Boolean(record?.createdBy && record.createdBy === personKey(email));
+}
+
 async function billingState(env: Env, slug: string) {
   const record = await directory(env).billing(slug);
   return {
     ready: billingReady(env),
     price: TEAM_PRICE,
-    subscription: record ? { status: record.status, periodEnd: record.periodEnd, manageable: Boolean(record.customerId) } : null,
+    subscription: record ? { status: record.status, periodEnd: record.periodEnd, manageable: Boolean(record.customerId), payer: record.payerEmail } : null,
   };
 }
 
@@ -615,16 +629,19 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
   const update = readEvent(payload);
   if (!update) return Response.json({ ignored: true });
   const applied = await directory(env).applyBilling(update, "creem");
-  if (!applied) return Response.json({ ok: true, ignored: true });
+  if (!applied) {
+    // Someone paid for a workspace we can't find (deleted mid-checkout?): refund them.
+    if (update.plan === "team" && update.workspace) console.error(`billing: payment for unknown workspace ${update.workspace}; check Creem and refund`, update.subscriptionId);
+    return Response.json({ ok: true, ignored: true });
+  }
   // Two webhooks at once can finish in either order, so settle on what the record says now.
   let plan = applied.plan;
   let until = applied.until;
   for (let i = 0; i < 3; i++) {
     await workspaceHub(env, applied.slug).setPlan(plan, until);
     const now = await directory(env).billingPlan(applied.slug);
-    if (!now || now === plan) break;
-    plan = now;
-    until = null;
+    if (!now || (now.plan === plan && now.until === until)) break;
+    ({ plan, until } = now);
   }
   return Response.json({ ok: true, workspace: applied.slug, plan, ...(until ? { until } : {}) });
 }
@@ -638,7 +655,7 @@ async function createOwnWorkspace(env: Env, email: string, input: { name: string
   if (!validSlug(input.slug)) return { error: "Pick an address of 3-32 lowercase letters, digits and single hyphens, starting with a letter." };
   if (!input.terms) return { error: "Agree to the terms and privacy policy to continue." };
   try {
-    await directory(env).createOwnWorkspace(email, input.slug, input.name, POLICY_UPDATED);
+    await directory(env).createOwnWorkspace(email, input.slug, input.name, POLICY_UPDATED, contactEmail(env));
   } catch (err) {
     return { error: publicMessage(err).message };
   }
@@ -1005,12 +1022,37 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         joinDomains: await hub.joinDomains(),
         plan: await hub.plan(),
         billing: billingOn(env) && admin ? await billingState(env, slug) : null,
+        canDelete: admin && (await ownWorkspace(env, slug, email)),
       });
+    }
+    // Self-serve: whoever made the workspace can delete it (and then make another), once nothing is billed.
+    if (path === "/api/settings/delete" && request.method === "POST") {
+      if (!admin || !(await ownWorkspace(env, slug, email))) return Response.json({ error: "Only the person who made this workspace can delete it. Email us if that's not possible." }, { status: 403 });
+      const body = await jsonBody(request);
+      if (body.confirm !== slug) return Response.json({ error: `Type ${slug} to confirm.` }, { status: 400 });
+      const record = await directory(env).billing(slug);
+      if (record && subscriptionLive(record.status, record.periodEnd)) {
+        return Response.json({ error: "Cancel the subscription in Manage billing first, so it stops charging." }, { status: 409 });
+      }
+      for (const m of await hub.members()) {
+        await revokeGrants(env, url.origin, slug, m.email, hub).catch((err) => console.error("revoking grants failed", err));
+      }
+      await hub.destroy(slug);
+      await directory(env).removeWorkspace(slug);
+      forgetWorkspaces();
+      return Response.json({ location: `${apexOrigin(env)}/workspaces` });
     }
     // Billing (admins): start paying for Team, or open the provider's portal to manage it.
     if (path === "/api/settings/billing/checkout" && request.method === "POST") {
       if (!admin) return adminOnly();
       if ((await hub.plan()).id === "team") return Response.json({ error: "This workspace is already on Team." }, { status: 400 });
+      // A subscription that still exists would mean paying twice: put the plan right instead.
+      const existing = await directory(env).billing(slug);
+      if (existing && subscriptionLive(existing.status, existing.periodEnd)) {
+        const fix = planFor(existing.status, existing.periodEnd);
+        await hub.setPlan(fix.plan, fix.until);
+        return Response.json({ error: existing.status === "paused" ? "This workspace's subscription is paused: resume it from Manage billing." : "This workspace already has a subscription; reload to see it." }, { status: 409 });
+      }
       try {
         return Response.json({ url: await startCheckout(env, { workspace: slug, email, successUrl: `${url.origin}/settings?billing=done` }) });
       } catch (err) {
@@ -1022,6 +1064,12 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       if (!admin) return adminOnly();
       const record = await directory(env).billing(slug);
       if (!record?.customerId) return Response.json({ error: "This workspace has no subscription to manage." }, { status: 400 });
+      // The portal shows the payer's card and everything they pay for, so it's theirs alone.
+      // If the payer isn't an admin here (they paid under another address), any admin may.
+      const payerAdmin = record.payerEmail && (await hub.members()).some((m) => m.email === record.payerEmail && m.role === "admin");
+      if (payerAdmin && record.payerEmail !== email) {
+        return Response.json({ error: `Billing is managed by ${record.payerEmail}, who paid for it. Ask them, or email us to move it.` }, { status: 403 });
+      }
       try {
         return Response.json({ url: await portalLink(env, record.customerId) });
       } catch (err) {
@@ -1150,6 +1198,7 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
         email,
         workspace: { name: (await hub.access(null)).name },
         watches: await hub.watches(email),
+        watchesTotal: await hub.visibleCount(email),
         watchDefault: await hub.watchDefault(email),
         account: `${apexOrigin(env)}/me`,
       });
@@ -1349,7 +1398,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
     if (!action && request.method === "DELETE") {
       if (!validSlug(slug)) return Response.json({ error: `no workspace ${slug}` }, { status: 404 });
       // A paying workspace would keep being charged: cancel its subscription first (or force).
-      if ((await dir.billingPlan(slug)) === "team" && url.searchParams.get("force") !== "1") {
+      if ((await dir.billingPlan(slug))?.plan === "team" && url.searchParams.get("force") !== "1") {
         return Response.json({ error: `${slug} has a live subscription; cancel it in Creem first, or delete with ?force=1` }, { status: 409 });
       }
       for (const m of await hub.members().catch(() => [])) {

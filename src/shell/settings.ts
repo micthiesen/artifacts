@@ -19,8 +19,10 @@ type Settings = {
   billing: {
     ready: boolean;
     price: { amount: number; currency: string; period: string };
-    subscription: { status: string; periodEnd: string | null; manageable: boolean } | null;
+    subscription: { status: string; periodEnd: string | null; manageable: boolean; payer: string | null } | null;
   } | null;
+  /** You made this workspace yourself, so you can delete it. */
+  canDelete: boolean;
   plan: {
     id: string;
     label: string;
@@ -138,33 +140,68 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
       const r = await api<{ url: string }>(path, { body: {} });
       location.href = r.url;
     });
+  const day = (v: string) => new Date(v).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  const plainUntil = data.plan.until ? day(data.plan.until) : null;
   const state = !team
     ? `This workspace is on Free. Team is $${billing.price.amount} a ${billing.price.period} for the whole workspace: unlimited artifacts and members, and more storage. Guests are always free.`
     : sub && ["active", "trialing", "paid"].includes(sub.status)
       ? `Team, paid${until ? ` through ${until}` : ""}.`
-      : data.plan.until || sub?.status === "scheduled_cancel"
-        ? `Team until ${data.plan.until ? new Date(data.plan.until).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : (until ?? "the end of the paid period")}, then Free: the subscription is canceled. Resubscribe from Manage billing to keep Team.`
-        : sub && ["past_due", "unpaid", "expired"].includes(sub.status)
-          ? "Team, but the last payment didn't go through. Update the card to keep it."
-          : "Team, arranged with us directly.";
+      : sub && ["past_due", "unpaid", "expired"].includes(sub.status)
+        ? `Team, but the last payment didn't go through. Update the card in Manage billing${plainUntil ? ` by ${plainUntil}` : ""} to keep it.`
+        : sub?.status === "paused"
+          ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is paused. Resume it from Manage billing to keep Team.`
+          : data.plan.until || sub?.status === "scheduled_cancel"
+            ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is canceled. Resubscribe from Manage billing to keep Team.`
+            : "Team, arranged with us directly.";
+  // Matches the server: a subscription that's canceled or lapsed to Free can be replaced by a new one.
+  const live = sub && sub.status !== "canceled" && team;
+  const payer = sub?.payer ?? null;
+  const payerAdmin = payer !== null && data.members.some((m) => m.email === payer && m.role === "admin");
+  const mine = !payerAdmin || payer === data.you.email.toLowerCase();
   const actions = h("div", { class: "row" });
-  if (!team) {
+  const notes: HTMLElement[] = [];
+  if (!team && !live) {
     const b = btn("Upgrade to Team", () => go("/api/settings/billing/checkout"));
-    if (!billing.ready) {
+    if (!billing.ready || checkoutPending) {
       b.setAttribute("disabled", "");
       b.setAttribute("aria-describedby", "billing-not-ready");
+      notes.push(h("p", { class: "muted small", id: "billing-not-ready" }, checkoutPending ? "Waiting for the payment to be confirmed…" : "Payments aren't set up yet."));
     }
     actions.append(b);
   }
-  if (sub?.manageable) actions.append(btn("Manage billing", () => go("/api/settings/billing/portal"), "button small secondary"));
+  if (sub?.manageable && mine) actions.append(btn("Manage billing", () => go("/api/settings/billing/portal"), "button small secondary"));
+  if (payer) notes.push(h("p", { class: "muted small" }, payer === data.you.email.toLowerCase() ? `Billed to you (${payer}).` : mine ? `Billed to ${payer}.` : `Billed to ${payer}: they can change the card or cancel.`));
   return h(
     "section",
     { class: "card-section" },
     h("h2", {}, "Plan and billing"),
     h("p", { class: "muted" }, state),
-    ...(!billing.ready && !team ? [h("p", { class: "muted small", id: "billing-not-ready" }, "Payments aren't set up yet.")] : []),
+    ...notes,
     actions,
     h("p", { class: "muted small billing-note" }, "Payments are handled by Creem, who is the seller on the invoice and handles sales tax and VAT."),
+  );
+}
+
+/** Whoever made the workspace: delete it for good, after typing its address. */
+function deleteSection(): HTMLElement {
+  const slug = data.workspace.slug;
+  const confirm = h("input", { class: "input", type: "text", autocomplete: "off", spellcheck: "false", "aria-label": `Type ${slug} to confirm`, placeholder: slug });
+  const go = btn(
+    "Delete workspace",
+    () =>
+      act(async () => {
+        const r = await api<{ location: string }>("/api/settings/delete", { body: { confirm: confirm.value.trim() } });
+        location.href = r.location;
+        await new Promise(() => {});
+      }),
+    "button small danger-solid",
+  );
+  return h(
+    "section",
+    { class: "card-section" },
+    h("h2", {}, "Delete workspace"),
+    h("p", { class: "muted" }, `Deletes every artifact, comment and member, and its backups. It can't be undone: download a copy above first. Type ${slug} to confirm.`),
+    h("div", { class: "row" }, confirm, go),
   );
 }
 
@@ -232,9 +269,32 @@ function exportSection(): HTMLElement {
 }
 
 // Back from checkout: the plan changes once the payment provider tells us, usually within a few seconds.
+// Until then Upgrade stays off (a second checkout would mean paying twice), and we check back for a minute.
+let checkoutPending = false;
 if (new URLSearchParams(location.search).get("billing") === "done") {
-  notice = { tone: "ok", text: "Thanks! Your workspace moves to Team as soon as the payment is confirmed. Reload in a moment if it hasn't yet." };
+  notice = { tone: "ok", text: "Thanks! Your workspace moves to Team as soon as the payment is confirmed, usually within a few seconds." };
   history.replaceState(null, "", location.pathname);
+  checkoutPending = true;
+  let tries = 0;
+  const check = async () => {
+    tries++;
+    try {
+      await load();
+    } catch {
+      // try again next time
+    }
+    if (data?.plan.id === "team" || data?.billing?.subscription) {
+      checkoutPending = false;
+      notice = { tone: "ok", text: "Payment confirmed: this workspace is on Team." };
+      render();
+    } else if (tries < 20) setTimeout(check, 3000);
+    else {
+      checkoutPending = false;
+      notice = { tone: "ok", text: "The payment hasn't been confirmed yet. If you were charged, it will show here soon; email us if it doesn't." };
+      render();
+    }
+  };
+  setTimeout(check, 3000);
 }
 
 async function load() {
@@ -322,6 +382,20 @@ function render() {
       limits.bytes !== null && `${mb(usage.bytes)} of ${mb(limits.bytes)}`,
     ].filter((p): p is string => Boolean(p));
     sections.push(h("p", { class: "muted plan-usage" }, `${data.plan.label} plan: ${parts.join(" · ")}. People you share artifacts with don't count.`));
+    // Over a limit (say, after moving to Free): say what still works and what doesn't.
+    const over = [
+      limits.artifacts !== null && usage.artifacts > limits.artifacts && "artifacts",
+      limits.members !== null && usage.members > limits.members && "members",
+      limits.bytes !== null && usage.bytes > limits.bytes && "storage",
+    ].filter((x): x is string => Boolean(x));
+    if (over.length) {
+      sections.push(
+        noticeNode({
+          tone: "error",
+          text: `This workspace is over the ${data.plan.label} plan's limit for ${over.join(" and ")}. Everything here still opens and can be changed, but nothing that adds to it (new artifacts, members or stored content) until it's back under${data.billing ? ", or the workspace moves to Team" : ""}. Deleting artifacts makes room (archived ones still count).`,
+        }),
+      );
+    }
   }
   if (notice) {
     sections.push(noticeNode(notice));
@@ -494,6 +568,7 @@ function render() {
     );
     if (data.billing) sections.push(billingSection(data.billing));
     sections.push(exportSection());
+    if (data.canDelete) sections.push(deleteSection());
   }
   main.replaceChildren(...sections);
   if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });

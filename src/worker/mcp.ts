@@ -214,23 +214,21 @@ export const TOOLS: Tool[] = [
     name: "artifact_list",
     title: "artifacts.boo: list",
     description:
-      "artifacts.boo: list the artifacts the user this agent acts for can see in this workspace (theirs, ones shared with them or the workspace, and for an admin every artifact), newest first, with their role and owner. Optional text filter. Archived artifacts are left out unless archived is true.",
+      "artifacts.boo: list the artifacts the user this agent acts for can see in this workspace (theirs, ones shared with them or the workspace, and for an admin every artifact), newest first (the user's pins on top), with their role and owner, 50 a page. Optional search over titles, descriptions and the artifacts' current files (to find which artifact mentions something; then artifact_grep inside it). Archived artifacts are left out unless archived is true.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Case-insensitive filter on title and description." },
+        query: { type: "string", description: "Words that must all appear in the artifact's title, description, id or current files (case-insensitive)." },
         archived: { type: "boolean", description: "true: list only archived artifacts. Default: only active ones." },
+        page: { type: "integer", minimum: 1, description: "Page of 50, newest first. Default 1." },
       },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
     run: async (args, { hub, origin, person }) => {
-      const q = typeof args.query === "string" ? args.query.toLowerCase() : "";
       const archived = args.archived === true;
-      const all = await hub.list(person);
-      const rows = all
-        .filter((a) => Boolean(a.archivedAt) === archived)
-        .filter((a) => !q || `${a.title} ${a.description}`.toLowerCase().includes(q))
+      const view = await hub.listPage(person, { archived, q: args.query, page: args.page });
+      const rows = view.rows
         .map((a) => ({
           id: a.id,
           title: a.title,
@@ -243,15 +241,20 @@ export const TOOLS: Tool[] = [
           archivedAt: a.archivedAt,
           url: url(origin, a.id),
         }));
-      const hidden = archived ? 0 : all.filter((a) => a.archivedAt).length;
+      const hidden = archived ? 0 : view.archivedCount;
       const lines = rows.map(
         (a) =>
           `${a.id} v${a.version} ${a.title}${a.description ? `: ${a.description}` : ""} [${a.owner === person ? "yours" : `${a.role}, owner ${a.owner}`}]${a.archivedAt ? ` (archived ${a.archivedAt.slice(0, 10)})` : ""}`,
       );
-      if (hidden) lines.push(`(${hidden} archived not shown; pass archived: true to list them.)`);
+      if (view.pages > 1) lines.push(`(Page ${view.page} of ${view.pages}, ${view.total} in all${view.page < view.pages ? `; pass page: ${view.page + 1} for more` : ""}.)`);
+      if (hidden && !view.q) lines.push(`(${hidden} archived not shown; pass archived: true to list them.)`);
       return {
-        text: rows.length ? lines.join("\n") : archived ? "No archived artifacts." : ["No artifacts.", ...lines].join("\n"),
-        structured: { artifacts: rows },
+        text: rows.length
+          ? lines.join("\n")
+          : view.page > view.pages && view.total
+            ? `No more: page ${view.page} is past the last (${view.pages}).`
+            : view.q ? `Nothing matches “${view.q}”.` : archived ? "No archived artifacts." : ["No artifacts.", ...lines].join("\n"),
+        structured: { artifacts: rows, page: view.page, pages: view.pages, total: view.total },
       };
     },
   },

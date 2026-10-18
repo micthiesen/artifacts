@@ -183,3 +183,46 @@ test("Free sends at most 50 emails a day; Team keeps the workspace-wide 1,000", 
   await h.hub.setPlan("team");
   expect(h.hub.allowMail(1)).toBe(true);
 });
+
+test("notifications can't use up the emails a Free workspace keeps for invitations and shares", async () => {
+  await h.hub.setPlan("free");
+  const { emailsPerDay, inviteEmailsPerDay } = PLANS.free.limits;
+  let notes = 0;
+  while (h.hub.allowMail(1, undefined, "notify") && notes < 2000) notes++;
+  expect(notes).toBe(emailsPerDay - inviteEmailsPerDay);
+  let invites = 0;
+  while (h.hub.allowMail(1) && invites < 2000) invites++;
+  expect(invites).toBe(inviteEmailsPerDay);
+});
+
+test("limit messages say who can fix it and tell agents not to delete anything", async () => {
+  await h.hub.setPlan("free");
+  const limits = PLANS.free.limits as { artifacts: number | null };
+  const real = limits.artifacts;
+  limits.artifacts = 1;
+  try {
+    await h.hub.create({ title: "One", files, owner: ADMIN });
+    const err = await h.hub.create({ title: "Two", files, owner: ADMIN }).catch((e: Error) => e.message);
+    expect(err).toContain("A workspace admin can delete artifacts nobody needs or move the workspace to Team");
+    expect(err).toContain("don't delete anything");
+  } finally {
+    limits.artifacts = real;
+  }
+});
+
+test("over the storage limit, a file can still be replaced with one no bigger", async () => {
+  await h.hub.setPlan("free");
+  const r = await h.hub.create({ title: "Pics", files, owner: ADMIN });
+  if (!r.ok) throw new Error("create");
+  h.hub.putAsset(r.id, "img/a.png", "image/png", new Uint8Array(1000));
+  const limits = PLANS.free.limits as { bytes: number | null };
+  const real = limits.bytes;
+  limits.bytes = 10;
+  try {
+    expect(h.hub.putAsset(r.id, "img/a.png", "image/png", new Uint8Array(800)).bytes).toBe(800);
+    expect(() => h.hub.putAsset(r.id, "img/a.png", "image/png", new Uint8Array(900))).toThrow("of storage");
+    expect(() => h.hub.putAsset(r.id, "img/b.png", "image/png", new Uint8Array(10))).toThrow("of storage");
+  } finally {
+    limits.bytes = real;
+  }
+});

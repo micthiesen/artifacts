@@ -1,10 +1,26 @@
-// Replaces ALL of one workspace's (or the directory's) data with an export from scripts/export.ts.
-// Usage: bun scripts/import.ts <slug|directory> <export.json>. Reads DOMAIN and OPERATOR_TOKEN from .env.
+// Replaces ALL of one workspace's (or the directory's) data with an export: a .json from scripts/export.ts,
+// or the .jsonl download from Settings → Export your data (docs/EXPORT.md).
+// Usage: bun scripts/import.ts <slug|directory> <export.json|.jsonl>. Reads DOMAIN and OPERATOR_TOKEN from .env.
 import { DATA_TABLES, DIRECTORY_TABLES } from "../src/worker/tables.ts";
 
 const [slug, file] = [process.argv[2], process.argv[3]];
-if (!slug || !file) throw new Error("usage: bun scripts/import.ts <slug> <export.json>");
-const { tables } = (await Bun.file(file).json()) as { tables: Record<string, Record<string, unknown>[]> };
+if (!slug || !file) throw new Error("usage: bun scripts/import.ts <slug> <export.json|.jsonl>");
+const tables = file.endsWith(".jsonl") ? await fromJsonl(file) : ((await Bun.file(file).json()) as { tables: Record<string, Record<string, unknown>[]> }).tables;
+
+/** The settings download: a header line, then pages of {table, rows}, then {end}. Refuses a file that was cut off. */
+async function fromJsonl(path: string): Promise<Record<string, Record<string, unknown>[]>> {
+  const out: Record<string, Record<string, unknown>[]> = {};
+  let ended = false;
+  for (const line of (await Bun.file(path).text()).split("\n")) {
+    if (!line.trim()) continue;
+    const v = JSON.parse(line) as { format?: string; table?: string; rows?: Record<string, unknown>[]; end?: boolean };
+    if (v.end) ended = true;
+    else if (v.table && v.rows) (out[v.table] ??= []).push(...v.rows);
+    else if (!v.format?.startsWith("artifacts.boo/export@")) throw new Error(`${path} isn't an artifacts.boo export`);
+  }
+  if (!ended) throw new Error(`${path} was cut off (no end line); download it again`);
+  return out;
+}
 const api = `https://${process.env.DOMAIN}/api/admin/${slug === "directory" ? "directory" : `workspaces/${slug}`}/import`;
 async function step(body: unknown) {
   const res = await fetch(api, {

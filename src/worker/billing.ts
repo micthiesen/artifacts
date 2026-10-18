@@ -94,21 +94,41 @@ export async function verifyWebhook(secret: string, rawBody: string, signature: 
 
 /**
  * The plan a subscription pays for, and until when. Failed payments (past_due,
- * unpaid, expired) keep Team while Creem retries; a canceled subscription
- * keeps Team until the end of the period already paid for; paused doesn't pay.
+ * unpaid, expired) keep Team for two weeks past the period while Creem
+ * retries; a canceled or paused one keeps Team until the end of the period
+ * already paid for.
  */
 export function planFor(status: string, periodEnd: string | null = null, now = Date.now()): { plan: PlanId; until: string | null } {
-  if (["active", "trialing", "paid", "past_due", "unpaid", "expired"].includes(status)) return { plan: "team", until: null };
+  if (["active", "trialing", "paid"].includes(status)) return { plan: "team", until: null };
+  // A failed payment keeps Team while Creem retries, for at most two weeks past the paid period.
+  if (["past_due", "unpaid", "expired"].includes(status)) {
+    if (!periodEnd) return { plan: "team", until: null };
+    const grace = new Date(Date.parse(periodEnd) + PAYMENT_GRACE_MS).toISOString();
+    return Date.parse(grace) > now ? { plan: "team", until: grace } : { plan: "free", until: null };
+  }
   // Canceled from Creem's portal means "at the end of the period" (it says so, and sends canceled with the
-  // period's end): what's paid for stays Team until then. Same for a scheduled cancel.
+  // period's end): what's paid for stays Team until then. Same for a scheduled cancel or a pause.
   const paidUntil = periodEnd && Date.parse(periodEnd) > now ? periodEnd : null;
-  if ((status === "canceled" || status === "scheduled_cancel") && paidUntil) return { plan: "team", until: paidUntil };
+  if (["canceled", "scheduled_cancel", "paused"].includes(status) && paidUntil) return { plan: "team", until: paidUntil };
   return { plan: "free", until: null };
+}
+
+/** How long Team outlasts a failed payment's period while Creem retries. */
+const PAYMENT_GRACE_MS = 14 * 86_400_000;
+
+/**
+ * A subscription that could still charge or be resumed: another checkout would mean paying twice.
+ * Not one that's canceled, or lapsed past its grace (that workspace may start a new one).
+ */
+export function subscriptionLive(status: string, periodEnd: string | null, now = Date.now()): boolean {
+  return status !== "canceled" && planFor(status, periodEnd, now).plan === "team";
 }
 
 /** A provider event as it affects one workspace. */
 export type BillingUpdate = {
   eventId: string;
+  /** The paying customer's email, when the event carries it. */
+  payerEmail: string | null;
   /** When the provider says it happened (ms), so an older event arriving late can't undo a newer one. */
   at: number;
   workspace: string | null;
@@ -125,16 +145,16 @@ type CreemObject = {
   object?: string;
   status?: string;
   metadata?: Record<string, unknown> | null;
-  customer?: string | { id?: string } | null;
+  customer?: string | { id?: string; email?: string } | null;
   subscription?: CreemObject | null;
   current_period_end_date?: string | null;
 };
 
 /**
- * Reads a Creem webhook into what it means for a workspace. Paid, active and
- * trialing subscriptions are Team; canceled and paused ones are Free. Failed
- * payments (past_due, unpaid, expired) keep Team while Creem retries, and a
- * cancellation scheduled for the period's end keeps it until then.
+ * Reads a Creem webhook into what it means for a workspace. `plan` is what the
+ * event says on its own (paid, active and trialing are Team; canceled and
+ * paused aren't), used to decide whether a new subscription takes over; the
+ * workspace's plan itself always comes from planFor on the stored record.
  */
 export function readEvent(payload: unknown): BillingUpdate | null {
   const e = payload as { id?: string; eventType?: string; created_at?: number; object?: CreemObject } | null;
@@ -144,11 +164,14 @@ export function readEvent(payload: unknown): BillingUpdate | null {
   if (!sub) return null;
   const meta = { ...(e.object.metadata ?? {}), ...(sub.metadata ?? {}) };
   const customer = typeof sub.customer === "string" ? sub.customer : (sub.customer?.id ?? null);
+  const customerObject = [sub.customer, e.object.customer].find((c): c is { email?: string } => typeof c === "object" && c !== null);
+  const payerEmail = typeof customerObject?.email === "string" ? customerObject.email.toLowerCase() : null;
   const status = sub.status ?? "";
   const ended = status === "canceled" || status === "paused" || e.eventType === "subscription.canceled";
   const plan: PlanId | null = ended ? "free" : ["active", "trialing", "paid"].includes(status) ? "team" : null;
   return {
     eventId: e.id,
+    payerEmail,
     at: e.created_at,
     workspace: typeof meta.workspace === "string" ? meta.workspace : null,
     customerId: customer,

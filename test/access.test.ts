@@ -37,7 +37,7 @@ test("a public link with an expiry works until then, and afterwards is the same 
   expect(h.hub.roleFor(id, OWNER)).toBe("owner");
   expect(h.hub.meta(id)).toMatchObject({ public: false, publicUntil: null });
   expect(h.hub.list(OWNER)[0]).toMatchObject({ public: false, publicUntil: null });
-  expect(h.hub.shareSummaries(OWNER)[id].public).toBe(false);
+  expect(h.hub.shareSummaries(OWNER, h.hub.list(OWNER))[id].public).toBe(false);
   expect(h.hub.previewInfo(id)?.rich).toBe(false);
 });
 

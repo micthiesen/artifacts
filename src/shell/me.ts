@@ -21,6 +21,8 @@ type Profile = {
   // Workspace only.
   workspace?: { name: string };
   watches?: { id: string; title: string; level: WatchLevel; custom: boolean }[];
+  /** How many active artifacts you can see here; the list shows those set apart plus the most recent. */
+  watchesTotal?: number;
   /** Your default for this workspace; null is the standard one. */
   watchDefault?: WatchLevel | null;
   account?: string;
@@ -334,6 +336,9 @@ function renderWatches(sections: HTMLElement[], watches: NonNullable<Profile["wa
       h("h2", {}, "Artifacts"),
       h("p", { class: "muted" }, "“All activity” also includes page updates. Pick a level for one artifact to set it apart from the workspace default."),
       rows.length ? h("table", { class: "watches" }, h("tbody", {}, ...rows)) : h("p", { class: "muted" }, "Nothing is shared with you here yet."),
+      ...((profile.watchesTotal ?? 0) > watches.length
+        ? [h("p", { class: "muted small" }, `Showing the ${watches.length} most recent of ${profile.watchesTotal}. For any other, use the avatar menu on the artifact itself.`)]
+        : []),
     ),
   );
 }

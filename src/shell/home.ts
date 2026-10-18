@@ -49,6 +49,11 @@ function adjustCount(delta: number) {
 
 /** Show the list's empty note when its last row has gone, hide it otherwise. */
 function syncEmpty(list: HTMLUListElement) {
+  // Paged or searched: an emptied page isn't an empty list, so fetch the page again (the server moves to the last one if need be).
+  if ((document.querySelector(".pager") || new URLSearchParams(location.search).get("q")) && !list.querySelector("li")) {
+    location.reload();
+    return;
+  }
   const empty = document.querySelector<HTMLElement>("[data-list-empty]");
   if (empty) empty.hidden = list.querySelector("li") !== null;
 }
@@ -119,6 +124,8 @@ function togglePin(button: HTMLButtonElement, li: HTMLLIElement, id: string, tit
       paintPin(button, pinned, title);
       placeRow(li);
       button.focus();
+      // Pins sit at the top of page 1, which may not be this one.
+      if (pinned && new URLSearchParams(location.search).has("page") && new URLSearchParams(location.search).get("page") !== "1") toast("Pinned: it's at the top of page 1.");
     },
     (err: Error) => {
       button.disabled = false;

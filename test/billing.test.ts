@@ -3,7 +3,7 @@
 // and out-of-order delivery. Payload shapes follow Creem's webhook docs.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ADMIN, createHub, FakeKV, type Harness } from "./support/do-harness.ts";
-import { readEvent, verifyWebhook } from "../src/worker/billing.ts";
+import { planFor, readEvent, subscriptionLive, verifyWebhook } from "../src/worker/billing.ts";
 
 const { default: worker } = await import("../src/worker/index.ts");
 
@@ -272,4 +272,86 @@ test("canceling keeps Team until the paid period ends, then it lapses to Free by
   // Resubscribing clears the end.
   await webhook(event("subscription.active", sub("active", {})));
   expect(h.hub.plan()).toMatchObject({ id: "team", until: null });
+});
+
+test("a failed payment keeps Team for two weeks past the period; a pause until the period ends", () => {
+  const end = "2026-11-18T00:00:00.000Z";
+  const at = (iso: string) => Date.parse(iso);
+  expect(planFor("past_due", end, at("2026-11-20T00:00:00.000Z"))).toEqual({ plan: "team", until: "2026-12-02T00:00:00.000Z" });
+  expect(planFor("unpaid", end, at("2026-12-03T00:00:00.000Z"))).toEqual({ plan: "free", until: null });
+  expect(planFor("paused", end, at("2026-11-01T00:00:00.000Z"))).toEqual({ plan: "team", until: end });
+  expect(planFor("paused", end, at("2026-11-19T00:00:00.000Z"))).toEqual({ plan: "free", until: null });
+  const soon = new Date(Date.now() + 5 * 86_400_000).toISOString();
+  expect(subscriptionLive("past_due", soon) && subscriptionLive("paused", soon) && !subscriptionLive("canceled", soon)).toBe(true);
+  expect(subscriptionLive("expired", "2020-01-01T00:00:00.000Z")).toBe(false);
+});
+
+test("no second checkout while a subscription can still charge; a lapsed one can be replaced", async () => {
+  Object.assign(env, KEYS);
+  const checkout = () => send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  await webhook(checkoutCompleted());
+  // Paused with time left: still Team, so no checkout.
+  await webhook(event("subscription.paused", { ...sub("paused"), current_period_end_date: new Date(Date.now() + 5 * 86_400_000).toISOString() }));
+  expect((await checkout()).status).toBe(400);
+  // Overdue well past the grace: Free, and a fresh subscription may start.
+  await webhook(event("subscription.past_due", { ...sub("past_due"), current_period_end_date: "2020-01-01T00:00:00.000Z" }));
+  expect(h.hub.plan().id).toBe("free");
+  creemAnswer = () => Response.json({ checkout_url: "https://checkout.creem.io/ch_2" });
+  expect((await checkout()).status).toBe(200);
+  // The new subscription pays, and takes over.
+  await webhook(event("subscription.active", { ...sub("active"), id: "sub_2" }));
+  expect(h.hub.plan().id).toBe("team");
+});
+
+test("if the plan drifted from a subscription that can still charge, checkout heals it instead of doubling up", async () => {
+  Object.assign(env, KEYS);
+  await webhook(checkoutCompleted());
+  // Directory says paused with time left, but the workspace somehow reads Free: the server heals it instead of a checkout.
+  await webhook(event("subscription.paused", { ...sub("paused"), current_period_end_date: new Date(Date.now() + 5 * 86_400_000).toISOString() }));
+  await h.hub.setPlan("free");
+  const r = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  expect(r.status).toBe(409);
+  expect(h.hub.plan().id).toBe("team");
+});
+
+test("only the person who paid opens the billing portal; settings says who that is", async () => {
+  Object.assign(env, KEYS);
+  await h.hub.setMember("payer@example.com", "admin", ADMIN);
+  await webhook(event("subscription.active", { ...sub("active"), customer: { id: "cust_1", email: "Payer@Example.com" } }));
+  expect(h.directory.billing("acme")?.payerEmail).toBe("payer@example.com");
+  // A later event without the email keeps it.
+  await webhook(event("subscription.paid", { ...sub("active"), customer: "cust_1" }));
+  expect(h.directory.billing("acme")?.payerEmail).toBe("payer@example.com");
+  creemAnswer = () => Response.json({ customer_portal_link: "https://creem.io/portal/cust_1" });
+  const portal = await send("/api/settings/billing/portal", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  expect(portal.status).toBe(403);
+  expect(((await portal.json()) as { error: string }).error).toContain("payer@example.com");
+  const settings = (await (await send("/api/settings", { as: ADMIN })).json()) as { billing: { subscription: { payer: string } } };
+  expect(settings.billing.subscription.payer).toBe("payer@example.com");
+  expect((await send("/api/settings/billing/portal", { as: "payer@example.com", method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })).status).toBe(200);
+  // Once the payer isn't an admin here, any admin can manage it (they may have paid under another address).
+  await h.hub.setMember("payer@example.com", null, ADMIN);
+  expect((await send("/api/settings/billing/portal", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })).status).toBe(200);
+});
+
+test("whoever made a self-serve workspace can delete it, once nothing is billed, and then make another", async () => {
+  Object.assign(env, KEYS);
+  const del = (confirm: string, as = ADMIN) => send("/api/settings/delete", { as, method: "POST", body: JSON.stringify({ confirm }), headers: { "Content-Type": "application/json" } });
+  // Made by the operator: nobody deletes it from settings.
+  expect(((await (await send("/api/settings", { as: ADMIN })).json()) as { canDelete: boolean }).canDelete).toBe(false);
+  expect((await del("acme")).status).toBe(403);
+  h.directory.ctx.storage.sql.exec(`UPDATE workspaces SET created_by = ? WHERE slug = 'acme'`, ADMIN);
+  expect(h.directory.canMakeWorkspace(ADMIN)).toBe(false);
+  expect(((await (await send("/api/settings", { as: ADMIN })).json()) as { canDelete: boolean }).canDelete).toBe(true);
+  expect((await del("acme", MEMBER)).status).toBe(403);
+  expect((await del("acm")).status).toBe(400);
+  await webhook(checkoutCompleted());
+  expect((await del("acme")).status).toBe(409);
+  await webhook(event("subscription.canceled", { ...sub("canceled"), current_period_end_date: "2020-01-01T00:00:00.000Z" }));
+  const r = await del("acme");
+  expect(r.status).toBe(200);
+  expect(await r.json()).toEqual({ location: `${APEX}/workspaces` });
+  expect(h.directory.workspace("acme")).toBeNull();
+  // The operator-made workspace wasn't in the self-serve log, so there's room for one.
+  expect(h.directory.canMakeWorkspace(ADMIN)).toBe(true);
 });
