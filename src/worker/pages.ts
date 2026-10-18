@@ -29,18 +29,16 @@ export function scriptJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
+// Cloudflare injects its Web Analytics beacon into shell pages; the CSP lets it
+// load and report. Artifact frames opt out with no-transform (see frameDocument).
 const PAGE_CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+  "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://cloudflareinsights.com; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 // Declared inline so the very first paint is dark: without it the browser shows
 // its white default canvas until the stylesheet arrives, and a frame that is
 // still "light" inside the dark shell gets an opaque white backdrop.
 const DARK_HEAD = `<meta name="color-scheme" content="dark">
 <style>html{background:oklch(0.16 0.017 275)}</style>`;
-
-// no-transform stops Cloudflare injecting its Web Analytics beacon, which the
-// CSP above would block anyway (a console error on every page).
-const NO_STORE = "no-store, no-transform";
 
 function page(title: string, body: string, init: ResponseInit = {}): Response {
   const html = `<!doctype html>
@@ -66,7 +64,7 @@ ${DARK_HEAD}
   headers.set("Content-Security-Policy", PAGE_CSP);
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("Cache-Control", NO_STORE);
+  headers.set("Cache-Control", "no-store");
   return new Response(html, { ...init, headers });
 }
 
@@ -289,7 +287,9 @@ ${DARK_HEAD}
       "Content-Security-Policy": frameCsp(origin, !check),
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
-      "Cache-Control": `private, ${NO_STORE}`,
+      // no-transform keeps Cloudflare's analytics beacon out of artifact content:
+      // the shell page already counts the view, and the frame CSP would block it.
+      "Cache-Control": "private, no-store, no-transform",
     },
   });
 }
