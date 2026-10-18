@@ -765,3 +765,6 @@ div.thread-anchor { cursor: default; }
 .create-form .check input { margin-top: .2rem; }
 .create-form .button { justify-self: start; }
 .plan-usage { margin: -.5rem 0 1.25rem; font-size: 14px; }
+/* Notification selects never widen the page on a phone. */
+.profile select { max-width: 100%; min-width: 0; }
+.watches { table-layout: fixed; }

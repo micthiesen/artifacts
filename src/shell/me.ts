@@ -289,7 +289,7 @@ function renderWatches(sections: HTMLElement[], watches: NonNullable<Profile["wa
   // The workspace-wide default, which every artifact follows unless you chose otherwise for it.
   const fallback = profile.watchDefault ?? null;
   const defaultSelect = h("select", { "aria-label": "Default for this workspace" }) as HTMLSelectElement;
-  for (const [value, label] of [["standard", "Standard: everything on artifacts you own, replies and mentions elsewhere"], ...LEVELS] as [string, string][]) {
+  for (const [value, label] of [["standard", "Standard"], ...LEVELS] as [string, string][]) {
     const o = h("option", { value }, label) as HTMLOptionElement;
     o.selected = value === (fallback ?? "standard");
     defaultSelect.append(o);
@@ -308,7 +308,7 @@ function renderWatches(sections: HTMLElement[], watches: NonNullable<Profile["wa
       h(
         "p",
         { class: "muted" },
-        "Applies to every artifact here, now and later, unless you pick something else for one below. Choose “Nothing” to stay a member without notifications here, say on a second address.",
+        "Applies to every artifact here, now and later, unless you pick something else for one below. Standard is all activity on artifacts you own and replies and mentions elsewhere. Choose “Nothing” to stay a member without notifications here, say on a second address.",
       ),
       defaultSelect,
     ),
