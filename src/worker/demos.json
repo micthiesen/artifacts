@@ -70,7 +70,8 @@
     },
     "minutesAgo": 45
    }
-  ]
+  ],
+  "link": "https://demo.artifacts.boo/a/aw9jzahuuhfsi"
  },
  {
   "slug": "retro",
@@ -157,7 +158,8 @@
     "key": "vote/c5/marcus.lee@example.com",
     "value": true
    }
-  ]
+  ],
+  "link": "https://demo.artifacts.boo/a/a644xskytvpdj"
  },
  {
   "slug": "costs",
@@ -182,6 +184,7 @@
     },
     "minutesAgo": 1500
    }
-  ]
+  ],
+  "link": "https://demo.artifacts.boo/a/a8epbcm5v76pp"
  }
 ]
