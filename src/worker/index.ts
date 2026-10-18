@@ -588,14 +588,16 @@ function failure(err: unknown): Response {
 // ---- OAuth consent ---------------------------------------------------------------------
 
 async function authorize(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer, record: WorkspaceRecord, brand: Brand): Promise<Response> {
-  const oauth = (env as Env & { OAUTH_PROVIDER: OAuthHelpers }).OAUTH_PROVIDER;
+  // Not env.OAUTH_PROVIDER: the library sets that once per isolate, so it would
+  // belong to whichever workspace this isolate served first.
+  const oauth = oauthApi(url.origin, env);
   const local = (message: string, status = 400) => messagePage("Can't connect", message, status, undefined, brand);
   try {
     if (!viewer.email) return Response.redirect(`${url.origin}/login?return=${encodeURIComponent(url.pathname + url.search)}`, 302);
     if (!(await hub.access(viewer.email)).member) {
       return local(`${viewer.email} isn't a member of ${record.name}, so it can't connect an agent here.`, 403);
     }
-    const userId = `${record.slug}:${viewer.email}`;
+    const userId = grantUser(record.slug, viewer.email);
     const remember = { secret: env.CONSENT_SECRET, subject: userId };
     const complete = async (authRequest: Awaited<ReturnType<OAuthHelpers["parseAuthRequest"]>>, headers = new Headers()) => {
       const client = await oauth.lookupClient(authRequest.clientId);
@@ -638,10 +640,15 @@ async function authorize(request: Request, url: URL, env: Env, hub: HubApi, view
   }
 }
 
+/** The OAuth library's user id for a person in one workspace (it may not contain ":"). */
+function grantUser(slug: string, email: string): string {
+  return `${slug}/${email}`;
+}
+
 /** Revoke every OAuth grant a person holds in a workspace (when they leave it). */
 async function revokeGrants(env: Env, origin: string, slug: string, email: string) {
   const oauth = oauthApi(origin, env);
-  const userId = `${slug}:${email}`;
+  const userId = grantUser(slug, email);
   let cursor: string | undefined;
   do {
     const page = await oauth.listUserGrants(userId, { cursor });
@@ -674,7 +681,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
   try {
     const path = url.pathname;
     if (path === "/api/settings" && request.method === "GET") {
-      const grants = await oauth.listUserGrants(`${slug}:${email}`);
+      const grants = await oauth.listUserGrants(grantUser(slug, email));
       return Response.json({
         workspace: { slug, name, url: url.origin },
         you: { email, role: member },
@@ -707,7 +714,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
     if (token && request.method === "DELETE") return Response.json({ revoked: await hub.revokeToken(token[1], email) });
     const app = /^\/api\/settings\/apps\/([A-Za-z0-9_-]+)$/.exec(path);
     if (app && request.method === "DELETE") {
-      await oauth.revokeGrant(app[1], `${slug}:${email}`);
+      await oauth.revokeGrant(app[1], grantUser(slug, email));
       return Response.json({ revoked: true });
     }
     if (path === "/api/settings/hosts" && request.method === "POST") {

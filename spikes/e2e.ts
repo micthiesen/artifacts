@@ -201,7 +201,7 @@ const asEmail = (e: string) => cookieFor(e);
 await call("artifact_share", { id, add: [{ email: "@example.org", role: "view" }] });
 check("domain member can open", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.org") } })).status === 200);
 check("other domain refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("anyone@example.net") } })).status === 403);
-check("subdomain lookalike refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("x@evil-example.org") } })).status === 403);
+check("subdomain of a shared domain refused", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: await asEmail("x@sub.example.org") } })).status === 403);
 const domainLink = await call("artifact_link", { id, email: "pat@example.org" });
 check("link allowed for domain member", !domainLink.isError, domainLink.content);
 const badDomain = await call("artifact_share", { id, add: [{ email: "@localhost", role: "view" }] });

@@ -209,3 +209,55 @@ test("a presigned link opens its artifact and nothing else, even for an owner", 
   const foreign = await signToken(h.env.LOGIN_SECRET, "link", 600, { e: MIA, a: id, w: "other" });
   expect((await fetchAs(`${ACME}/s/${foreign}`)).status).toBe(400);
 });
+
+test("each workspace's consent uses its own authorization server, whichever this isolate saw first", async () => {
+  const beta = await createHub();
+  await beta.hub.setMember(MIA, "member", ADMIN);
+  env.WORKSPACE = { getByName: (slug: string) => (slug === "acme" ? h.hub : slug === "beta" ? beta.hub : null) };
+  h.directory.createWorkspace("beta", "Beta");
+  const BETA = "https://beta.artifacts.test";
+  const authorize = async (origin: string) => {
+    const reg = (await (
+      await fetchAs(`${origin}/oauth/register`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "" }, body: JSON.stringify({ client_name: "C", redirect_uris: ["http://127.0.0.1:9/cb"], token_endpoint_auth_method: "none" }) })
+    ).json()) as { client_id: string };
+    const q = new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9/cb", code_challenge: "a".repeat(43), code_challenge_method: "S256", state: "s", resource: `${origin}/mcp` });
+    const { cookieFor } = { cookieFor: async () => `__Host-art_session=${await (await import("../src/worker/session.ts")).signToken(h.env.SESSION_SECRET, "session", 600, { e: MIA, h: new URL(origin).hostname })}` };
+    return fetchAs(`${origin}/authorize?${q}`, { cookie: await cookieFor() });
+  };
+  expect((await authorize(ACME)).status).toBe(200);
+  expect((await authorize(BETA)).status).toBe(200);
+});
+
+test("OAuth: consent, code exchange with PKCE, then MCP as the member", async () => {
+  const b64u = (b: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const reg = (await (
+    await fetchAs(`${ACME}/oauth/register`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "" }, body: JSON.stringify({ client_name: "Test client", redirect_uris: ["http://127.0.0.1:9/cb"], token_endpoint_auth_method: "none" }) })
+  ).json()) as { client_id: string };
+  const verifier = b64u(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = b64u(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+  const q = new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9/cb", code_challenge: challenge, code_challenge_method: "S256", state: "s", resource: `${ACME}/mcp`, scope: "artifacts" });
+  const { signToken } = await import("../src/worker/session.ts");
+  const cookie = `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: MIA, h: "acme.artifacts.test" })}`;
+  const page = await fetchAs(`${ACME}/authorize?${q}`, { cookie });
+  const handle = /name="handle" value="([^"]+)"/.exec(await page.text())![1];
+  const consent = page.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+  const approved = await fetchAs(`${ACME}/authorize`, { method: "POST", cookie: `${cookie}; ${consent}`, headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ handle, decision: "approve" }) });
+  expect(approved.status).toBe(302);
+  const code = new URL(approved.headers.get("Location")!).searchParams.get("code")!;
+  const tokens = (await (
+    await fetchAs(`${ACME}/oauth/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "" }, body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: "http://127.0.0.1:9/cb", client_id: reg.client_id, code_verifier: verifier, resource: `${ACME}/mcp` }) })
+  ).json()) as { access_token: string };
+  const mcp = await fetchAs(`${ACME}/mcp`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tokens.access_token}`, "Content-Type": "application/json", Origin: "" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "artifact_create", arguments: { title: "OAuth", files: { "index.md": "# Hi\n" } } } }),
+  });
+  const result = ((await mcp.json()) as any).result;
+  expect(h.hub.meta(result.structuredContent.id)!.owner).toBe(MIA);
+  const settings = (await (await fetchAs(`${ACME}/api/settings`, { cookie })).json()) as any;
+  expect(settings.apps.map((a: any) => a.client)).toEqual(["Test client"]);
+  // Leaving the workspace revokes the grant.
+  await fetchAs(`${ACME}/api/settings/members`, { method: "POST", cookie: `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: ADMIN, h: "acme.artifacts.test" })}`, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: MIA, role: null }) });
+  const after = await fetchAs(`${ACME}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${tokens.access_token}`, "Content-Type": "application/json", Origin: "" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) });
+  expect(after.status).toBe(401);
+});

@@ -117,7 +117,7 @@ function render() {
       h("p", { class: "muted" }, "Add this MCP server to Claude, Codex or any MCP client. It signs in with OAuth in your browser and then acts as you here."),
       h("div", { class: "reveal-row" }, h("code", { class: "reveal" }, data.mcpUrl), copyButton(data.mcpUrl)),
       h("h3", { class: "subhead" }, "Connected apps"),
-      data.apps.length ? apps : h("p", { class: "muted small" }, "None yet."),
+      data.apps.length ? apps : h("p", { class: "muted small" }, "None yet. A newly connected app can take a minute to show up here."),
       h("h3", { class: "subhead" }, "Agent tokens"),
       h("p", { class: "muted small" }, "For agents that can't open a browser: send the token as Authorization: Bearer <token> to the MCP URL."),
       mine.length ? tokens : h("p", { class: "muted small" }, "None yet."),
