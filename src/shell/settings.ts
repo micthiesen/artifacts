@@ -13,6 +13,8 @@ type Settings = {
   tokens: { id: string; email: string; label: string; createdAt: string; lastUsedAt: string | null }[];
   apps: { id: string; client: string; createdAt: string }[];
   hosts: string[];
+  /** Email domains whose people join as members when they first sign in. */
+  joinDomains: string[];
 };
 type Notice = { tone: "ok" | "error"; text: string; signIn?: boolean; reveal?: string; snippet?: string };
 
@@ -215,6 +217,27 @@ function render() {
     const email = h("input", { type: "email", placeholder: "name@example.com", autocomplete: "off" }) as HTMLInputElement;
     const role = h("select", { "aria-label": "Role" }, h("option", { value: "member" }, "Member"), h("option", { value: "admin" }, "Admin")) as HTMLSelectElement;
     memberSection.append(h("div", { class: "row" }, email, role, btn("Add", () => setMember(email.value.trim(), role.value as "admin" | "member"))));
+  }
+  // Join domains: everyone sees the rule when there is one; only admins change it.
+  const joinDomains = data.joinDomains ?? [];
+  if (admin || joinDomains.length) {
+    const domains = h("ul", { class: "channels" });
+    for (const domain of joinDomains) {
+      const li = h("li", {}, h("span", { class: "channel-label" }, domain));
+      if (admin) li.append(h("span", { class: "channel-actions" }, btn("Remove", () => act(() => api("/api/settings/join", { body: { domain, allowed: false } }), `People at ${domain} no longer join on their own. Current members stay.`), "button small ghost danger")));
+      domains.append(li);
+    }
+    memberSection.append(
+      h("h3", { class: "subhead" }, "Join by email domain"),
+      h("p", { class: "muted small" }, "Anyone with an email at these domains joins as a member when they sign in, without an invitation. People you remove stay removed."),
+      joinDomains.length ? domains : h("p", { class: "muted small" }, "None yet."),
+    );
+    if (admin) {
+      const domain = h("input", { type: "text", placeholder: "example.com", autocomplete: "off", spellcheck: "false", "aria-label": "Email domain" }) as HTMLInputElement;
+      memberSection.append(
+        h("div", { class: "row" }, domain, btn("Add domain", () => act(() => api("/api/settings/join", { body: { domain: domain.value, allowed: true } }), `Anyone at ${domain.value.trim().replace(/^@/, "").toLowerCase()} now joins as a member.`))),
+      );
+    }
   }
   sections.push(memberSection);
 

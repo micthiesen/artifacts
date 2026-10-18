@@ -11,6 +11,8 @@ type Overview = {
     description: string;
     version: number;
     public: boolean;
+    /** When the public link stops working; null when it never does. */
+    publicUntil: string | null;
     preview: boolean;
     archivedAt: string | null;
     createdAt: string;
@@ -461,6 +463,40 @@ export function initOwnerMenu(
       ),
     );
 
+    // Only while the link is on. A set expiry shows as its own option, since
+    // presets count from now and would misstate it.
+    const until = d.meta.publicUntil;
+    const untilLabel = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    const expiry = d.meta.public
+      ? h(
+          "label",
+          { class: "om-actions om-small" },
+          "Link expires",
+          h(
+            "select",
+            {
+              class: "om-select",
+              "data-key": "public-expiry",
+              disabled: busy.has("public"),
+              onchange: (e: Event) => {
+                const v = (e.target as HTMLSelectElement).value;
+                if (v === "current") return;
+                void act("public", "sharing", async () => {
+                  const r = await tool("artifact_share", { public_days: v === "never" ? 0 : Number(v) });
+                  const next = (r.data?.publicUntil as string | null | undefined) ?? null;
+                  return { text: next ? `The public link now works until ${untilLabel(next)}.` : "The public link no longer expires." };
+                });
+              },
+            },
+            until ? h("option", { value: "current", selected: true }, `Until ${untilLabel(until)}`) : null,
+            h("option", { value: "never", selected: !until }, "Never"),
+            h("option", { value: "1" }, "In 1 day"),
+            h("option", { value: "7" }, "In 7 days"),
+            h("option", { value: "30" }, "In 30 days"),
+          ),
+        )
+      : null;
+
     const previewToggle = h(
       "label",
       { class: "om-switch" },
@@ -494,7 +530,7 @@ export function initOwnerMenu(
 
     return [
       h("div", { class: "om-group" }, h("h3", { class: "om-h" }, "People"), list, form),
-      h("div", { class: "om-group" }, publicToggle, previewToggle),
+      h("div", { class: "om-group" }, publicToggle, expiry, previewToggle),
     ];
   }
 

@@ -97,7 +97,7 @@ button.link:hover { text-decoration: underline; text-underline-offset: 3px; }
 }
 .bar .mark:hover { text-decoration: none; background-color: var(--muted); }
 /* The ghost logo: the gradient seen through the ghost's shape (eyes cut out). */
-.ghost {
+.logo-ghost {
   display: inline-block; width: 17px; height: 19px; flex: none; background: var(--signal);
   -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
 }
@@ -720,6 +720,11 @@ div.thread-anchor { cursor: default; }
 .profile .row > input, .profile .row > select { flex: 1 1 12rem; min-width: 0; }
 .profile .row > .button { flex: none; }
 .channel-actions { flex-wrap: wrap; }
+/* ...but buttons never shrink: when a row runs out of room, its actions wrap
+   onto their own line instead of being squeezed to slivers. */
+.channels li > .channel-actions { flex: 0 0 auto; min-width: auto; max-width: 100%; }
+.channel-actions > .button, .channel-actions > a, .om-row > .button, .om-row > button, .om-row > select, .om-actions > .button,
+.om-actions > button, .om-inline > .button, .om-inline > button, .admin-row > .button { flex: none; white-space: nowrap; }
 .content { width: 100%; }
 .policy h2 { font-size: 17px; margin: 1.75rem 0 .5rem; }
 .policy p, .policy li { line-height: 1.65; }

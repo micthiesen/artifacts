@@ -56,12 +56,14 @@ The same examples are published as public artifacts in a `demo` workspace
 
 - **Operator**: whoever runs the deployment (`OPERATOR_EMAILS`, plus the
   `OPERATOR_TOKEN` for scripts). Creates, suspends and deletes workspaces,
-  fixes their admins, and backs up, exports, imports and restores their data
+  fixes their admins, puts back a data host an admin removed by mistake, and backs up, exports, imports and restores their data
   from `/admin` on the apex. That is full access to the stored data, as running
   the database always is; what the operator doesn't get is a sign-in as anyone
   or a role inside a workspace. The end-to-end checks' test identities only
   accept reserved test domains (example.com, .test, .invalid).
-- **Workspace admin**: manages members, agent tokens and approved data hosts,
+- **Workspace admin**: manages members, agent tokens, approved data hosts and
+  join domains (email domains whose people join as members when they sign in;
+  public mail providers are refused, and someone an admin removed stays removed),
   and can manage every artifact in the workspace, so nothing is stranded when
   someone leaves.
 - **Member**: connects their own agent and creates artifacts. Sees artifacts
@@ -71,7 +73,9 @@ The same examples are published as public artifacts in a `demo` workspace
   invited and why they can stay free when members are billed.
 
 Per artifact, the owner (whose agent created it) and admins manage it; shares
-grant `edit` (shared state) or `view`. An agent acts as the person whose token
+grant `edit` (shared state) or `view`. A public link (anyone can view,
+read-only, without signing in) can expire; once it has, it is the same as off,
+and open pages that only had the link lose their connection. An agent acts as the person whose token
 or OAuth grant it uses, with that person's access.
 
 ## Sign-in
@@ -85,6 +89,16 @@ has signed in before gets the page and signs in as themselves. A presigned
 link only ever goes into its own person's inbox, or to an agent for its own
 person, so nobody can obtain a link that acts as someone else. Codes are
 rate-limited per address and globally, because anyone can request one.
+
+Passkeys skip the email. They belong to the apex (the relying party is the
+apex host), so a passkey sign-in ends in the same session and workspace
+hand-off as a code. The sign-in page offers saved passkeys in the email field's
+autofill; after a code sign-in, someone without one is offered to save one; "Not now" holds
+that offer back for 30 days. Challenges are signed tokens, so showing the
+sign-in page stores nothing; the directory spends each challenge when it signs
+someone in, so a captured response works at most once. Only public keys are
+stored, and every passkey sign-in requires the device's own check (user
+verification). Email codes keep working for everyone, including as recovery.
 
 Codes are eight digits. Requesting codes for someone else's address can't
 cancel the code in their inbox, and wrong guesses are limited per address and

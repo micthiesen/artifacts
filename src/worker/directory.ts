@@ -39,6 +39,11 @@ export type WorkspaceRecord = {
 export type WorkspaceStats = { artifacts: number; members: number; bytes: number; lastActivity: string | null };
 export type WorkspaceJob = { kind: string; phase?: string; error?: string; startedAt: string };
 
+/** A saved passkey as the account page lists it (no key material). */
+export type PasskeySummary = { id: string; name: string; createdAt: string; lastUsedAt: string | null };
+/** What checking a passkey sign-in needs. */
+export type StoredPasskey = { id: string; email: string; publicKey: string; counter: number; transports: string[] };
+
 export type ChannelRow = { id: string; type: ChannelType; config: Record<string, unknown> };
 
 export class DirectoryError extends Error {}
@@ -53,7 +58,7 @@ export type DirectoryApi = AsyncMethods<
     | "createWorkspace" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
-    | "backup" | "backups" | "restore"
+    | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
   >
 >;
 
@@ -82,6 +87,7 @@ const FAILS_PER_EMAIL_PER_IP_PER_HOUR = 10;
 const FAILS_PER_EMAIL_PER_HOUR = 30;
 const CODE_DIGITS = 8;
 const CHANNEL_TESTS_PER_HOUR = 20;
+const PASSKEYS_MAX = 20;
 const CHANNEL_MAX_FAILURES = 5;
 const CHANNELS_MAX = 10;
 /** The id the built-in email channel goes by in channelsFor; it has no row. */
@@ -130,6 +136,16 @@ const MIGRATIONS: Migration[] = [
   (sql) => sql.exec(`ALTER TABLE users ADD COLUMN email_off INTEGER NOT NULL DEFAULT 0`),
   // Each workspace's running job and last failure, reported by the workspace.
   (sql) => sql.exec(`ALTER TABLE workspaces ADD COLUMN job TEXT; ALTER TABLE workspaces ADD COLUMN job_error TEXT;`),
+  // Passkeys, so people can sign in without an emailed code, and the challenges
+  // already used to sign in with one (a challenge works once).
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE passkeys (
+        id TEXT PRIMARY KEY, email TEXT NOT NULL, public_key TEXT NOT NULL, counter INTEGER NOT NULL DEFAULT 0,
+        transports TEXT, name TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
+      CREATE INDEX passkeys_by_email ON passkeys (email);
+      CREATE TABLE passkey_challenges (challenge TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+    `),
 ];
 
 export class Directory extends DurableObject {
@@ -292,7 +308,14 @@ export class Directory extends DurableObject {
         lastError: (c.last_error as string | null) ?? null,
         disabled: Boolean(c.disabled),
       }));
-    return { email, name: this.names([email])[email], channels, emailNotifications: this.emailNotifications(email), workspaces: this.membershipsOf(email) };
+    return {
+      email,
+      name: this.names([email])[email],
+      channels,
+      emailNotifications: this.emailNotifications(email),
+      workspaces: this.membershipsOf(email),
+      passkeys: this.passkeys(email),
+    };
   }
 
   setName(email: string, name: string) {
@@ -572,6 +595,61 @@ export class Directory extends DurableObject {
       throw new DirectoryError("Too many test notifications; try again in an hour.");
     }
     this.sql.exec(`INSERT INTO channel_tests (email, at) VALUES (?, ?)`, email, now);
+  }
+
+  // ---- passkeys (checked in the Worker, see passkeys.ts; stored here) ----------------
+
+  passkeys(email: string): PasskeySummary[] {
+    return this.sql
+      .exec(`SELECT id, name, created_at, last_used_at FROM passkeys WHERE email = ? ORDER BY created_at`, email)
+      .toArray()
+      .map((r) => ({ id: r.id as string, name: r.name as string, createdAt: r.created_at as string, lastUsedAt: (r.last_used_at as string | null) ?? null }));
+  }
+
+  passkey(id: string): StoredPasskey | null {
+    const r = this.sql.exec(`SELECT * FROM passkeys WHERE id = ?`, id).toArray()[0];
+    if (!r) return null;
+    return { id, email: r.email as string, publicKey: r.public_key as string, counter: r.counter as number, transports: r.transports ? JSON.parse(r.transports as string) : [] };
+  }
+
+  /** Save a verified new passkey for someone signed in. */
+  addPasskey(email: string, key: { id: string; publicKey: string; counter: number; transports: string[] }, name: string): PasskeySummary[] {
+    const count = this.sql.exec(`SELECT COUNT(*) AS n FROM passkeys WHERE email = ?`, email).one().n as number;
+    if (count >= PASSKEYS_MAX) throw new DirectoryError(`You can have at most ${PASSKEYS_MAX} passkeys. Remove one first.`);
+    if (this.sql.exec(`SELECT 1 FROM passkeys WHERE id = ?`, key.id).toArray().length) throw new DirectoryError("This passkey is already saved.");
+    this.sql.exec(
+      `INSERT INTO passkeys (id, email, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      key.id,
+      email,
+      key.publicKey,
+      key.counter,
+      JSON.stringify(key.transports),
+      name.slice(0, 80),
+      new Date().toISOString(),
+    );
+    this.markDirty();
+    return this.passkeys(email);
+  }
+
+  removePasskey(email: string, id: string): boolean {
+    const removed = this.sql.exec(`DELETE FROM passkeys WHERE id = ? AND email = ? RETURNING id`, id, email).toArray().length > 0;
+    if (removed) this.markDirty();
+    return removed;
+  }
+
+  /**
+   * Record a verified passkey sign-in: spends its challenge (each works once,
+   * so a captured response can't be replayed) and stores the new counter.
+   * Returns the person, or null when the challenge was already used or the
+   * passkey has since been removed.
+   */
+  usePasskey(id: string, counter: number, challenge: string, expiresAt: number, now = Date.now()): string | null {
+    this.sql.exec(`DELETE FROM passkey_challenges WHERE expires_at < ?`, now);
+    if (this.sql.exec(`SELECT 1 FROM passkey_challenges WHERE challenge = ?`, challenge).toArray().length) return null;
+    const row = this.sql.exec(`UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ? RETURNING email`, counter, new Date(now).toISOString(), id).toArray()[0];
+    if (!row) return null;
+    this.sql.exec(`INSERT INTO passkey_challenges (challenge, expires_at) VALUES (?, ?)`, challenge, expiresAt);
+    return row.email as string;
   }
 
   private async codeHash(email: string, code: string): Promise<string> {

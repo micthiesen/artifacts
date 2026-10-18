@@ -68,8 +68,9 @@ async function signIn(email: string, to = "", ret = "/") {
   const form = (fields: Record<string, string>) => new URLSearchParams({ to, n, return: ret, ...fields });
   const sent = await fetchAs(`${APEX}/login`, { method: "POST", body: form({ email }) });
   expect(sent.status).toBe(200);
-  const code = /(\d{4}) (\d{4})/.exec(mail.at(-1)!.text)!.slice(1).join("");
-  const done = await fetchAs(`${APEX}/login`, { method: "POST", body: form({ email, code }) });
+  const code = /\b(\d{8})\b/.exec(mail.at(-1)!.text)![1];
+  // Having said "Not now" to passkeys, so the code leads straight on (the offer is tested in passkeys.test.ts).
+  const done = await fetchAs(`${APEX}/login`, { method: "POST", body: form({ email, code }), cookie: "art_passkey_later=1" });
   // Straight to a page here, or a continue page on the way to a workspace.
   expect(done.status).toBe(to ? 200 : 303);
   const location = await nextUrl(done);

@@ -21,6 +21,7 @@ await build({ ...common, entryPoints: ["src/shell/account.ts"], outfile: "dist/k
 await build({ ...common, entryPoints: ["src/shell/home.ts"], outfile: "dist/kit/static/home.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/splash.ts"], outfile: "dist/kit/static/splash.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/me.ts"], outfile: "dist/kit/static/me.js", platform: "browser" });
+await build({ ...common, entryPoints: ["src/shell/login.ts"], outfile: "dist/kit/static/login.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/settings.ts"], outfile: "dist/kit/static/settings.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/admin.ts"], outfile: "dist/kit/static/admin.js", platform: "browser" });
 // The service worker must be served from the root to control every page.

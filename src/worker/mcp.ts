@@ -85,6 +85,22 @@ const filesMap = {
   description:
     'Files keyed by path. Exactly one entry: "index.mdx" (Markdown + components, best for reports), "index.md", or "app.tsx" (default-exported React component). Optional extra .tsx/.ts modules and data/*.json files.',
 };
+const publicDays = { type: "integer", minimum: 0, maximum: 365, description: "Public link expires after this many days (turns it on); 0 removes the expiry. Omitted: an existing expiry is kept." };
+
+/** public_days as the hub's expiry time: undefined when not given, an error message when invalid. */
+function publicUntil(args: Json): { until?: string | null; error?: string } {
+  if (args.public_days === undefined) return {};
+  const days = args.public_days;
+  if (typeof days !== "number" || !Number.isInteger(days) || days < 0 || days > 365) return { error: "public_days must be a whole number from 0 (no expiry) to 365." };
+  if (args.public === false) return { error: "public_days needs the public link on; omit public or set it to true." };
+  return { until: days === 0 ? null : new Date(Date.now() + days * 86_400_000).toISOString() };
+}
+
+/** "on", "on until 2026-11-17" or "off". */
+function publicLine(meta: { public: boolean; publicUntil: string | null }): string {
+  return meta.public ? (meta.publicUntil ? `on until ${meta.publicUntil.slice(0, 10)}` : "on") : "off";
+}
+
 const shareList = {
   type: "array",
   items: {
@@ -249,6 +265,7 @@ export const TOOLS: Tool[] = [
         files: filesMap,
         share: { ...shareList, description: "People to share with now." },
         public: { type: "boolean", description: "Anyone with the link can view (read-only). Default false." },
+        public_days: publicDays,
       },
       required: ["title", "files"],
       additionalProperties: false,
@@ -259,6 +276,8 @@ export const TOOLS: Tool[] = [
         if (!a || typeof a.email !== "string" || !isValidPrincipal(sharePrincipal(a.email))) return { isError: true, text: `"${a?.email}" is not an email address, @domain or workspace.` };
         if (a.role !== "view" && a.role !== "edit") return { isError: true, text: `role must be view or edit, not ${String(a.role)}.` };
       }
+      const expiry = publicUntil(args);
+      if (expiry.error) return { isError: true, text: expiry.error };
       const r = await hub.create({
         title: String(args.title),
         description: typeof args.description === "string" ? args.description : "",
@@ -266,9 +285,9 @@ export const TOOLS: Tool[] = [
         owner: ctx.person,
         actor: ctx.actor,
       });
-      if (r.ok && (Array.isArray(args.share) || typeof args.public === "boolean")) {
+      if (r.ok && (Array.isArray(args.share) || typeof args.public === "boolean" || expiry.until)) {
         const add = ((args.share as { email: string; role: string }[] | undefined) ?? []).filter((a) => a && typeof a.email === "string");
-        await hub.share(r.id, { add: add as never, public: args.public as boolean | undefined });
+        await hub.share(r.id, { add: add as never, public: args.public as boolean | undefined, publicUntil: expiry.until });
         const people = add.map((a) => sharePrincipal(a.email)).filter((p) => p.includes("@") && !p.startsWith("@") && p !== ctx.person);
         if (people.length) await announceShares(ctx, r.id, String(args.title), people, true);
       }
@@ -307,7 +326,7 @@ export const TOOLS: Tool[] = [
         ].join("\n");
         const shares = meta.shares.length ? meta.shares.map((s) => `${s.email} (${s.role})`).join(", ") : "nobody";
         return {
-          text: `${meta.title} — ${info.url}\nversion ${meta.version}, public ${meta.public}, shared with ${shares}\nfiles:\n${files}`,
+          text: `${meta.title} — ${info.url}\nversion ${meta.version}, public link ${publicLine(meta)}, shared with ${shares}\nfiles:\n${files}`,
           structured: info,
         };
       }
@@ -479,7 +498,7 @@ export const TOOLS: Tool[] = [
     name: "artifact_share",
     title: "artifacts.boo: share",
     description:
-      "artifacts.boo: share an artifact with people by email, with everyone at a domain (\"@example.com\") or with every workspace member (\"workspace\"), change roles, remove entries, or toggle a public read-only link. A person's own entry overrides their domain's role. Removal takes effect immediately. Each newly added person is emailed (notify: false to skip): someone new gets their own sign-in link, someone who has signed in before gets the page. Sign-in links only ever go to their person, never back to you. Returns the current sharing and who was emailed.",
+      "artifacts.boo: share an artifact with people by email, with everyone at a domain (\"@example.com\") or with every workspace member (\"workspace\"), change roles, remove entries, or toggle a public read-only link, optionally expiring. A person's own entry overrides their domain's role. Removal takes effect immediately. Each newly added person is emailed (notify: false to skip): someone new gets their own sign-in link, someone who has signed in before gets the page. Sign-in links only ever go to their person, never back to you. Returns the current sharing and who was emailed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -487,6 +506,7 @@ export const TOOLS: Tool[] = [
         add: { ...shareList, description: "Add people or change their role." },
         remove: { type: "array", items: { type: "string" }, description: 'Emails or "@domain" entries to remove.' },
         public: { type: "boolean", description: "true: anyone with the link can view read-only. false: only shared people." },
+        public_days: publicDays,
         notify: { type: "boolean", description: "Email each person added (default true). Set false if you'll send the links yourself." },
       },
       required: ["id"],
@@ -500,11 +520,14 @@ export const TOOLS: Tool[] = [
           return { isError: true, text: `"${entry}" is not an email address or @domain.` };
         }
       }
+      const expiry = publicUntil(args);
+      if (expiry.error) return { isError: true, text: expiry.error };
       const before = new Set(((await hub.meta(String(args.id)))?.shares ?? []).map((s) => s.email));
       const meta = await hub.share(String(args.id), {
         add: args.add as never,
         remove: args.remove as string[] | undefined,
         public: args.public as boolean | undefined,
+        publicUntil: expiry.until,
       });
       if (!meta) return { isError: true, text: `No artifact ${args.id}` };
       const shares = meta.shares.length ? meta.shares.map((s) => `${s.email} (${s.role})`).join(", ") : "nobody";
@@ -517,8 +540,8 @@ export const TOOLS: Tool[] = [
       const said = { link: "emailed a sign-in link", page: "emailed the page (they sign in as themselves)", "not emailed": "not emailed; send them the page URL" };
       const lines = Object.entries(people).map(([e, p]) => `- ${e}: ${said[p]}`);
       return {
-        text: `${url(origin, meta.id)}\nShared with: ${shares}. Public link: ${meta.public ? "on" : "off"}.${lines.length ? `\n${lines.join("\n")}` : ""}`,
-        structured: { url: url(origin, meta.id), shares: meta.shares, public: meta.public, emailed: people },
+        text: `${url(origin, meta.id)}\nShared with: ${shares}. Public link: ${publicLine(meta)}.${lines.length ? `\n${lines.join("\n")}` : ""}`,
+        structured: { url: url(origin, meta.id), shares: meta.shares, public: meta.public, publicUntil: meta.publicUntil, emailed: people },
       };
     },
   },

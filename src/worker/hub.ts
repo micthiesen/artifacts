@@ -59,7 +59,10 @@ export type ArtifactMeta = {
   /** Email of the person whose agent created it. */
   owner: string;
   version: number;
+  /** Anyone with the link can view. False once a link with an expiry has expired. */
   public: boolean;
+  /** When the public link stops working; null when it doesn't expire (or isn't on). */
+  publicUntil: string | null;
   /** Owner opted in to rich link previews (title, description, screenshot). */
   preview: boolean;
   /** When the owner archived it: hidden from lists, still readable at its link. */
@@ -75,6 +78,8 @@ export type Actor = string;
 export type ShareEntry = { email: string; role: Exclude<Role, "owner"> };
 
 export type Member = { email: string; role: WorkspaceRole; addedAt: string; addedBy: string | null; lastSeenAt: string | null };
+
+export type Access = { slug: string; name: string; member: WorkspaceRole | null; offline: boolean };
 
 export type AgentToken = { id: string; email: string; label: string; createdAt: string; lastUsedAt: string | null };
 
@@ -113,6 +118,7 @@ export type HubApi = AsyncMethods<
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
     | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "previewInfo" | "previewImage" | "watches" | "setWatch"
+    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin"
   >
 > & { fetch(request: Request): Promise<Response> };
 
@@ -228,7 +234,28 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX seen_by_artifact ON seen (artifact_id);
       ALTER TABLE members ADD COLUMN last_seen_at TEXT;
     `),
+  // Public links that expire (NULL: existing links keep working as before), and
+  // email domains whose people join as members on their own.
+  (sql) =>
+    sql.exec(`
+      ALTER TABLE artifacts ADD COLUMN public_until TEXT;
+      CREATE TABLE join_domains (domain TEXT PRIMARY KEY, added_by TEXT, added_at TEXT NOT NULL);
+      -- People an admin removed: a join domain doesn't bring them back.
+      CREATE TABLE removed_members (email TEXT PRIMARY KEY, removed_by TEXT, removed_at TEXT NOT NULL);
+    `),
 ];
+
+const PUBLIC_DAYS_MAX = 365;
+const JOIN_DOMAINS_MAX = 20;
+/** Anyone can get an address at these, so a domain rule for them would let the whole internet in. */
+const PUBLIC_MAIL_DOMAINS = new Set([
+  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "icloud.com", "me.com",
+  "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "gmx.com", "gmx.de", "gmx.net", "mail.com", "yandex.com",
+  "yandex.ru", "mail.ru", "zoho.com", "fastmail.com", "hey.com", "qq.com", "163.com", "126.com", "duck.com", "tutanota.com",
+  "tuta.io", "web.de", "t-online.de", "orange.fr", "free.fr", "laposte.net", "libero.it", "naver.com", "yahoo.co.uk",
+  "yahoo.co.jp", "yahoo.fr", "yahoo.de", "ymail.com", "rocketmail.com", "hotmail.co.uk", "hotmail.fr", "hotmail.de",
+  "outlook.de", "outlook.fr", "live.co.uk", "live.de", "live.fr", "comcast.net", "att.net", "verizon.net", "sbcglobal.net",
+]);
 
 export class Workspace extends DurableObject {
   private sql: SqlStorage;
@@ -296,13 +323,20 @@ export class Workspace extends DurableObject {
     return this.info();
   }
 
-  /** What the Worker needs per request: the workspace and this person's membership. */
-  access(email: string | null, origin?: string): { slug: string; name: string; member: WorkspaceRole | null; offline: boolean } {
+  /**
+   * What the Worker needs per request: the workspace and this person's
+   * membership. Only a newcomer from a join domain waits (see autoJoin); every
+   * other request stays synchronous.
+   */
+  access(email: string | null, origin?: string): Access | Promise<Access> {
     const { slug, name } = this.info();
     if (!this.ready) return { slug, name, member: null, offline: false };
     // Remembered for notifications queued by work that had no request (the alarm, imports).
     if (origin && slug && this.setting("origin") !== origin) this.setSetting("origin", origin);
-    return { slug, name, member: email ? this.memberRole(email) : null, offline: this.offline() };
+    const offline = this.offline();
+    const member = email ? this.memberRole(email) : null;
+    if (email && !member && this.joinsByDomain(email)) return this.autoJoin(email).then((joined) => ({ slug, name, member: joined, offline }));
+    return { slug, name, member, offline };
   }
 
   stats(): WorkspaceStats {
@@ -372,7 +406,14 @@ export class Workspace extends DurableObject {
         this.sql.exec(`DELETE FROM tokens WHERE email = ?`, clean);
         const heir = by && by !== clean ? by : (this.sql.exec(`SELECT email FROM members WHERE role = 'admin' ORDER BY email LIMIT 1`).toArray()[0]?.email as string);
         if (heir) this.sql.exec(`UPDATE artifacts SET owner = ? WHERE owner = ?`, heir, clean);
+        this.sql.exec(
+          `INSERT INTO removed_members (email, removed_by, removed_at) VALUES (?, ?, ?) ON CONFLICT (email) DO UPDATE SET removed_by = excluded.removed_by, removed_at = excluded.removed_at`,
+          clean,
+          by,
+          new Date().toISOString(),
+        );
       } else {
+        this.sql.exec(`DELETE FROM removed_members WHERE email = ?`, clean);
         this.sql.exec(
           `INSERT INTO members (email, role, added_at, added_by) VALUES (?, ?, ?, ?)
            ON CONFLICT (email) DO UPDATE SET role = excluded.role`,
@@ -406,8 +447,64 @@ export class Workspace extends DurableObject {
   }
 
   /** Someone signed in here: note it for members ("hasn't signed in yet"); returns whether they're a member. */
-  signedIn(email: string): boolean {
+  async signedIn(email: string, join = true): Promise<boolean> {
+    // A link session opens one artifact; only a real sign-in joins by domain.
+    if (join) await this.autoJoin(email);
     return this.sql.exec(`UPDATE members SET last_seen_at = ? WHERE email = ?`, new Date().toISOString(), email).rowsWritten > 0;
+  }
+
+  // ---- joining by email domain ----------------------------------------------------
+
+  /** Email domains whose people become members when they first open the workspace. */
+  joinDomains(): string[] {
+    return this.sql.exec(`SELECT domain FROM join_domains ORDER BY domain`).toArray().map((r) => r.domain as string);
+  }
+
+  /** Replace the join domains. Admins only: the Worker checks that, as for approved hosts. */
+  setJoinDomains(domains: string[], by: string): string[] {
+    const clean = [...new Set(domains.map(joinDomain))];
+    if (clean.length > JOIN_DOMAINS_MAX) throw new HubError(`at most ${JOIN_DOMAINS_MAX} join domains`);
+    const now = new Date().toISOString();
+    this.ctx.storage.transactionSync(() => {
+      const keep = new Set(clean);
+      for (const d of this.joinDomains()) if (!keep.has(d)) this.sql.exec(`DELETE FROM join_domains WHERE domain = ?`, d);
+      for (const d of clean) this.sql.exec(`INSERT OR IGNORE INTO join_domains (domain, added_by, added_at) VALUES (?, ?, ?)`, d, by, now);
+    });
+    this.markDirty();
+    return this.joinDomains();
+  }
+
+  /** Add or remove one join domain (the settings page's route). */
+  setJoinDomain(domain: string, allowed: boolean, by: string): string[] {
+    const current = this.joinDomains();
+    if (allowed) return this.setJoinDomains([...current, domain], by);
+    const d = domain.trim().toLowerCase().replace(/^@/, "");
+    return this.setJoinDomains(current.filter((c) => c !== d), by);
+  }
+
+  /** One indexed lookup; the hot path's only cost for people who aren't members. */
+  private joinsByDomain(email: string): boolean {
+    const domain = email.split("@")[1]?.toLowerCase();
+    return Boolean(domain) && this.sql.exec(`SELECT 1 FROM join_domains WHERE domain = ?`, domain).toArray().length > 0;
+  }
+
+  /**
+   * Their membership, adding them as a member first when their (verified)
+   * email's domain is a join domain. Called at sign-in and on the next visit
+   * of anyone already signed in. No invitation email: they're already here.
+   */
+  async autoJoin(email: string): Promise<WorkspaceRole | null> {
+    if (!this.ready) return null;
+    const current = this.memberRole(email);
+    // Not while a restore or import is replacing the members.
+    if (current || this.offline() || !this.joinsByDomain(email)) return current;
+    if (this.sql.exec(`SELECT 1 FROM removed_members WHERE email = ?`, email).toArray().length) return null;
+    try {
+      await this.setMember(email, "member", `auto:${email.split("@")[1]}`);
+    } catch (err) {
+      console.error("joining by domain failed", err);
+    }
+    return this.memberRole(email);
   }
 
   /** A new personal agent token. The plain token is returned only here. */
@@ -572,8 +669,13 @@ export class Workspace extends DurableObject {
    * wins (email, then domain, then workspace); public artifacts are viewable.
    */
   roleFor(id: string, email: string | null): Role | null {
-    const row = this.sql.exec(`SELECT public, owner FROM artifacts WHERE id = ?`, id).toArray()[0];
+    const row = this.sql.exec(`SELECT public, public_until, owner FROM artifacts WHERE id = ?`, id).toArray()[0];
     if (!row) return null;
+    return this.personalRole(id, row, email) ?? (isPublic(row) ? "view" : null);
+  }
+
+  /** Role from ownership, admin or a share; null when only a public link (or nothing) lets them in. */
+  private personalRole(id: string, row: Record<string, SqlStorageValue>, email: string | null): Role | null {
     if (email) {
       if (row.owner === email) return "owner";
       const member = this.memberRole(email);
@@ -582,7 +684,7 @@ export class Workspace extends DurableObject {
       const role = share(email) ?? share(domainOf(email)) ?? (member ? share(WORKSPACE_PRINCIPAL) : undefined);
       if (role) return role;
     }
-    return row.public ? "view" : null;
+    return null;
   }
 
   files(id: string): Record<string, string> {
@@ -734,8 +836,20 @@ export class Workspace extends DurableObject {
     return toMeta(this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).one());
   }
 
-  share(id: string, input: { add?: ShareEntry[]; remove?: string[]; public?: boolean }) {
+  /**
+   * Change sharing. `publicUntil` (ISO time, null for never) sets when the
+   * public link stops working and implies turning it on; turning it off
+   * forgets the expiry. Turning on a link that's on keeps its expiry, so an
+   * agent repeating `public: true` doesn't undo the owner's choice.
+   */
+  share(id: string, input: { add?: ShareEntry[]; remove?: string[]; public?: boolean; publicUntil?: string | null }) {
     this.requireArtifact(id);
+    const on = input.public ?? (input.publicUntil !== undefined ? true : undefined);
+    if (on === false && input.publicUntil) throw new HubError("a public link that is off can't have an expiry");
+    // Turning on a link that's already on keeps its expiry unless one is given (null: never).
+    const current = this.sql.exec(`SELECT public, public_until FROM artifacts WHERE id = ?`, id).one();
+    const keep = input.publicUntil === undefined && isPublic(current) ? ((current.public_until as string | null) ?? null) : null;
+    const until = on ? (input.publicUntil === undefined ? keep : publicExpiry(input.publicUntil)) : null;
     for (const s of input.add ?? []) {
       if (!isValidPrincipal(sharePrincipal(String(s.email ?? "")))) throw new HubError(`"${s.email}" is not an email address, @domain or workspace`);
       if (s.role !== "view" && s.role !== "edit") throw new HubError(`role must be view or edit, not ${s.role}`);
@@ -753,7 +867,7 @@ export class Workspace extends DurableObject {
       for (const email of input.remove ?? []) {
         this.sql.exec(`DELETE FROM shares WHERE artifact_id = ? AND email = ?`, id, sharePrincipal(email));
       }
-      if (input.public !== undefined) this.sql.exec(`UPDATE artifacts SET public = ? WHERE id = ?`, input.public ? 1 : 0, id);
+      if (on !== undefined) this.sql.exec(`UPDATE artifacts SET public = ?, public_until = ? WHERE id = ?`, on ? 1 : 0, until, id);
     });
     this.markDirty();
     // Every open page reconnects and is checked against the new sharing; working
@@ -1212,9 +1326,10 @@ export class Workspace extends DurableObject {
   // ---- owner overview ------------------------------------------------------------
 
   /** Everything the index page needs, in one call: membership, the list, and sharing for what you manage. */
-  indexData(email: string) {
+  async indexData(email: string) {
+    const member = await this.autoJoin(email);
     const artifacts = this.list(email);
-    return { member: this.memberRole(email), artifacts, summaries: this.shareSummaries(email, artifacts) };
+    return { member, artifacts, summaries: this.shareSummaries(email, artifacts) };
   }
 
   /**
@@ -1231,9 +1346,9 @@ export class Workspace extends DurableObject {
   }
 
   /** Sharing summary per artifact, for the people who manage them on the index. */
-  shareSummaries(email: string, listed = this.list(email)): Record<string, { shares: ShareEntry[]; public: boolean }> {
-    const out: Record<string, { shares: ShareEntry[]; public: boolean }> = {};
-    for (const a of listed) if (a.role === "owner") out[a.id] = { shares: [], public: a.public };
+  shareSummaries(email: string, listed = this.list(email)): Record<string, { shares: ShareEntry[]; public: boolean; publicUntil: string | null }> {
+    const out: Record<string, { shares: ShareEntry[]; public: boolean; publicUntil: string | null }> = {};
+    for (const a of listed) if (a.role === "owner") out[a.id] = { shares: [], public: a.public, publicUntil: a.publicUntil };
     for (const s of this.sql.exec(`SELECT artifact_id, email, role FROM shares ORDER BY email`)) {
       out[s.artifact_id as string]?.shares.push({ email: s.email as string, role: s.role as ShareEntry["role"] });
     }
@@ -1522,9 +1637,15 @@ export class Workspace extends DurableObject {
     const role = request.headers.get("X-Art-Role") as Role | null;
     const email = request.headers.get("X-Art-Email") || null;
     const origin = request.headers.get("X-Art-Origin") ?? undefined;
-    const exp = Number(request.headers.get("X-Art-Exp") ?? 0) || undefined;
+    let exp = Number(request.headers.get("X-Art-Exp") ?? 0) || undefined;
     if (request.headers.get("Upgrade") !== "websocket" || !role) return new Response("expected websocket", { status: 400 });
     this.requireArtifact(id);
+    // Someone in only through a public link with an expiry loses the socket when the link expires.
+    const row = this.sql.exec(`SELECT public, public_until, owner FROM artifacts WHERE id = ?`, id).one();
+    if (isPublic(row) && row.public_until && !this.personalRole(id, row, email)) {
+      const until = Math.floor(Date.parse(row.public_until as string) / 1000);
+      exp = exp ? Math.min(exp, until) : until;
+    }
     // Read before accepting: the snapshot and threads must describe the same moment.
     const people = email ? await this.people(id, role !== "view" ? undefined : email) : [];
     const pair = new WebSocketPair();
@@ -1549,7 +1670,7 @@ export class Workspace extends DurableObject {
     }
     if (!msg || typeof msg !== "object") return;
     if (tag.exp && Date.now() / 1000 > tag.exp) {
-      ws.close(4001, "session expired");
+      ws.close(4003, "access changed");
       return;
     }
     if (msg.t === "read") {
@@ -1883,7 +2004,7 @@ export class Workspace extends DurableObject {
   previewInfo(id: string): { rich: boolean; title: string; description: string; version: number; image: boolean } | null {
     const row = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).toArray()[0];
     if (!row) return null;
-    const rich = Boolean(row.preview) || Boolean(row.public);
+    const rich = Boolean(row.preview) || isPublic(row);
     const shot = this.sql.exec(`SELECT screenshot IS NOT NULL AS has FROM checks WHERE artifact_id = ?`, id).toArray()[0];
     return { rich, title: row.title as string, description: row.description as string, version: row.version as number, image: rich && Boolean(shot?.has) };
   }
@@ -2161,8 +2282,16 @@ export class Workspace extends DurableObject {
 
   private broadcast(id: string, msg: SyncServerMessage) {
     const text = JSON.stringify(msg);
+    const now = Date.now() / 1000;
     for (const ws of this.ctx.getWebSockets(id)) {
-      if (msg.t === "thread" && !(ws.deserializeAttachment() as SocketTag).email) continue;
+      const tag = ws.deserializeAttachment() as SocketTag;
+      // Expired link sessions and public links get nothing more, even if they never send;
+      // the page then asks for a reload, which re-checks access.
+      if (tag.exp && now > tag.exp) {
+        ws.close(4003, "access changed");
+        continue;
+      }
+      if (msg.t === "thread" && !tag.email) continue;
       try {
         ws.send(text);
       } catch {
@@ -2191,6 +2320,30 @@ function send(ws: WebSocket, msg: SyncServerMessage) {
   ws.send(JSON.stringify(msg));
 }
 
+/** Whether the public link works now: an expired one is the same as off. */
+function isPublic(r: Record<string, SqlStorageValue>): boolean {
+  return Boolean(r.public) && (r.public_until == null || (r.public_until as string) > new Date().toISOString());
+}
+
+/** A validated public-link expiry, normalized to ISO; null for none. */
+function publicExpiry(until: string | null): string | null {
+  if (until === null) return null;
+  const at = Date.parse(until);
+  if (!Number.isFinite(at)) throw new HubError(`"${until}" is not a time`);
+  if (at <= Date.now()) throw new HubError("a public link's expiry must be in the future");
+  // A minute's slack, so "365 days from now" computed by a caller still fits.
+  if (at > Date.now() + PUBLIC_DAYS_MAX * 86_400_000 + 60_000) throw new HubError(`a public link can last at most ${PUBLIC_DAYS_MAX} days`);
+  return new Date(at).toISOString();
+}
+
+/** "@Corp.com" or "corp.com." as "corp.com", refusing what isn't a domain or anyone can sign up at. */
+function joinDomain(input: string): string {
+  const d = String(input).trim().toLowerCase().replace(/^@/, "").replace(/\.$/, "");
+  if (!/^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(d)) throw new HubError(`"${input}" is not an email domain`);
+  if (PUBLIC_MAIL_DOMAINS.has(d)) throw new HubError(`${d} is a public email provider: anyone can get an address there. Add people from it one by one instead.`);
+  return d;
+}
+
 function toMeta(r: Record<string, SqlStorageValue>): ArtifactMeta {
   return {
     id: r.id as string,
@@ -2198,7 +2351,8 @@ function toMeta(r: Record<string, SqlStorageValue>): ArtifactMeta {
     description: r.description as string,
     owner: r.owner as string,
     version: r.version as number,
-    public: Boolean(r.public),
+    public: isPublic(r),
+    publicUntil: isPublic(r) ? ((r.public_until as string | null) ?? null) : null,
     preview: Boolean(r.preview),
     archivedAt: (r.archived_at as string | null) ?? null,
     createdAt: r.created_at as string,

@@ -79,7 +79,7 @@ export { PRODUCT };
 export type Brand = { name: string; home: string; apex: string };
 
 /** The ghost logo, drawn by CSS (a gradient through an SVG mask). */
-const GHOST = `<span class="ghost" aria-hidden="true"></span>`;
+const GHOST = `<span class="logo-ghost" aria-hidden="true"></span>`;
 
 /** The brand's name as a title: the product's own name gets its wordmark. */
 function brandName(brand: Brand): string {
@@ -115,12 +115,12 @@ function relativeTime(iso: string): string {
   return iso.slice(0, 10);
 }
 
-type ShareSummary = { shares: { email: string; role: string }[]; public: boolean };
+type ShareSummary = { shares: { email: string; role: string }[]; public: boolean; publicUntil?: string | null };
 
 function sharingLine(s: ShareSummary | undefined): string {
   if (!s) return "";
   const parts = s.shares.map((x) => `${x.email === "workspace" ? "everyone in the workspace" : escapeHtml(x.email)}${x.role === "edit" ? " (edit)" : ""}`);
-  if (s.public) parts.unshift("public link");
+  if (s.public) parts.unshift(s.publicUntil ? `public link until ${s.publicUntil.slice(0, 10)}` : "public link");
   if (!parts.length) return `<span class="sharing">Only you</span>`;
   const shown = parts.slice(0, 4).join(", ");
   return `<span class="sharing">Shared with ${shown}${parts.length > 4 ? ` +${parts.length - 4} more` : ""}</span>`;
@@ -329,7 +329,7 @@ ${card("Isolated by construction", "Tenancy and untrusted code are handled by th
 <section class="splash-self" id="self-host">
 <div>
 <h2>Self-host it in one deploy</h2>
-<p class="muted">Alchemy creates everything: the Worker and its Durable Objects, DNS for workspace subdomains, the sign-in email sender, OAuth storage, R2 backups and every secret. Schema changes migrate themselves when each workspace wakes up.</p>
+<p class="muted"><a href="https://alchemy.run">Alchemy</a>, an infrastructure-as-code tool for TypeScript, creates everything: the Worker and its Durable Objects, DNS for workspace subdomains, the sign-in email sender, OAuth storage, R2 backups and every secret. Schema changes migrate themselves when each workspace wakes up.</p>
 <ul class="splash-facts">
 <li><strong>$5 a month</strong> for Workers Paid; an idle workspace costs only its stored bytes</li>
 <li><strong>OAuth for MCP</strong>, or personal agent tokens for headless clients</li>
@@ -366,15 +366,37 @@ export function loginPage(state: LoginState, brand: Brand, status = 200): Respon
       ? `<h1>Sign in</h1><p class="muted">We'll email you a sign-in code${where}.</p>${error}
 <form class="key-form" method="post" action="/login">${hidden}
 <label for="email">Email</label>
-<div class="row"><input class="input" id="email" name="email" type="email" autocomplete="email" required autofocus value="${escapeHtml(state.email ?? "")}"><button class="button" type="submit">Send code</button></div>
-</form>`
+<div class="row"><input class="input" id="email" name="email" type="email" autocomplete="email webauthn" required autofocus value="${escapeHtml(state.email ?? "")}"><button class="button" type="submit">Send code</button></div>
+</form>
+<p class="passkey-alt" id="passkey-alt" hidden><button class="link" type="button" id="passkey-button">Sign in with a passkey</button></p>`
       : `<h1>Check your email</h1><p class="muted">We sent a code to <strong>${escapeHtml(state.email ?? "")}</strong>. It works for 10 minutes.</p>${error}
 <form class="key-form" method="post" action="/login">${hidden}<input type="hidden" name="email" value="${escapeHtml(state.email ?? "")}">
 <label for="code">Code</label>
 <div class="row"><input class="input code-input" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{8,9}" maxlength="9" required autofocus><button class="button" type="submit">Sign in</button></div>
 </form>
 <form method="post" action="/login" class="resend">${hidden}<input type="hidden" name="email" value="${escapeHtml(state.email ?? "")}"><button class="link" type="submit">Send a new code</button> <a href="/login?to=${encodeURIComponent(state.to)}&n=${encodeURIComponent(state.n)}&return=${encodeURIComponent(state.return)}">Use a different email</a></form>`;
-  return page(`Sign in · ${PRODUCT}`, `${topBar(brand)}<main class="content"><section class="empty">${body}<p class="muted fine">By signing in you agree to the <a href="/terms">terms</a>; see how we handle your data in <a href="/privacy">Privacy</a>.</p></section></main>`, { status });
+  // login.js offers saved passkeys in the email field's autofill (or, where a browser can't, the button above).
+  const passkeys = state.step === "email" ? `<script type="module" src="${asset("/static/login.js")}"></script>` : "";
+  return page(
+    `Sign in · ${PRODUCT}`,
+    `${topBar(brand)}<main class="content"><section class="empty" id="login" data-to="${escapeHtml(state.to)}" data-n="${escapeHtml(state.n)}" data-return="${escapeHtml(state.return)}">${body}<p class="muted fine">By signing in you agree to the <a href="/terms">terms</a>; see how we handle your data in <a href="/privacy">Privacy</a>.</p></section></main>${passkeys}`,
+    { status },
+  );
+}
+
+/**
+ * After a code sign-in: offer to save a passkey so next time needs no email.
+ * login.js skips straight on where the browser can't make one; "Not now" waits
+ * 30 days before asking again. `next` is where to go either way.
+ */
+export function passkeyOfferPage(next: string, brand: Brand): Response {
+  const href = escapeHtml(next);
+  return page(
+    `Save a passkey · ${PRODUCT}`,
+    `${topBar(brand)}<main class="content"><section class="empty" id="passkey-offer" data-next="${href}"><h1>Skip the email next time</h1><p class="muted">Save a passkey and sign in with Face ID, Touch ID or your device's screen lock. Your email code still works whenever you need it.</p>
+<p class="notice error" role="alert" id="passkey-error" hidden></p>
+<p class="consent-actions"><button class="button" type="button" id="passkey-save">Save a passkey</button><a class="button secondary" href="${href}" id="passkey-later">Not now</a></p></section></main><script type="module" src="${asset("/static/login.js")}"></script>`,
+  );
 }
 
 /** The apex for someone signed in: their workspaces. */
@@ -489,8 +511,9 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <p>${escapeHtml(brand.apex.replace(/^https:\/\//, ""))} is run by Michael Thiesen ("we"). This page says what we store, why, who else handles it, and how long we keep it. Questions or requests: ${mail}.</p>
 <h2>What we store</h2>
 <ul>
-<li><strong>Your email address</strong>, to sign you in with one-time codes, to know who an artifact is shared with, and to email you invitations, shares and notifications (on by default; you can turn notification emails off).</li>
+<li><strong>Your email address</strong>, to sign you in with one-time codes (or a passkey, if you save one), to know who an artifact is shared with, and to email you invitations, shares and notifications (on by default; you can turn notification emails off).</li>
 <li><strong>Your display name</strong>, if you set one; it's shown on your comments.</li>
+<li><strong>Passkeys</strong>, if you save any: each one's public key, a name for it (such as "iCloud Keychain"), and when it was added and last used. The private key never leaves your device or password manager.</li>
 <li><strong>Artifacts</strong>: the files your agent writes (up to 50 versions each), images and data files, and live data fetched from hosts a workspace admin approved.</li>
 <li><strong>What people do on an artifact</strong>: comments, votes, checklists, notes and other shared state; which version you last saw and which comments you've read; an activity log (the latest 5,000 events per artifact).</li>
 <li><strong>Workspace membership</strong>: who belongs to which workspace and in what role, and when members last signed in.</li>
@@ -557,6 +580,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <h2>Sign-in and access</h2>
 <ul>
 <li>People sign in with eight-digit one-time codes emailed to them; codes are stored hashed, expire in 10 minutes, and sending and guessing are limited per address and network.</li>
+<li>Or with a passkey they saved: only its public key is stored, every sign-in requires the device's own check (Face ID, fingerprint or screen lock), and each sign-in challenge works once.</li>
 <li>Sessions are signed, HTTP-only, secure cookies bound to one host. Every request checks the artifact's sharing, so removing someone takes effect immediately.</li>
 <li>Agents connect with OAuth 2.1 (PKCE, per-workspace audience) or a personal token stored as a hash. An agent acts as one member, with that member's access, and loses it when they leave the workspace.</li>
 <li>Links that sign straight into an artifact are only ever emailed to their own person (or given to an agent for its own person), open that one artifact, and expire.</li>

@@ -15,6 +15,7 @@ import {
   indexPage,
   loginPage,
   messagePage,
+  passkeyOfferPage,
   previewPage,
   PRODUCT,
   DESCRIPTION,
@@ -28,6 +29,7 @@ import {
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { publicMessage } from "./errors.ts";
+import { PasskeyError, registrationOptions, signInOptions, verifyRegistration, verifySignIn } from "./passkeys.ts";
 export { isTestAddress };
 import {
   b64url,
@@ -94,6 +96,8 @@ const WORKSPACE_CACHE_MS = 30_000;
 const MISSING_CACHE_MS = 5_000;
 const WORKSPACE_CACHE_MAX = 2000;
 const NONCE_COOKIE = "__Host-art_login";
+/** Set on the apex when someone answers "Not now" to saving a passkey; the offer returns when it lapses. */
+export const PASSKEY_LATER_COOKIE = "art_passkey_later";
 
 /**
  * `only` is set for a session from a presigned link: it opens that one
@@ -475,10 +479,13 @@ async function invite(env: Env, hub: HubApi, to: string, input: { workspace: str
   }
 }
 
-/** Note a sign-in to a workspace: members' "last seen", or the workspace among a guest's on the apex. */
-async function noteSignIn(env: Env, slug: string, email: string) {
+/**
+ * Note a sign-in to a workspace: members' "last seen", or the workspace among a
+ * guest's on the apex. `join`: a real sign-in, which may join by email domain.
+ */
+async function noteSignIn(env: Env, slug: string, email: string, join = true) {
   try {
-    if (!(await workspaceHub(env, slug).signedIn(email))) await directory(env).recordVisit(email, slug);
+    if (!(await workspaceHub(env, slug).signedIn(email, join))) await directory(env).recordVisit(email, slug);
   } catch (err) {
     console.error("noting sign-in failed", err);
   }
@@ -515,6 +522,11 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
     return workspacesPage(viewer.email, workspaces, operator, brand);
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
+  if (path === "/login/passkey/options" && request.method === "POST") {
+    if (!sameOrigin(request, url)) return Response.json({ error: "bad origin" }, { status: 403 });
+    return Response.json(await signInOptions(env));
+  }
+  if (path === "/login/passkey" && request.method === "POST") return passkeyLogin(request, url, env);
   if (path === "/privacy" || path === "/terms" || path === "/security") {
     return indexable(policyPage(path.slice(1) as PolicyKind, brand, (env.OPERATOR_EMAILS ?? "").split(",")[0].trim()));
   }
@@ -571,7 +583,11 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
     if (!(await directory(env).verifyLogin(email, field("code"), clientNetwork(request)))) {
       return loginPage({ ...state, step: "code", email, error: "That code didn't work. Check it, or send a new one." }, brand, 400);
     }
-    const res = await finishLogin(email, to, nonce, ret, env, true);
+    // Offer a passkey so next time needs no email, unless they have one or said "Not now" lately.
+    // Continuing goes back through GET /login, which hands off to the workspace afresh (a minute).
+    const res = readCookie(request, PASSKEY_LATER_COOKIE) || (await directory(env).passkeys(email)).length
+      ? await finishLogin(email, to, nonce, ret, env, true)
+      : passkeyOfferPage(to ? `/login?${new URLSearchParams({ to, n: nonce, return: ret })}` : ret, brand);
     const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST });
     res.headers.append("Set-Cookie", sessionCookie(session));
     return res;
@@ -607,23 +623,49 @@ function expandIpv6(ip: string): string[] {
   return [...a, ...Array(8 - a.length - b.length).fill("0"), ...b];
 }
 
-/** Send a signed-in browser on: to a workspace via a one-minute hand-off code, or to a page here. */
-async function finishLogin(email: string, to: string, nonce: string, ret: string, env: Env, fromForm: boolean): Promise<Response> {
+/** Where a signed-in browser goes next: a workspace's callback with a one-minute hand-off code, or null for a page here. */
+async function handoff(email: string, to: string, nonce: string, ret: string, env: Env): Promise<string | null> {
   let target: URL | null = null;
   try {
     target = to ? new URL(to) : null;
   } catch {
     target = null;
   }
-  if (target && target.protocol === "https:" && slugOf(target.hostname, env) && target.origin === to) {
-    const code = await signToken(env.LOGIN_SECRET, "login", 60, { e: email, aud: target.origin, n: nonce });
-    const callback = new URL(`${target.origin}/auth/callback`);
-    callback.searchParams.set("code", code);
-    callback.searchParams.set("next", ret);
-    // After the code form, a redirect to the workspace would be blocked (see continuePage).
-    return fromForm ? continuePage(callback.href) : new Response(null, { status: 303, headers: { Location: callback.href } });
-  }
+  if (!target || target.protocol !== "https:" || !slugOf(target.hostname, env) || target.origin !== to) return null;
+  const code = await signToken(env.LOGIN_SECRET, "login", 60, { e: email, aud: target.origin, n: nonce });
+  const callback = new URL(`${target.origin}/auth/callback`);
+  callback.searchParams.set("code", code);
+  callback.searchParams.set("next", ret);
+  return callback.href;
+}
+
+/** Send a signed-in browser on: to a workspace via a one-minute hand-off code, or to a page here. */
+async function finishLogin(email: string, to: string, nonce: string, ret: string, env: Env, fromForm: boolean): Promise<Response> {
+  const callback = await handoff(email, to, nonce, ret, env);
+  // After the code form, a redirect to the workspace would be blocked (see continuePage).
+  if (callback) return fromForm ? continuePage(callback) : new Response(null, { status: 303, headers: { Location: callback } });
   return new Response(null, { status: 303, headers: { Location: ret } });
+}
+
+/**
+ * Passkey sign-in (login.js posts the browser's response): signs this browser
+ * in on the apex and says where to go next, the same places a code leads.
+ */
+async function passkeyLogin(request: Request, url: URL, env: Env): Promise<Response> {
+  if (!sameOrigin(request, url)) return Response.json({ error: "bad origin" }, { status: 403 });
+  const body = await jsonBody(request);
+  const to = String(body.to ?? "");
+  const ret = body.return ? safeNext(String(body.return)) : to ? "/" : "/workspaces";
+  let email: string;
+  try {
+    email = await verifySignIn(env, directory(env), String(body.token ?? ""), body.response as never);
+  } catch (err) {
+    if (err instanceof PasskeyError) return Response.json({ error: err.message }, { status: 400 });
+    throw err;
+  }
+  const location = (await handoff(email, to, String(body.n ?? ""), ret, env)) ?? ret;
+  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST });
+  return Response.json({ location }, { headers: { "Set-Cookie": sessionCookie(session) } });
 }
 
 async function authCallback(request: Request, url: URL, env: Env): Promise<Response> {
@@ -665,7 +707,7 @@ async function presignedSignIn(request: Request, code: string, url: URL, env: En
   // The session opens this artifact only, and lasts no longer than the link; signing in with email gives the rest.
   const ttl = Math.max(60, Math.min(SESSION_TTL, Math.floor(claims.exp - Date.now() / 1000)));
   const cookie = await signToken(env.SESSION_SECRET, "session", ttl, { e: email, h: url.hostname, a: claims.a });
-  await noteSignIn(env, slug, email);
+  await noteSignIn(env, slug, email, false);
   return new Response(null, {
     status: 303,
     headers: { Location: target, "Set-Cookie": sessionCookie(cookie, ttl), "Referrer-Policy": "no-referrer" },
@@ -835,6 +877,7 @@ async function revokeGrants(env: Env, origin: string, slug: string, email: strin
  * - DELETE /api/settings/tokens/<id>     revoke (yours, or any as admin)
  * - DELETE /api/settings/apps/<grant>    disconnect one of your OAuth apps
  * - POST   /api/settings/hosts {host, allowed}   approve or revoke a live-data host (admin)
+ * - POST   /api/settings/join {domain, allowed}  add or remove an auto-join email domain (admin)
  */
 async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer, slug: string): Promise<Response> {
   const email = viewer.email;
@@ -857,6 +900,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         tokens: await hub.tokens(admin ? undefined : email),
         apps: (await hub.grants(email)).map((g) => ({ id: g.id, client: g.client, createdAt: g.createdAt })),
         hosts: await hub.allowedHosts(),
+        joinDomains: await hub.joinDomains(),
       });
     }
     const body = await jsonBody(request);
@@ -892,6 +936,10 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
     if (path === "/api/settings/hosts" && request.method === "POST") {
       if (!admin) return adminOnly();
       return Response.json({ hosts: await hub.setHostAllowed(String(body.host ?? ""), body.allowed !== false) });
+    }
+    if (path === "/api/settings/join" && request.method === "POST") {
+      if (!admin) return adminOnly();
+      return Response.json({ joinDomains: await hub.setJoinDomain(String(body.domain ?? ""), body.allowed !== false, email) });
     }
   } catch (err) {
     return failure(err);
@@ -970,6 +1018,9 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
  * - POST   /api/me/channels {type,...} add a channel (validated; may reveal a secret once)
  * - DELETE /api/me/channels/<id>       remove one
  * - POST   /api/me/channels/<id>/test  send a test notification
+ * - POST   /api/me/passkeys/options    start saving a passkey
+ * - POST   /api/me/passkeys {token, response}  save it
+ * - DELETE /api/me/passkeys/<id>       remove one
  */
 async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer): Promise<Response> {
   const email = viewer.email;
@@ -996,6 +1047,13 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
       const id = await dir.addChannel(email, type, prepared.config, prepared.label);
       return Response.json({ id, label: prepared.label, reveal: prepared.reveal ?? null });
     }
+    if (url.pathname === "/api/me/passkeys/options" && request.method === "POST") return Response.json(await registrationOptions(env, dir, email));
+    if (url.pathname === "/api/me/passkeys" && request.method === "POST") {
+      const passkeys = await verifyRegistration(env, dir, email, String(body.token ?? ""), body.response as never, request.headers.get("User-Agent") ?? "");
+      return Response.json({ passkeys });
+    }
+    const pk = /^\/api\/me\/passkeys\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
+    if (pk && request.method === "DELETE") return Response.json({ removed: await dir.removePasskey(email, pk[1]) });
     const m = /^\/api\/me\/channels\/([a-z0-9]+)(\/test)?$/.exec(url.pathname);
     if (m && request.method === "DELETE" && !m[2]) return Response.json({ removed: await dir.removeChannel(email, m[1]) });
     if (m && request.method === "POST" && m[2]) {
@@ -1036,6 +1094,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
  * - GET    /api/admin/signins?email=                     recent code sends and failures, for support
  * - POST   /api/admin/workspaces/<slug>/restore {run}    back up, then replace everything with that run
  * - the same export, import, backups, backup and restore under /api/admin/directory/ for the directory
+ * - POST   /api/admin/workspaces/<slug>/hosts {host, allowed}   approve or revoke a live-data host, as its admins can
  * - POST   /api/admin/workspaces/<slug>/tokens {email}   an agent token for a member
  * - POST   /api/admin/session {email, host}              a session cookie value for the apex or a workspace host
  * The last two exist for end-to-end checks and only accept test addresses
@@ -1131,6 +1190,11 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       if (role === null) await revokeGrants(env, workspaceOrigin(env, slug), slug, target, hub);
       const emailed = role !== null && !existed && (await invite(env, hub, target, { workspace: (await hub.access(null)).name, url: workspaceOrigin(env, slug), by: null, role }));
       return Response.json({ members, emailed });
+    }
+    // Like fixing admins: put back a data host an admin removed by mistake.
+    if (action === "hosts" && request.method === "POST") {
+      if (typeof body.allowed !== "boolean") return Response.json({ error: "allowed must be true or false" }, { status: 400 });
+      return Response.json({ hosts: await hub.setHostAllowed(String(body.host ?? ""), body.allowed) });
     }
     if (action === "job" && request.method === "DELETE") {
       await hub.cancelJob();

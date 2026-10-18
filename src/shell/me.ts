@@ -3,6 +3,7 @@
 // settings. In a workspace ("Notifications in <name>"): how much you hear about
 // each artifact there. Everything goes through that host's /api/me. A failed
 // action only shows its notice, so what you typed stays put.
+import { browserSupportsWebAuthn, startRegistration } from "@simplewebauthn/browser";
 import { PRODUCT } from "../shared/brand.ts";
 import type { WatchLevel } from "../shared/protocol.ts";
 
@@ -14,6 +15,7 @@ type Profile = {
   emailNotifications?: boolean;
   channels?: Channel[];
   workspaces?: { slug: string; name: string; role: "admin" | "member" | "guest"; url: string; suspended: boolean }[];
+  passkeys?: { id: string; name: string; createdAt: string; lastUsedAt: string | null }[];
   vapidPublicKey?: string | null;
   pushover?: boolean;
   // Workspace only.
@@ -149,6 +151,8 @@ function renderAccount(sections: HTMLElement[]) {
     ),
   );
 
+  sections.push(passkeySection(profile.passkeys ?? []));
+
   // Channels: email first (on by default), then whatever you added.
   const list = h("ul", { class: "channels" });
   const emailOn = profile.emailNotifications !== false;
@@ -223,6 +227,51 @@ function renderAccount(sections: HTMLElement[]) {
         : h("p", { class: "muted" }, "None yet. When someone shares an artifact with you, its workspace shows up here."),
     ),
   );
+}
+
+function passkeySection(passkeys: NonNullable<Profile["passkeys"]>): HTMLElement {
+  const day = (iso: string) => new Date(iso).toLocaleDateString();
+  const list = h(
+    "ul",
+    { class: "channels" },
+    ...passkeys.map((p) =>
+      h(
+        "li",
+        {},
+        h("span", { class: "channel-label" }, p.name),
+        h("span", { class: "muted small" }, `Added ${day(p.createdAt)}${p.lastUsedAt ? ` · last used ${day(p.lastUsedAt)}` : " · not used yet"}`),
+        h(
+          "span",
+          { class: "channel-actions" },
+          btn("Remove", () => act(() => api(`/api/me/passkeys/${encodeURIComponent(p.id)}`, { method: "DELETE" }), `Removed ${p.name}. Remove it from your device or password manager too.`), "button small ghost danger"),
+        ),
+      ),
+    ),
+  );
+  const section = h(
+    "section",
+    { class: "card-section" },
+    h("h2", {}, "Passkeys"),
+    h("p", { class: "muted" }, "Sign in with Face ID, Touch ID, your device's screen lock or a security key instead of an emailed code. Codes keep working too."),
+  );
+  if (passkeys.length) section.append(list);
+  if (browserSupportsWebAuthn()) section.append(btn("Add a passkey", () => act(addPasskey, "Passkey saved. Next time, pick it when you sign in.")));
+  else if (!passkeys.length) section.append(h("p", { class: "muted small" }, "This browser can't save passkeys."));
+  return section;
+}
+
+async function addPasskey() {
+  const { options, token } = await api<{ options: never; token: string }>("/api/me/passkeys/options", { body: {} });
+  let response;
+  try {
+    response = await startRegistration({ optionsJSON: options });
+  } catch (err) {
+    const name = (err as { name?: string })?.name;
+    if (name === "InvalidStateError") throw new Error("This device or password manager already has one of your passkeys.");
+    if (name === "NotAllowedError" || name === "AbortError") throw new Error("No passkey was saved.");
+    throw err;
+  }
+  await api("/api/me/passkeys", { body: { token, response } });
 }
 
 function renderWatches(sections: HTMLElement[], watches: NonNullable<Profile["watches"]>) {

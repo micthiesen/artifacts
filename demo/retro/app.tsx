@@ -26,7 +26,7 @@ export default function Retro() {
   }
 
   return (
-    <div className="grid h-full content-start gap-4 p-5 sm:grid-cols-3">
+    <div className="grid min-h-full content-start gap-4 px-5 pt-5 pb-20 sm:grid-cols-3">
       {COLUMNS.map((col) => (
         <section key={col} className="flex flex-col gap-2">
           <h2 className="text-sm font-semibold text-muted-foreground">{col}</h2>
