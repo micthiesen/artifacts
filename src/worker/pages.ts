@@ -6,6 +6,7 @@ import type { WorkspaceRole } from "./directory.ts";
 import type { FrameBoot, Role, ShellBoot } from "../shared/protocol.ts";
 import { PRODUCT } from "../shared/brand.ts";
 import demos from "./demos.json";
+import demoLinks from "../../demo/links.json";
 
 const KIT = "/kit/v1";
 declare const __ASSET_VERSION__: string;
@@ -233,6 +234,8 @@ export function previewPage(p: { url: string; origin: string; title?: string; de
 }
 
 const REPO = "https://github.com/micthiesen/artifacts.boo";
+/** The public principles page in the demo workspace (demo/principles, published by scripts/seed-demo.ts). */
+const PRINCIPLES = (demoLinks as Record<string, string>).principles ?? null;
 
 type Demo = { slug: string; label: string; title: string; blurb: string; entry: string; html: string; data: string[]; seed: unknown[]; link?: string };
 const DEMOS = demos as Demo[];
@@ -320,6 +323,7 @@ ${card("Isolated by construction", "Tenancy and untrusted code are handled by th
   "Comments live outside the frame and collab writes are stamped server-side, so votes and authorship can't be forged",
 ])}
 </section>
+${PRINCIPLES ? `<p class="splash-why"><a href="${PRINCIPLES}">How artifacts.boo thinks: the principles behind these choices</a></p>` : ""}
 
 <section class="splash-self" id="self-host">
 <div>
@@ -338,7 +342,7 @@ cd artifacts.boo &amp;&amp; bun install
 bun run deploy</code></pre></div>
 </section>
 
-<footer class="splash-foot muted"><a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
+<footer class="splash-foot muted">${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
 </main>`,
     {},
     `<meta name="description" content="${escapeHtml(DESCRIPTION)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}/">\n`,

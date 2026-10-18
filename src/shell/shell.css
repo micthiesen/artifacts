@@ -605,6 +605,8 @@ div.thread-anchor { cursor: default; }
 .splash-facts strong { color: var(--fg); font-weight: 600; }
 .splash li code { font-size: 12.5px; color: var(--accent-fg); }
 .splash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: .9rem; margin-top: 4.5rem; }
+.splash-why { margin: 1.4rem 0 0; font-size: 15px; }
+.splash-why a { color: var(--primary); }
 .splash-card {
   position: relative; padding: 1.2rem 1.2rem 1.3rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px);
   background: var(--card); box-shadow: var(--shadow-card); overflow: hidden;

@@ -101,3 +101,11 @@ export const EXAMPLES: Example[] = [
     ],
   },
 ];
+
+/**
+ * Pages published to the demo workspace beside the examples, linked from the
+ * splash but not shown as a tab there.
+ */
+export const PAGES: { slug: string; title: string; blurb: string }[] = [
+  { slug: "principles", title: "How artifacts.boo thinks", blurb: "The principles behind artifacts.boo, and what it deliberately doesn't do." },
+];

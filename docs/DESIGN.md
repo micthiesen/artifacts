@@ -162,18 +162,8 @@ then that is deliberately not built.
 ## Plans and pricing (not built)
 
 The hosted service is free in early access; the terms promise admins 30
-days' notice before anything costs money. When plans come:
-
-- **A workspace is what pays.** It's already the unit of tenancy and
-  isolation, and the operator console shows each one's artifacts, members,
-  stored bytes and last activity, which is what a plan would meter.
-- **Guests stay free.** People an artifact is shared with need no plan, so
-  clients and reviewers never hit a paywall.
-- **Flat per workspace, not per seat.** Comparable products charge a flat
-  monthly price with free viewers; a free personal workspace and one team
-  price is the starting shape.
-- **Self-serve signup comes first.** Today the operator creates workspaces.
-  Charge the first teams by hand before building any billing code.
+days' notice before anything costs money, and guests never need a plan.
+Pricing plans are kept privately.
 
 The code is under FSL-1.1-ALv2 (`LICENSE.md`): anyone may self-host it for
 their own organization, but not offer it as a competing hosted service, and

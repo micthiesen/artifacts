@@ -1,4 +1,4 @@
-// Publishes the splash page's examples (demo/) as public artifacts in a "demo"
+// Publishes the splash page's examples and pages (demo/) as public artifacts in a "demo"
 // workspace, so anyone can open a real one. Safe to run again: it creates what's
 // missing and replaces the files of what exists. Shared state (votes, comments)
 // is written once, when an artifact is created, each entry by its own person;
@@ -9,7 +9,7 @@
 // (<stage>.<domain>) and leaves demo/links.json alone.
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
-import { EXAMPLES, PEOPLE, seedValue } from "../demo/examples.ts";
+import { EXAMPLES, PAGES, PEOPLE, seedValue, type SeedEntry } from "../demo/examples.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const SLUG = "demo";
@@ -121,7 +121,8 @@ const owner = tokens.get(ADMIN)!.token;
 try {
   const listed = (await tool(owner, "artifact_list", {})).structuredContent.artifacts as { id: string; title: string }[];
   const links: Record<string, string> = {};
-  for (const ex of EXAMPLES) {
+  const published: { slug: string; title: string; blurb: string; seed: SeedEntry[] }[] = [...EXAMPLES, ...PAGES.map((p) => ({ ...p, seed: [] }))];
+  for (const ex of published) {
     const dir = join(ROOT, "demo", ex.slug);
     const files: Record<string, string> = {};
     for (const file of await walk(dir)) files[relative(dir, file)] = await readFile(file, "utf8");
