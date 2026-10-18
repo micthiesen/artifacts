@@ -294,7 +294,7 @@ export function splashPage(brand: Brand, notice?: string, viewer?: { email: stri
     )}<main class="splash">
 <section class="splash-hero">
 ${notice ? `<p class="splash-notice" role="status">${escapeHtml(notice)}</p>` : ""}
-<p class="splash-kicker">Open source · runs on Cloudflare</p>
+<p class="splash-kicker">Source available · runs on Cloudflare</p>
 <h1>${escapeHtml(DESCRIPTION)}</h1>
 <p class="splash-lede muted">Your agent (Claude, Codex, Cursor or any MCP client) writes MDX or React over MCP. People open a link, sign in with an emailed code, and get a live page: shared state, per-person state, presence, comments, approvals and forms built in, with no backend to wire up. What they decide comes back to the agent. Everyone it isn't shared with never sees it.</p>
 <p class="splash-actions"><a class="button" href="#examples">See examples</a><a class="button secondary" href="${REPO}">View the source</a></p>
@@ -328,13 +328,14 @@ ${card("Isolated by construction", "Tenancy and untrusted code are handled by th
 
 <section class="splash-self" id="self-host">
 <div>
-<h2>Self-host it in one deploy</h2>
+<h2>Self-host it for your team in one deploy</h2>
 <p class="muted"><a href="https://alchemy.run">Alchemy</a>, an infrastructure-as-code tool for TypeScript, creates everything: the Worker and its Durable Objects, DNS for workspace subdomains, the sign-in email sender, OAuth storage, R2 backups and every secret. Schema changes migrate themselves when each workspace wakes up.</p>
 <ul class="splash-facts">
 <li><strong>$5 a month</strong> for Workers Paid; an idle workspace costs only its stored bytes</li>
 <li><strong>OAuth for MCP</strong>, or personal agent tokens for headless clients</li>
 <li><strong>Nightly backups</strong> to R2, paged so size never hits Worker memory</li>
 </ul>
+<p class="muted splash-license">Free to run for your own organization under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>; offering it to others as a hosted service isn't. Each release becomes Apache 2.0 after two years.</p>
 </div>
 <div class="splash-code"><div class="splash-code-head"><span>terminal</span></div><pre><code>git clone ${REPO}
 cd artifacts.boo &amp;&amp; bun install
@@ -564,6 +565,10 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 </ul>
 <h2>Workspaces and accounts</h2>
 <p>Workspace admins decide who belongs to a workspace and can manage everything in it. We may suspend or delete a workspace or content that breaks these terms, or to protect the service and its users, telling the admins where we can.</p>
+<h2>Plans and prices</h2>
+<p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>
+<h2>The source code</h2>
+<p>The software behind ${PRODUCT} is published under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>, which covers the code itself. These terms cover the hosted service.</p>
 <h2>The service</h2>
 <p>${PRODUCT} is provided as is, without warranties or a guaranteed level of availability. We back data up nightly but can't promise nothing is ever lost; keep copies of anything critical. To the extent the law allows, we aren't liable for indirect or consequential losses, and our total liability is limited to what you paid us in the last twelve months.</p>
 <h2>Changes</h2>

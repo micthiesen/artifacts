@@ -2,6 +2,7 @@
   "name": "artifacts",
   "version": "0.1.0",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p . && tsc -p src/shell && tsc -p src/shell/sw && tsc -p src/kit",

@@ -28,3 +28,10 @@ bun scripts/icons.ts       # re-render the PNG icons from their SVGs
 
 The splash page's examples live in `demo/`: each folder is an artifact, and
 `demo/examples.ts` lists them with the votes and comments they start with.
+
+## License
+
+[FSL-1.1-ALv2](LICENSE.md): the source is available, and you may run, change
+and self-host it for your own team or organization, including for clients you
+do professional work for. You may not offer it to others as a competing hosted
+product. Each release becomes Apache 2.0 two years after it's published.

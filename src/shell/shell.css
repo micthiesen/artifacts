@@ -616,6 +616,7 @@ div.thread-anchor { cursor: default; }
 .splash-card h3 { margin: 0 0 .35rem; font-size: 16px; letter-spacing: -.01em; }
 .splash-card > p { margin: 0 0 .9rem; font-size: 14px; line-height: 1.55; }
 .splash-self p { line-height: 1.6; margin: 0 0 1.1rem; }
+.splash-self p.splash-license { font-size: 13.5px; margin: 1.1rem 0 0; }
 /* A ghost drifting beside the headline, on screens wide enough to spare the room. */
 .splash-hero { position: relative; }
 .splash-ghost { display: none; }
