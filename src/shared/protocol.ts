@@ -160,6 +160,8 @@ export type ShellBoot = {
   readSeq?: number;
   /** Notification level for this artifact (signed-in viewers). */
   watch?: WatchLevel;
+  /** Pinned to the top of this viewer's own list (absent for link-only sessions, which have no list). */
+  pinned?: boolean;
   /** Set when the owner archived the artifact. */
   archivedAt?: string;
   /** Origin of the apex, where account settings live. */

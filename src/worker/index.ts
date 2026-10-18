@@ -31,6 +31,8 @@ import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { publicMessage } from "./errors.ts";
 import { isPlan } from "./plans.ts";
+import { exportRun, latestManifest } from "./snapshot.ts";
+import { DATA_TABLES } from "./tables.ts";
 import { PasskeyError, registrationOptions, signInOptions, verifyRegistration, verifySignIn } from "./passkeys.ts";
 export { isTestAddress };
 import {
@@ -459,7 +461,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
         admin: member === "admin" && !scoped,
         scoped,
         ...(meta.archivedAt ? { archivedAt: meta.archivedAt } : {}),
-        ...(visit ? { since: visit.since, readSeq: visit.readSeq, watch: visit.watch } : {}),
+        ...(visit ? { since: visit.since, readSeq: visit.readSeq, watch: visit.watch, ...(scoped ? {} : { pinned: visit.pinned }) } : {}),
       },
       brand,
     );
@@ -949,6 +951,28 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         plan: await hub.plan(),
       });
     }
+    // Export: the latest backup, streamed as JSON Lines (docs/EXPORT.md). Admins only: it's everything.
+    if (path === "/api/settings/export" && request.method === "GET") {
+      if (!admin) return adminOnly();
+      if (!env.BACKUPS) return Response.json({ error: "backups aren't set up on this server" }, { status: 501 });
+      const manifest = await latestManifest(env.BACKUPS, slug);
+      if (url.searchParams.get("status") === "1") {
+        return Response.json({ latest: manifest ? { run: manifest.run, at: manifest.at } : null, backingUp: (await hub.job())?.kind === "backup" });
+      }
+      if (!manifest) return Response.json({ error: "no backup yet; make one first" }, { status: 404 });
+      const header = { format: "artifacts.boo/export@1", workspace: slug, docs: "https://github.com/micthiesen/artifacts.boo/blob/main/docs/EXPORT.md" };
+      return new Response(exportRun(env.BACKUPS!, manifest, DATA_TABLES, header), {
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${slug}-${manifest.run}.jsonl"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+    if (path === "/api/settings/export" && request.method === "POST") {
+      if (!admin) return adminOnly();
+      return Response.json(await hub.requestBackup());
+    }
     const body = await jsonBody(request);
     if (path === "/api/settings/name" && request.method === "POST") {
       if (!admin) return adminOnly();
@@ -1040,11 +1064,21 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
   const email = viewer.email;
   if (!email) return Response.json({ error: "sign in first" }, { status: 401 });
   // A link session may only set the level of its own artifact.
-  if (viewer.only && url.pathname !== "/api/me/watch") return Response.json({ error: "sign in first" }, { status: 401 });
+  if (viewer.only && !["/api/me/watch", "/api/me/since"].includes(url.pathname)) return Response.json({ error: "sign in first" }, { status: 401 });
   if (request.method !== "GET" && !sameOrigin(request, url)) return Response.json({ error: "bad origin" }, { status: 403 });
   try {
     if (url.pathname === "/api/me" && request.method === "GET") {
       return Response.json({ email, workspace: { name: (await hub.access(null)).name }, watches: await hub.watches(email), account: `${apexOrigin(env)}/me` });
+    }
+    // Pins and dismissing the changed-since bar: your own, on artifacts you can open.
+    const own = /^\/api\/me\/(pin|since)$/.exec(url.pathname);
+    if (own && request.method === "POST") {
+      const body = await jsonBody(request);
+      const id = String(body.id ?? "");
+      if ((viewer.only && viewer.only !== id) || !(await hub.roleFor(id, email))) return Response.json({ error: "not found" }, { status: 404 });
+      if (own[1] === "pin") return Response.json(await hub.setPin(email, id, body.pinned !== false));
+      await hub.dismissSince(id, email);
+      return Response.json({ dismissed: true });
     }
     if (url.pathname === "/api/me/watch" && request.method === "POST") {
       const body = await jsonBody(request);

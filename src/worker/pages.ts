@@ -133,7 +133,10 @@ const ICON_ARCHIVE =
 const ICON_RESTORE =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>';
 
-type ListedArtifact = ArtifactMeta & { role: Role; unseen?: boolean; unread?: number };
+const ICON_PIN =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
+
+type ListedArtifact = ArtifactMeta & { role: Role; unseen?: boolean; unread?: number; pinnedAt?: string };
 
 /**
  * A workspace's artifact list. `archived` shows the archive instead: artifacts
@@ -176,13 +179,21 @@ function list(artifacts: ListedArtifact[], summaries: Record<string, ShareSummar
     .map((a, i) => {
       const when = archived ? `archived ${relativeTime(a.archivedAt!)}` : relativeTime(a.updatedAt);
       const manages = a.role === "owner";
-      const action = manages
+      const pinned = Boolean(a.pinnedAt) && !archived;
+      // Anyone pins for themselves (the main list only); owners also archive.
+      const pin = archived
+        ? ""
+        : `<button type="button" class="row-action pin" data-action="${pinned ? "unpin" : "pin"}" aria-pressed="${pinned}" title="${pinned ? "Unpin" : "Pin to top"}" aria-label="${
+            pinned ? "Unpin" : "Pin"
+          } ${escapeHtml(a.title)}">${ICON_PIN}</button>`;
+      const archiveAction = manages
         ? `<button type="button" class="row-action" data-action="${archived ? "unarchive" : "archive"}" title="${archived ? "Unarchive" : "Archive"}" aria-label="${
             archived ? "Unarchive" : "Archive"
           } ${escapeHtml(a.title)}">${archived ? ICON_RESTORE : ICON_ARCHIVE}</button>`
         : "";
+      const action = pin || archiveAction ? `<span class="row-actions">${pin}${archiveAction}</span>` : "";
       const summary = manages ? summaries?.[a.id] : undefined;
-      return `<li data-id="${a.id}" data-order="${i}" data-title="${escapeHtml(a.title)}"><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}${archived ? "" : activityBadge(a)}</span>${
+      return `<li data-id="${a.id}" data-order="${i}" data-updated="${escapeHtml(a.updatedAt)}"${pinned ? ` data-pinned="${escapeHtml(a.pinnedAt!)}"` : ""} data-title="${escapeHtml(a.title)}"><a href="/a/${a.id}"><span class="title">${escapeHtml(a.title)}${archived ? "" : activityBadge(a)}</span>${
         a.description ? `<span class="desc">${escapeHtml(a.description)}</span>` : ""
       }${sharingLine(summary)}<span class="meta">${when} · v${a.version}${a.public && !summary ? " · public" : ""}${
         manages ? "" : ` · ${a.role}`
@@ -335,7 +346,7 @@ ${PRINCIPLES ? `<p class="splash-why"><a href="${PRINCIPLES}">How artifacts.boo 
 <li><strong>OAuth for MCP</strong>, or personal agent tokens for headless clients</li>
 <li><strong>Nightly backups</strong> to R2, paged so size never hits Worker memory</li>
 </ul>
-<p class="muted splash-license">Free to run for your own organization under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>; offering it to others as a hosted service isn't. Each release becomes Apache 2.0 after two years.</p>
+<p class="muted splash-license"><strong>No lock-in.</strong> Admins can download everything in their workspace any time, as plain JSON an agent can read (<a href="${REPO}/blob/main/docs/EXPORT.md">the format</a>), and run it on their own account from the source. Free to run for your own organization under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>; offering it to others as a hosted service isn't. Each release becomes Apache 2.0 after two years.</p>
 </div>
 <div class="splash-code"><div class="splash-code-head"><span>terminal</span></div><pre><code>git clone ${REPO}
 cd artifacts.boo &amp;&amp; bun install
@@ -567,7 +578,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <li>Deleting a workspace deletes its data and its backups, and ends its agents' access.</li>
 </ul>
 <h2>Your choices</h2>
-<p>Turn email notifications off in your account. Ask the owner or an admin to remove you from an artifact or workspace. To get a copy of your data, or to have it deleted, email ${mail}; we reply within 30 days.</p>
+<p>Turn email notifications off in your account. Ask the owner or an admin to remove you from an artifact or workspace. Workspace admins can download a full export of their workspace from its settings at any time. To get a copy of your own data, or to have it deleted, email ${mail}; we reply within 30 days.</p>
 <h2>Changes</h2>
 <p>We'll update this page when what we do changes, and change the date below.</p>`,
     },
@@ -586,6 +597,8 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 </ul>
 <h2>Workspaces and accounts</h2>
 <p>Workspace admins decide who belongs to a workspace and can manage everything in it. We may suspend or delete a workspace or content that breaks these terms, or to protect the service and its users, telling the admins where we can.</p>
+<h2>Your data</h2>
+<p>Workspace admins can download everything in their workspace at any time, from its settings, in a documented format. If you stop using ${PRODUCT}, you keep your data.</p>
 <h2>Plans and prices</h2>
 <p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>
 <h2>The source code</h2>

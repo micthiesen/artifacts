@@ -48,12 +48,18 @@ export function showSince(
     }
     const unread = actions.unread();
     if (unread) line.append(action(`${unread} new ${unread === 1 ? "comment" : "comments"}`, actions.openComments));
-    const close = action("✕", () => {
+    const close = action("Got it", () => {
       bar.hidden = true;
       actions.setMarks(false);
+      // Stays dismissed: a reload (or coming back) doesn't bring this update's bar back.
+      void fetch("/api/me/since", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: boot.artifactId }),
+      }).catch(() => {});
     });
     close.classList.add("since-close");
-    close.setAttribute("aria-label", "Dismiss");
     line.append(close);
     bar.append(line);
 

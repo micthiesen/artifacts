@@ -137,6 +137,7 @@ from the person.
   had; identical content is shared across versions, so long edit histories
   cost little.
 - **Binary as binary.** Assets and screenshots are stored as blobs.
+- **Export is a backup.** Admins download the latest backup run from settings as one JSON Lines file, streamed page by page from R2 (`docs/EXPORT.md`), and can ask for a fresh backup at most once an hour. It costs a read per page and no new storage; no lock-in is part of the pitch.
 - **Backups are jobs.** Each workspace backs itself up to R2 nightly when
   something changed, as a job on its own alarm that runs in steps of a few
   seconds and resumes, so no size is too big for one invocation. Small

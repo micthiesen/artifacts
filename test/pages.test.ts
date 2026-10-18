@@ -26,10 +26,11 @@ test("archived view lists only archived, newest archive first, with unarchive", 
   expect(html).toContain('data-action="unarchive"');
 });
 
-test("non-owners see the split but no archive buttons", async () => {
+test("non-owners see the split and can pin, but get no archive buttons", async () => {
   const html = await indexPage({ email: "x@example.com", member: null }, rows.map((r) => ({ ...r, role: "view" as const })), brand).text();
   expect(html).toContain("data-archived-count>2<");
-  expect(html).not.toContain("row-action");
+  expect(html).not.toContain('data-action="archive"');
+  expect(html).toContain('data-action="pin"');
 });
 
 test("everything archived shows a tidy empty state with the archive link", async () => {

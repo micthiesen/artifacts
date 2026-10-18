@@ -26,6 +26,8 @@ export type AccountMenuOptions = {
   copyLabel?: string;
   /** Owner on an artifact page: archive or unarchive it. */
   archive?: { archived: () => boolean; toggle: () => Promise<void> };
+  /** On an artifact page: pin it to the top of your own list, or unpin it. */
+  pin?: { pinned: () => boolean; toggle: () => Promise<void> };
 };
 
 export function mountAccountMenu(slot: HTMLElement, email: string, options: AccountMenuOptions = {}): HTMLButtonElement {
@@ -86,6 +88,23 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
       setOpen(false);
       print();
     });
+  }
+  if (options.pin) {
+    const pin = options.pin;
+    let paintPin = () => {};
+    const el = item("", async () => {
+      try {
+        await pin.toggle();
+        paintPin();
+        setOpen(false);
+        button.focus();
+      } catch {
+        el.textContent = "Couldn't update";
+        setTimeout(paintPin, 1600);
+      }
+    });
+    paintPin = () => (el.textContent = pin.pinned() ? "Unpin from your list" : "Pin to top of your list");
+    paintPin();
   }
   let paintArchive = () => {};
   if (options.archive) {

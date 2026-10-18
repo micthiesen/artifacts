@@ -188,6 +188,60 @@ async function listRuns(bucket: R2Bucket, root: string): Promise<string[]> {
   return runs.sort();
 }
 
+/** The newest complete run's manifest, or null when there's no backup yet: one list, then newest first until a manifest. */
+export async function latestManifest(bucket: R2Bucket, root: string): Promise<Manifest | null> {
+  for (const run of (await listRuns(bucket, root)).reverse()) {
+    const head = await bucket.get(`${root}/${run}/manifest.json`);
+    if (head) return JSON.parse(await head.text()) as Manifest;
+  }
+  return null;
+}
+
+/**
+ * A backup run as one JSON Lines document, for people to take their data
+ * anywhere: a header line (the manifest plus `format`), one line per page,
+ * `{"table": ..., "rows": [...]}`, and a last line `{"end": true, "pages": n}`
+ * so a cut-off download can be told from a whole one. Pages are copied as
+ * stored, one at a time, so it streams whatever the size and costs a read per
+ * page. A page that has gone (the run was pruned mid-download) ends the
+ * stream with an error rather than a silent gap.
+ */
+export function exportRun(bucket: R2Bucket, manifest: Manifest, tables: string[], header: Record<string, unknown>): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  const prefix = `${manifest.root}/${manifest.run}/`;
+  let keys: string[] | null = null;
+  let next = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      if (!keys) {
+        keys = [];
+        for (const table of tables) {
+          const found: string[] = [];
+          let cursor: string | undefined;
+          do {
+            const page = await bucket.list({ prefix: `${prefix}${table}/`, cursor });
+            found.push(...page.objects.map((o) => o.key));
+            cursor = page.truncated ? page.cursor : undefined;
+          } while (cursor);
+          if ((manifest.pages?.[table] ?? found.length) !== found.length) throw new Error(`backup ${manifest.run} is missing pages of ${table}`);
+          keys.push(...found.sort());
+        }
+        controller.enqueue(enc.encode(`${JSON.stringify({ ...header, run: manifest.run, at: manifest.at, schema: manifest.schema, tables: manifest.tables })}\n`));
+        return;
+      }
+      if (next >= keys.length) {
+        controller.enqueue(enc.encode(`${JSON.stringify({ end: true, pages: keys.length })}\n`));
+        controller.close();
+        return;
+      }
+      const key = keys[next++];
+      const object = await bucket.get(key);
+      if (!object) throw new Error(`backup page ${key} is gone; download again`);
+      controller.enqueue(enc.encode(`{"table":${JSON.stringify(key.slice(prefix.length).split("/")[0])},"rows":${await object.text()}}\n`));
+    },
+  });
+}
+
 // ---- restores and imports -------------------------------------------------------------
 //
 // Restores and imports never touch live tables until everything has loaded:

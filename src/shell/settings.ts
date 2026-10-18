@@ -120,6 +120,69 @@ async function act(fn: () => Promise<unknown>, ok?: string | (() => string)) {
   }
 }
 
+/** Admins: download everything as of the latest backup, or ask for a fresh one. Filled in once the status loads. */
+function exportSection(): HTMLElement {
+  const status = h("p", { class: "muted small" }, "Checking for a backup…");
+  const actions = h("div", { class: "row" });
+  const section = h(
+    "section",
+    { class: "card-section" },
+    h("h2", {}, "Export your data"),
+    h(
+      "p",
+      { class: "muted" },
+      "Everything in this workspace, artifacts with their latest 50 versions, shared state, comments and members, as one JSON Lines file your agent can read. No lock-in: take it anywhere, or run your own copy from the source. ",
+      h("a", { href: "https://github.com/micthiesen/artifacts.boo/blob/main/docs/EXPORT.md" }, "What's in it"),
+      ".",
+    ),
+    status,
+    actions,
+  );
+  const backupNow = () =>
+    btn("Back up now", async () => {
+      try {
+        const r = await api<{ queued: boolean; retryAt?: string }>("/api/settings/export", { body: {} });
+        status.textContent = r.queued
+          ? "Backing up. Check back in a minute, then download."
+          : r.retryAt
+            ? `A backup was made in the last hour; the next can start at ${new Date(r.retryAt).toLocaleTimeString()}.`
+            : "Backups aren't set up on this server.";
+      } catch (err) {
+        status.textContent = (err as Error).message;
+      }
+    }, "button small secondary");
+  api<{ latest: { run: string; at: string } | null; backingUp: boolean }>("/api/settings/export?status=1").then(
+    (r) => {
+      status.textContent = r.backingUp
+        ? "A backup is running now."
+        : r.latest
+          ? `From the backup made ${new Date(r.latest.at).toLocaleString()}. Backups run nightly on days something changed.`
+          : "There's no backup yet. Make one, then download it.";
+      if (r.latest) {
+        // Checked first, so an error (say, the backup was just pruned) shows here instead of downloading as a file.
+        const link = h("a", { class: "button small", href: "/api/settings/export", download: "" }, "Download export");
+        link.addEventListener("click", async (e) => {
+          if (link.dataset.checked) return;
+          e.preventDefault();
+          try {
+            const now = await api<{ latest: { run: string } | null }>("/api/settings/export?status=1");
+            if (!now.latest) throw new Error("There's no backup to download any more. Make one first.");
+            link.dataset.checked = "1";
+            link.click();
+            delete link.dataset.checked;
+          } catch (err) {
+            status.textContent = (err as Error).message;
+          }
+        });
+        actions.append(link);
+      }
+      actions.append(backupNow());
+    },
+    (err: Error) => (status.textContent = err.message),
+  );
+  return section;
+}
+
 async function load() {
   data = await api<Settings>("/api/settings");
   render();
@@ -374,6 +437,7 @@ function render() {
         h("div", { class: "row" }, name, btn("Rename", () => act(() => api("/api/settings/name", { body: { name: name.value } }), "Renamed."))),
       ),
     );
+    sections.push(exportSection());
   }
   main.replaceChildren(...sections);
   if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });

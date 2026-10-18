@@ -511,8 +511,10 @@ div.thread-anchor { cursor: default; }
 .list li { position: relative; transition: opacity .18s, transform .18s ease-out; }
 .list li.leaving { opacity: 0; transform: translateX(.75rem); }
 .list li:has(.row-action) a { padding-right: 3.25rem; }
+.list li:has(.row-action + .row-action) a { padding-right: 5.5rem; }
+.row-actions { position: absolute; top: .7rem; right: .7rem; display: flex; gap: .2rem; }
 .row-action {
-  position: absolute; top: .7rem; right: .7rem; display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0;
+  display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0;
   border: 1px solid transparent; border-radius: calc(var(--radius) - 2px); background: transparent; color: var(--muted-fg); cursor: pointer;
   opacity: 0; transition: opacity .15s, background-color .15s, color .15s, border-color .15s;
 }
@@ -521,6 +523,9 @@ div.thread-anchor { cursor: default; }
 .row-action:hover, .row-action:focus-visible { color: var(--fg); background: var(--secondary); border-color: var(--input); }
 .row-action:disabled { cursor: progress; opacity: .5; }
 @media (hover: none) { .row-action { opacity: .75; } }
+/* A pinned row always shows its pin, filled, so the list says why it's on top. */
+.row-action.pin[aria-pressed="true"] { opacity: 1; color: var(--primary); }
+.row-action.pin[aria-pressed="true"] svg { fill: currentColor; }
 
 .archived-link { margin: 2rem 0 0; text-align: center; font-size: 13px; }
 .archived-link[hidden] { display: none; }

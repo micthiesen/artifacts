@@ -16,6 +16,7 @@ import { initOwnerMenu } from "./owner-menu.ts";
 import { createDrawer } from "./threads.ts";
 import { showSince } from "./since.ts";
 import { mountArchiveBar, setArchived } from "./archive.ts";
+import { setPinned } from "./pins.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
 const localKey = `art:${boot.artifactId}:local:${boot.viewer.email ?? "anon"}`;
@@ -43,7 +44,17 @@ async function setWatch(level: WatchLevel): Promise<WatchLevel> {
 // Your avatar opens the account menu; owners also get Manage.
 const meSlot = document.getElementById("me");
 if (meSlot && boot.viewer.email) {
-  const common = { print: printArtifact, watch: { level: boot.watch ?? "participating", set: setWatch } };
+  let pinned = boot.pinned ?? false;
+  const pin =
+    boot.pinned === undefined
+      ? undefined
+      : {
+          pinned: () => pinned,
+          toggle: async () => {
+            pinned = (await setPinned(boot.artifactId, !pinned)).pinned;
+          },
+        };
+  const common = { print: printArtifact, watch: { level: boot.watch ?? "participating", set: setWatch }, ...(pin ? { pin } : {}) };
   if (boot.viewer.role === "owner") {
     let panel: ReturnType<typeof initOwnerMenu> | null = null;
     let archivedAt = boot.archivedAt ?? null;

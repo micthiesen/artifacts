@@ -139,7 +139,7 @@ export type HubApi = AsyncMethods<
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
     | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
-    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan"
+    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince"
   >
 > & { fetch(request: Request): Promise<Response> };
 
@@ -176,7 +176,7 @@ const SHARE_MAIL_PER_PERSON = 50;
 /** Tables keyed by artifact, cleared when an artifact is deleted. */
 const ARTIFACT_TABLES = [
   "blobs", "files", "history", "builds", "shares", "state", "errors", "checks", "assets", "sources", "events", "threads",
-  "comments", "watches", "seen", "outbox",
+  "comments", "watches", "seen", "outbox", "pins",
 ];
 
 const MIGRATIONS: Migration[] = [
@@ -281,6 +281,8 @@ const MIGRATIONS: Migration[] = [
       -- events/poll and subscribe with maxAgeMs find where to start by time.
       CREATE INDEX events_by_at ON events (at);
     `),
+  // Artifacts a person pinned to the top of their own list.
+  (sql) => sql.exec(`CREATE TABLE pins (email TEXT NOT NULL, artifact_id TEXT NOT NULL, pinned_at TEXT NOT NULL, PRIMARY KEY (email, artifact_id))`),
 ];
 
 /** MCP event webhooks: how soon after activity they go out, how long a subscription lasts, how hard to retry. */
@@ -309,6 +311,7 @@ const WEBHOOK_TIMEOUT_MS = 5_000;
 /** Text in event payloads is cut to this; the full answer is in shared state or the thread. */
 const EVENT_TEXT_MAX = 500;
 
+const PINS_PER_PERSON = 100;
 const PUBLIC_DAYS_MAX = 365;
 const JOIN_DOMAINS_MAX = 20;
 /** Anyone can get an address at these, so a domain rule for them would let the whole internet in. */
@@ -741,7 +744,7 @@ export class Workspace extends DurableObject {
    * Everything this person can see, newest first, with their role and what's
    * new for them. A fixed handful of queries however many artifacts there are.
    */
-  list(email: string | null): (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number })[] {
+  list(email: string | null): (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number; pinnedAt?: string })[] {
     if (!email) return [];
     const member = this.memberRole(email);
     const principals = [email, domainOf(email), ...(member ? [WORKSPACE_PRINCIPAL] : [])];
@@ -770,15 +773,18 @@ export class Workspace extends DurableObject {
         .toArray()
         .map((r) => [r.id as string, r.n as number]),
     );
-    const out: (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number })[] = [];
+    const pins = new Map(this.sql.exec(`SELECT artifact_id, pinned_at FROM pins WHERE email = ?`, email).toArray().map((r) => [r.artifact_id as string, r.pinned_at as string]));
+    const out: (ArtifactMeta & { role: Role; unseen?: boolean; unread?: number; pinnedAt?: string })[] = [];
     for (const r of this.sql.exec(`SELECT * FROM artifacts ORDER BY updated_at DESC`)) {
       const meta = toMeta(r);
       const role: Role | undefined = member === "admin" || meta.owner === email ? "owner" : shared.get(meta.id);
       if (!role) continue;
       const s = seen.get(meta.id);
-      out.push({ ...meta, role, unseen: s ? (s.version as number) < meta.version : true, unread: unread.get(meta.id) ?? 0 });
+      const pinnedAt = pins.get(meta.id);
+      out.push({ ...meta, role, unseen: s ? (s.version as number) < meta.version : true, unread: unread.get(meta.id) ?? 0, ...(pinnedAt ? { pinnedAt } : {}) });
     }
-    return out;
+    // Your pins first, most recently pinned on top; the rest by last update.
+    return out.sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? ""));
   }
 
   meta(id: string): (ArtifactMeta & { shares: ShareEntry[]; files: { path: string; bytes: number }[] }) | null {
@@ -1559,6 +1565,19 @@ export class Workspace extends DurableObject {
     return { queued: true };
   }
 
+  /**
+   * An admin asking for a fresh backup to export: at most one an hour, since
+   * the nightly one usually serves, and none while one is already running.
+   */
+  async requestBackup(): Promise<{ queued: boolean; retryAt?: string }> {
+    if (this.job()?.kind === "backup") return { queued: true };
+    const last = Number(this.setting("export_backup_at") ?? 0);
+    if (Date.now() - last < HOUR_MS) return { queued: false, retryAt: new Date(last + HOUR_MS).toISOString() };
+    if (!(await this.backup())) return { queued: false };
+    this.setSetting("export_backup_at", String(Date.now()));
+    return { queued: true };
+  }
+
   /** Complete backup runs, newest first. */
   async backups(): Promise<string[]> {
     const slug = this.info().slug;
@@ -2115,7 +2134,7 @@ export class Workspace extends DurableObject {
    * since their previous visit and their read position for comments, then
    * records this visit.
    */
-  visit(id: string, email: string): { since?: SinceLastVisit; readSeq: number; watch: WatchLevel } {
+  visit(id: string, email: string): { since?: SinceLastVisit; readSeq: number; watch: WatchLevel; pinned: boolean } {
     const art = this.requireArtifact(id);
     const version = art.version as number;
     const prev = this.sql.exec(`SELECT * FROM seen WHERE email = ? AND artifact_id = ?`, email, id).toArray()[0];
@@ -2153,7 +2172,29 @@ export class Workspace extends DurableObject {
       since ? from : null,
       since ? since.at : null,
     );
-    return { since, readSeq, watch: this.watchLevel(email, id) };
+    return { since, readSeq, watch: this.watchLevel(email, id), pinned: this.isPinned(email, id) };
+  }
+
+  /** "Got it" on the changed-since bar: it stays gone, even on a reload soon after. */
+  dismissSince(id: string, email: string) {
+    this.sql.exec(`UPDATE seen SET since_version = NULL, since_at = NULL WHERE email = ? AND artifact_id = ?`, email, id);
+  }
+
+  private isPinned(email: string, id: string): boolean {
+    return this.sql.exec(`SELECT 1 FROM pins WHERE email = ? AND artifact_id = ?`, email, id).toArray().length > 0;
+  }
+
+  /** Pin an artifact to the top of this person's own list, or unpin it. Nobody else sees it. */
+  setPin(email: string, id: string, pinned: boolean): { pinned: boolean; pinnedAt: string | null } {
+    if (!this.canOpen(id, email)) throw new HubError(`No artifact ${id}`);
+    if (pinned) {
+      const count = this.sql.exec(`SELECT COUNT(*) AS n FROM pins WHERE email = ?`, email).one().n as number;
+      if (count >= PINS_PER_PERSON && !this.isPinned(email, id)) throw new HubError(`You can pin up to ${PINS_PER_PERSON} artifacts; unpin one first.`);
+      this.sql.exec(`INSERT INTO pins (email, artifact_id, pinned_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, email, id, new Date().toISOString());
+    } else this.sql.exec(`DELETE FROM pins WHERE email = ? AND artifact_id = ?`, email, id);
+    this.markDirty();
+    const row = this.sql.exec(`SELECT pinned_at FROM pins WHERE email = ? AND artifact_id = ?`, email, id).toArray()[0];
+    return { pinned, pinnedAt: (row?.pinned_at as string | undefined) ?? null };
   }
 
   /**

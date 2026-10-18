@@ -1,6 +1,8 @@
 // The artifact list page. Owners archive a row from the main list or
-// unarchive it from /archived, with an Undo toast either way.
+// unarchive it from /archived, with an Undo toast either way. Anyone pins a
+// row to the top of their own list.
 import { setArchived } from "./archive.ts";
+import { setPinned } from "./pins.ts";
 
 // On the list itself, the logo reloads the page (handy for checking changes).
 for (const a of document.querySelectorAll<HTMLAnchorElement>(".bar a[href='/']")) {
@@ -65,15 +67,14 @@ function removeRow(li: HTMLLIElement) {
   return list;
 }
 
-/** Put a row back where the server ordered it (rows carry their index). */
+/** Put a row back where it belongs: pinned first, then by last update. */
 function restoreRow(li: HTMLLIElement, list: HTMLUListElement) {
   clearTimeout(removals.get(li));
   removals.delete(li);
   li.classList.remove("leaving");
-  const order = Number(li.dataset.order);
-  const after = [...list.querySelectorAll<HTMLLIElement>(":scope > li")].find((x) => x !== li && Number(x.dataset.order) > order);
-  list.insertBefore(li, after ?? null);
-  li.querySelector<HTMLButtonElement>(".row-action")!.disabled = false;
+  list.append(li);
+  placeRow(li);
+  for (const b of li.querySelectorAll<HTMLButtonElement>(".row-action")) b.disabled = false;
   syncEmpty(list);
 }
 
@@ -87,12 +88,55 @@ function undo(li: HTMLLIElement, list: HTMLUListElement, id: string, archive: bo
   );
 }
 
+/** Pinned rows first, newest pin on top; then the rest by last update, as the server orders them. */
+function placeRow(li: HTMLLIElement) {
+  const list = li.parentElement as HTMLUListElement;
+  const key = (x: HTMLLIElement) => [x.dataset.pinned ? 1 : 0, x.dataset.pinned ?? x.dataset.updated ?? ""] as const;
+  const [mine, at] = key(li);
+  const before = [...list.querySelectorAll<HTMLLIElement>(":scope > li")].find((x) => {
+    if (x === li) return false;
+    const [p, t] = key(x);
+    return p < mine || (p === mine && t < at);
+  });
+  list.insertBefore(li, before ?? null);
+}
+
+function paintPin(button: HTMLButtonElement, pinned: boolean, title: string) {
+  button.dataset.action = pinned ? "unpin" : "pin";
+  button.setAttribute("aria-pressed", String(pinned));
+  button.title = pinned ? "Unpin" : "Pin to top";
+  button.setAttribute("aria-label", `${pinned ? "Unpin" : "Pin"} ${title}`);
+}
+
+function togglePin(button: HTMLButtonElement, li: HTMLLIElement, id: string, title: string) {
+  const pinned = button.dataset.action === "pin";
+  button.disabled = true;
+  setPinned(id, pinned).then(
+    (r) => {
+      button.disabled = false;
+      if (r.pinnedAt) li.dataset.pinned = r.pinnedAt;
+      else delete li.dataset.pinned;
+      paintPin(button, pinned, title);
+      placeRow(li);
+      button.focus();
+    },
+    (err: Error) => {
+      button.disabled = false;
+      toast(err.message);
+    },
+  );
+}
+
 document.addEventListener("click", (e) => {
   const button = (e.target as Element).closest<HTMLButtonElement>(".row-action");
   if (!button || button.disabled) return;
   const li = button.closest<HTMLLIElement>("li[data-id]")!;
   const id = li.dataset.id!;
   const title = li.dataset.title ?? id;
+  if (button.dataset.action === "pin" || button.dataset.action === "unpin") {
+    togglePin(button, li, id, title);
+    return;
+  }
   const archive = button.dataset.action === "archive";
   button.disabled = true;
   setArchived(id, archive).then(
