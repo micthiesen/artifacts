@@ -144,13 +144,16 @@ async function copyText(text: string): Promise<boolean> {
 
 /**
  * Builds the Manage panel. It's opened from the avatar menu ("Manage artifact…");
- * `button` (the avatar) gets focus back when the panel closes.
+ * `button` (the avatar) gets focus back when the panel closes. Only workspace
+ * admins approve or revoke live-data hosts (`isAdmin`, from boot.admin).
  */
 export function initOwnerMenu(
   boot: ShellBoot,
   button: HTMLElement,
   onArchived?: (archivedAt: string | null) => void,
+  options: { isAdmin?: boolean } = {},
 ): { show: () => void; copyMyLink: () => Promise<string>; reload: () => void } {
+  const isAdmin = options.isAdmin ?? (boot as ShellBoot & { admin?: boolean }).admin ?? false;
   const base = `/api/a/${encodeURIComponent(boot.artifactId)}`;
   const tool = (name: string, args: Record<string, unknown> = {}) => request<ToolResponse>(`${base}/${name}`, args);
 
@@ -622,12 +625,15 @@ export function initOwnerMenu(
                   h(
                     "p",
                     { class: "muted om-small" },
-                    `Approving lets any of your artifacts fetch from ${s.host} on a schedule. Approve only hosts you trust.`,
+                    isAdmin
+                      ? `Approving lets any artifact in this workspace fetch from ${s.host} on a schedule. Approve only hosts you trust.`
+                      : `Ask a workspace admin to approve ${s.host}.`,
                   ),
                 h(
                   "div",
                   { class: "om-actions" },
                   !s.approved &&
+                    isAdmin &&
                     btn(`Approve ${s.host}`, `approve-${s.path}`, () =>
                       void act(`approve-${s.path}`, "data", async () => {
                         await request("/api/hosts", { host: s.host, allowed: true });
@@ -658,7 +664,11 @@ export function initOwnerMenu(
         "div",
         { class: "om-group" },
         h("h3", { class: "om-h" }, "Approved hosts"),
-        h("p", { class: "muted om-small" }, "Hosts your artifacts may fetch live data from. This list applies to all of them."),
+        h(
+          "p",
+          { class: "muted om-small" },
+          `Hosts any artifact in this workspace may fetch live data from.${isAdmin ? "" : " Workspace admins manage this list."}`,
+        ),
         d.hosts.length
           ? h(
               "ul",
@@ -668,13 +678,14 @@ export function initOwnerMenu(
                   "li",
                   { class: "om-row" },
                   h("span", { class: "om-grow om-ellipsis" }, host),
-                  btn("Revoke", `revoke-${host}`, () => {
-                    if (!confirm(`Revoke ${host}? Sources on it stop updating in every artifact.`)) return;
-                    void act(`revoke-${host}`, "data", async () => {
-                      await request("/api/hosts", { host, allowed: false });
-                      return { text: `Revoked ${host}.` };
-                    });
-                  }, "om-text-button danger", { "aria-label": `Revoke ${host}` }),
+                  isAdmin &&
+                    btn("Revoke", `revoke-${host}`, () => {
+                      if (!confirm(`Revoke ${host}? Sources on it stop updating in every artifact.`)) return;
+                      void act(`revoke-${host}`, "data", async () => {
+                        await request("/api/hosts", { host, allowed: false });
+                        return { text: `Revoked ${host}.` };
+                      });
+                    }, "om-text-button danger", { "aria-label": `Revoke ${host}` }),
                 ),
               ),
             )

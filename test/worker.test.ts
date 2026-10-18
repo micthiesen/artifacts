@@ -220,7 +220,7 @@ test("a presigned link opens its artifact and nothing else, even for an owner", 
 });
 
 test("each workspace's consent uses its own authorization server, whichever this isolate saw first", async () => {
-  const beta = await createHub();
+  const beta = await createHub({}, "beta");
   await beta.hub.setMember(MIA, "member", ADMIN);
   env.WORKSPACE = { getByName: (slug: string) => (slug === "acme" ? h.hub : slug === "beta" ? beta.hub : null) };
   h.directory.createWorkspace("beta", "Beta");

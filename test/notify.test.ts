@@ -208,7 +208,8 @@ test("webhook send is signed JSON", async () => {
 
   mockFetch(() => new Response("nope", { status: 500 }));
   const bad = await sendToChannel("webhook", { url: "https://hooks.example.com/in", secret }, msg, {});
-  expect(bad).toEqual({ ok: false, error: "Webhook: HTTP 500: nope" });
+  // Only the status: a webhook's response body isn't echoed back.
+  expect(bad).toEqual({ ok: false, error: "Webhook: HTTP 500" });
 });
 
 test("discord webhooks get Discord's message shape", async () => {

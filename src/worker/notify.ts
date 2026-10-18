@@ -317,7 +317,8 @@ async function sendWebhook(config: Record<string, unknown>, msg: NotifyMessage):
   if (secret) headers["X-Artifacts-Signature"] = `sha256=${await hmacHex(secret, body)}`;
   const res = await fetch(url, { method: "POST", headers, body, signal: timeout(), redirect: "manual" });
   if (res.ok) return { ok: true };
-  return { ok: false, error: `Webhook: ${await responseError(res)}` };
+  // Only the status: a webhook URL is anyone's, so its body isn't echoed back.
+  return { ok: false, error: `Webhook: HTTP ${res.status}` };
 }
 
 // ---------- Web Push ----------

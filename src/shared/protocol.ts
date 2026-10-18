@@ -166,6 +166,10 @@ export type ShellBoot = {
   apex: string;
   /** The viewer is a member of this workspace (not just a guest). */
   member: boolean;
+  /** The viewer is a workspace admin (approves live-data hosts). */
+  admin: boolean;
+  /** The session came from a presigned link: it opens this artifact only. */
+  scoped: boolean;
 };
 
 export type WatchLevel = "all" | "participating" | "mute";

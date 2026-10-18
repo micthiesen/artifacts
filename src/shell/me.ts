@@ -1,6 +1,8 @@
-// Notification settings (/me). On the apex: your display name and notification
-// channels, which follow you into every workspace. In a workspace: how much you
-// hear about each artifact there. Everything goes through that host's /api/me.
+// /me. On the apex ("Account"): your display name and notification channels,
+// which follow you into every workspace, and links to each workspace's own
+// settings. In a workspace ("Notifications in <name>"): how much you hear about
+// each artifact there. Everything goes through that host's /api/me. A failed
+// action only shows its notice, so what you typed stays put.
 import type { WatchLevel } from "../shared/protocol.ts";
 
 type Channel = { id: string; type: string; label: string; createdAt: string; lastError: string | null; disabled: boolean };
@@ -9,10 +11,11 @@ type Profile = {
   // Apex (account) only.
   name?: string | null;
   channels?: Channel[];
-  workspaces?: { slug: string; name: string; url: string }[];
+  workspaces?: { slug: string; name: string; role: "admin" | "member" | "guest"; url: string; suspended: boolean }[];
   vapidPublicKey?: string | null;
   pushover?: boolean;
   // Workspace only.
+  workspace?: { name: string };
   watches?: { id: string; title: string; level: WatchLevel; custom: boolean }[];
   account?: string;
 };
@@ -24,19 +27,24 @@ const LEVELS: [WatchLevel, string][] = [
   ["mute", "Nothing"],
 ];
 
+/** Thrown on 401: the session cookie expired or was revoked. */
+class SessionEnded extends Error {}
+
 async function api<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
   const res = await fetch(path, {
     method: init?.method ?? (init?.body ? "POST" : "GET"),
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
     body: init?.body ? JSON.stringify(init.body) : undefined,
   });
+  if (res.status === 401) throw new SessionEnded("Your session ended.");
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data;
 }
 
 let profile: Profile;
-let notice: { tone: "ok" | "error"; text: string; reveal?: { label: string; value: string; hint: string } } | null = null;
+type Notice = { tone: "ok" | "error"; text: string; signIn?: boolean; reveal?: { label: string; value: string; hint: string } };
+let notice: Notice | null = null;
 
 async function load() {
   profile = await api<Profile>("/api/me");
@@ -66,36 +74,64 @@ function btn(label: string, onClick: () => void | Promise<void>, cls = "button s
   return b;
 }
 
+const failed = (err: unknown): Notice =>
+  err instanceof SessionEnded ? { tone: "error", text: "Your session ended.", signIn: true } : { tone: "error", text: (err as Error).message };
+
+function noticeNode(n: Notice) {
+  const el = h("div", { class: `notice ${n.tone}`, role: "status" }, n.text);
+  if (n.signIn) el.append(" ", h("a", { href: `/login?return=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in again"));
+  if (n.reveal) {
+    const reveal = n.reveal;
+    const copy = btn("Copy", async () => {
+      await navigator.clipboard.writeText(reveal.value);
+      copy.textContent = "Copied ✓";
+    });
+    el.append(h("div", { class: "reveal-row" }, h("strong", {}, reveal.label), h("code", { class: "reveal" }, reveal.value), copy), h("p", { class: "muted small" }, reveal.hint));
+  }
+  return el;
+}
+
+/** Shows a notice at the top without re-rendering. */
+function flash(n: Notice) {
+  const el = noticeNode(n);
+  const existing = main.querySelector(":scope > .notice");
+  const title = main.querySelector(":scope > .page-title");
+  if (existing) existing.replaceWith(el);
+  else if (title) title.after(el);
+  else main.prepend(el);
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
 async function act(fn: () => Promise<unknown>, ok?: string) {
   try {
     await fn();
-    if (ok) notice = { tone: "ok", text: ok };
   } catch (err) {
-    notice = { tone: "error", text: (err as Error).message };
+    notice = null;
+    flash(failed(err));
+    return;
   }
-  await load();
+  if (ok) notice = { tone: "ok", text: ok };
+  try {
+    await load();
+  } catch (err) {
+    flash(failed(err));
+  }
 }
 
+const title = () => (profile.watches ? (profile.workspace ? `Notifications in ${profile.workspace.name}` : "Notifications") : "Account");
+
 function render() {
-  const sections: HTMLElement[] = [h("h1", { class: "page-title" }, "Notifications")];
-  if (notice) {
-    const n = h("div", { class: `notice ${notice.tone}`, role: "status" }, notice.text);
-    if (notice.reveal) {
-      const code = h("code", { class: "reveal" }, notice.reveal.value);
-      const copy = btn("Copy", async () => {
-        await navigator.clipboard.writeText(notice!.reveal!.value);
-        copy.textContent = "Copied ✓";
-      });
-      n.append(h("div", { class: "reveal-row" }, h("strong", {}, notice.reveal.label), code, copy), h("p", { class: "muted small" }, notice.reveal.hint));
-    }
-    sections.push(n);
-  }
+  // Keep the server's " · <brand>" suffix.
+  document.title = [title(), ...document.title.split(" · ").slice(1)].join(" · ");
+  const sections: HTMLElement[] = [h("h1", { class: "page-title" }, title())];
+  if (notice) sections.push(noticeNode(notice));
 
   if (profile.watches) renderWatches(sections, profile.watches);
   else renderAccount(sections);
   main.replaceChildren(...sections);
   // Notices render at the top; bring them into view after an action lower down.
   if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  notice = null;
 }
 
 function renderAccount(sections: HTMLElement[]) {
@@ -139,16 +175,31 @@ function renderAccount(sections: HTMLElement[]) {
     ),
   );
 
+  // Workspaces, including ones where you're only a guest on shared artifacts.
   const workspaces = profile.workspaces ?? [];
+  const roleChip = (role: "admin" | "member" | "guest") => h("span", { class: `chip${role === "admin" ? " positive" : ""}` }, role);
   sections.push(
     h(
       "section",
       { class: "card-section" },
-      h("h2", {}, "What to notify you about"),
-      h("p", { class: "muted" }, "Each workspace has its own per-artifact settings. By default you hear about every comment on artifacts you own, and about replies and @mentions everywhere else."),
+      h("h2", {}, "Your workspaces"),
+      h(
+        "p",
+        { class: "muted" },
+        "Each workspace has its own per-artifact notification settings. By default you hear about every comment on artifacts you own, and about replies and @mentions everywhere else.",
+      ),
       workspaces.length
-        ? h("ul", { class: "channels" }, ...workspaces.map((w) => h("li", {}, h("a", { href: `${w.url}/me` }, w.name))))
-        : h("p", { class: "muted" }, "Open a shared artifact's avatar menu to change how much you hear about it."),
+        ? h(
+            "ul",
+            { class: "channels" },
+            ...workspaces.map((w) => {
+              const li = h("li", {}, h("a", { class: "channel-label", href: `${w.url}/` }, w.name), roleChip(w.role));
+              if (w.suspended) li.append(h("span", { class: "chip caution" }, "suspended"));
+              else li.append(h("span", { class: "channel-actions" }, h("a", { class: "button small ghost", href: `${w.url}/me` }, "Notifications")));
+              return li;
+            }),
+          )
+        : h("p", { class: "muted" }, "None yet. When someone shares an artifact with you, its workspace shows up here."),
     ),
   );
 }
@@ -305,5 +356,5 @@ function fromB64url(s: string): Uint8Array<ArrayBuffer> {
 }
 
 load().catch((err) => {
-  main.replaceChildren(h("h1", { class: "page-title" }, "Notifications"), h("p", { class: "notice error" }, (err as Error).message));
+  main.replaceChildren(h("h1", { class: "page-title" }, main.dataset.context === "workspace" ? "Notifications" : "Account"), noticeNode(failed(err)));
 });

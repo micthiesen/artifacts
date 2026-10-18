@@ -32,7 +32,9 @@ never affects another's.
 Each workspace origin is also a separate browser origin, so sessions, storage
 and service workers are separated by the browser as well as by the server.
 
-A small global directory records which workspaces exist, who belongs to which,
+Routing reads the list of workspaces from KV, so an unknown subdomain is
+answered without the directory. A small global directory records which
+workspaces exist, who belongs to which,
 and per-person settings that should follow someone everywhere (display name,
 notification channels). It is consulted at sign-in, when a workspace is
 created and when notifications go out, never on ordinary page loads.
@@ -42,12 +44,13 @@ workspaces, your notification settings and the operator console.
 
 ## People and roles
 
-- **Operator**: whoever runs the deployment (`OPERATOR_EMAILS`). Creates,
-  suspends and deletes workspaces and sees their usage from `/admin` on the
-  apex, and can export, back up and restore any workspace's data. Being
-  operator grants no role inside a workspace: no sign-in as anyone, no agent
-  access. The end-to-end checks' test identities only accept reserved test
-  domains (example.com, .test, .invalid).
+- **Operator**: whoever runs the deployment (`OPERATOR_EMAILS`, plus the
+  `OPERATOR_TOKEN` for scripts). Creates, suspends and deletes workspaces,
+  fixes their admins, and backs up, exports, imports and restores their data
+  from `/admin` on the apex. That is full access to the stored data, as running
+  the database always is; what the operator doesn't get is a sign-in as anyone
+  or a role inside a workspace. The end-to-end checks' test identities only
+  accept reserved test domains (example.com, .test, .invalid).
 - **Workspace admin**: manages members, agent tokens and approved data hosts,
   and can manage every artifact in the workspace, so nothing is stranded when
   someone leaves.
@@ -65,9 +68,15 @@ or OAuth grant it uses, with that person's access.
 
 People sign in once on the apex with an emailed one-time code; workspaces
 receive a short-lived signed hand-off and set their own session cookie.
-Presigned links sign one person straight into one artifact, and that session
-opens only that artifact; the rest of the workspace needs a real sign-in. Codes are
+Adding a member, creating a workspace and sharing with a person all send an
+email. Someone who has never signed in gets a presigned link that signs them
+straight into that one artifact, for no longer than the link lasts; anyone who
+has signed in before gets the page and signs in as themselves, so nobody can
+mint a link that acts as an existing account. Codes are
 rate-limited per address and globally, because anyone can request one.
+
+Requesting codes for someone else's address can't cancel the code in their
+inbox, and wrong guesses are counted per address and network.
 
 Agents connect with OAuth (each workspace is its own authorization server and
 MCP resource) or with a personal token created on the workspace's settings
@@ -76,7 +85,8 @@ page, for clients that can't run a browser sign-in. Both identify a person.
 ## Isolation
 
 Artifact code is untrusted. It renders in a sandboxed, opaque-origin frame
-with no network access; storage, shared state and comments reach it only
+with no network access and no popups (links go through the shell, which asks
+before leaving the site); storage, shared state and comments reach it only
 through the shell's postMessage bridge, and the shell scopes all of them to
 one artifact. Comments live in the shell, so artifact code can't read or
 forge them. Every write from a person is checked against their role on the
@@ -92,9 +102,14 @@ verified email.
   had; identical content is shared across versions, so long edit histories
   cost little.
 - **Binary as binary.** Assets and screenshots are stored as blobs.
-- **Backups stream.** Each workspace writes its own nightly backup to R2 in
-  bounded pages (assets as raw objects), only when something changed, so
-  backup size is never limited by Worker memory. Restores run server-side.
+- **Backups are jobs.** Each workspace backs itself up to R2 nightly when
+  something changed, as a job on its own alarm that runs in steps of a few
+  seconds and resumes, so no size is too big for one invocation. Small
+  workspaces back up as a point-in-time snapshot; big ones page by page. Every
+  run has its own prefix and a manifest written last.
+- **Restores can't half-happen.** A restore first takes a fresh backup, then
+  checks every page of the chosen run against the current schema before
+  touching anything, and the workspace is offline until it has loaded.
   Durable Object point-in-time restore was tried and dropped: on 2026-10-16,
   bookmark restores on a test stage didn't land at the requested times.
 

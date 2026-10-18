@@ -11,6 +11,8 @@ export function migrate(storage: DurableObjectStorage, migrations: Migration[]):
   const row = sql.exec(`SELECT version FROM _schema`).toArray()[0];
   let version = row ? (row.version as number) : 0;
   if (!row) sql.exec(`INSERT INTO _schema (version) VALUES (0)`);
+  // Older code against a newer schema could write data the newer code misreads.
+  if (version > migrations.length) throw new Error(`schema is at v${version} but this code only knows v${migrations.length}; deploy the newer code`);
   for (; version < migrations.length; version++) {
     storage.transactionSync(() => {
       migrations[version](sql);

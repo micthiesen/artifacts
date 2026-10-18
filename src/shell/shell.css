@@ -615,3 +615,15 @@ div.thread-anchor { cursor: default; }
   .splash-split, .splash-self { grid-template-columns: minmax(0, 1fr); margin-top: 2.75rem; }
   .splash-grid { margin-top: 2.75rem; }
 }
+
+/* UI pass 2 */
+.card-section .snippet-label { margin: .7rem 0 0; }
+.card-section .reveal-row + .reveal-row { margin-top: .35rem; }
+.notice a { font-weight: 600; }
+.job-line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 .7rem; padding: .5rem .7rem; border: 1px solid var(--border); border-radius: .6rem; background: var(--bg); }
+.job-line.failed { border-color: color-mix(in oklab, var(--negative) 55%, var(--border)); }
+.job-error { flex-basis: 100%; color: var(--negative); overflow-wrap: anywhere; }
+.admin-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .9rem 0 .4rem; }
+.admin-chip { display: inline-flex; align-items: center; gap: .15rem; padding: 0 .1rem 0 .55rem; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; }
+.admin-chip .om-text-button { height: 1.6rem; padding: 0 .45rem; border-radius: 999px; font-size: 12.5px; }
+.job-error { font-size: 13px; }

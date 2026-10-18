@@ -2,7 +2,10 @@
 // artifact… (owners, on an artifact), Copy my link, Print, notification level
 // for this artifact, then links: in a workspace its notifications, settings
 // (members) and list; everywhere your account and workspaces on the apex; Sign out.
-// The slot's data-apex, data-context and data-member attributes pick the links.
+// The slot's data attributes pick the links: data-apex, data-context
+// ("account" | "workspace"), data-member, data-workspace (its name), data-operator
+// (apex) and data-scoped (a presigned-link session that opens one artifact only,
+// so it gets a way to sign in properly instead of links it can't open).
 import type { WatchLevel } from "../shared/protocol.ts";
 
 const LEVELS: [WatchLevel, string][] = [
@@ -143,15 +146,19 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     menu.append(a);
   };
   const apex = slot.dataset.apex || location.origin;
-  if (slot.dataset.context === "workspace") {
-    link("/me", "Notification levels");
-    if (slot.dataset.member) link("/settings", "Workspace settings");
+  const { context, member, scoped, operator, workspace } = slot.dataset;
+  if (context === "workspace" && scoped) {
+    link(`/login?return=${encodeURIComponent(location.pathname + location.search)}`, "Sign in for full access");
+  } else if (context === "workspace") {
+    link("/me", workspace ? `Notifications in ${workspace}` : "Notifications");
+    if (member) link("/settings", "Workspace settings");
     link("/", "All artifacts");
-    link(`${apex}/me`, "Your account");
+    link(`${apex}/me`, "Account");
     link(`${apex}/`, "Your workspaces");
   } else {
-    link("/me", "Name and notifications");
+    link("/me", "Account");
     link("/", "Your workspaces");
+    if (operator) link("/admin", "Operator console");
   }
   const form = document.createElement("form");
   form.method = "post";

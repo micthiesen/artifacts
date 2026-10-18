@@ -1,6 +1,6 @@
 // Workspace roles, members, agent tokens, file history, export/import and backups.
 import { beforeEach, expect, test } from "bun:test";
-import { ADMIN, createHub, FakeR2, type Harness } from "./support/do-harness.ts";
+import { ADMIN, createHub, FakeR2, runJobs, type Harness } from "./support/do-harness.ts";
 
 let h: Harness;
 const MEMBER = "mia@corp.com";
@@ -118,14 +118,18 @@ test("export pages import into an empty workspace and reproduce it", async () =>
 
   const copy = await createHub();
   copy.hub.importBegin();
+  // Offline while it loads.
+  expect(copy.hub.access(ADMIN).offline).toBe(true);
+  expect(() => copy.hub.importRows("artifacts", [{ nope: 1 }])).toThrow("no column nope");
   for (const t of DATA_TABLES) copy.hub.importRows(t, dump[t]);
   await copy.hub.importEnd();
+  expect(copy.hub.access(ADMIN).offline).toBe(false);
   expect(copy.hub.files(id)).toEqual(files);
   expect(copy.hub.roleFor(id, GUEST)).toBe("view");
   expect(new Uint8Array(copy.hub.asset(id, "assets/dot.png")!.data)).toEqual(new Uint8Array([137, 80, 78, 71, 0, 255]));
   expect(copy.hub.members().map((m) => m.email).sort()).toEqual([ADMIN, MEMBER, OTHER].sort());
   expect(copy.directory.membershipsOf(MEMBER)).toMatchObject([{ slug: "acme" }]);
-  expect(() => copy.hub.importRows("artifacts", [{ nope: 1 }])).toThrow("no column nope");
+  expect(() => copy.hub.importRows("artifacts", [])).toThrow("importBegin");
 });
 
 test("a change schedules tonight's backup; the backup restores everything", async () => {
@@ -137,17 +141,65 @@ test("a change schedules tonight's backup; the backup restores everything", asyn
   expect(new Date(due).getUTCHours()).toBe(10);
   expect(h.ctx.alarm).toBe(due);
 
-  const prefix = await h.hub.backup();
-  expect(prefix).toMatch(/^acme\/\d{4}-\d{2}-\d{2}\/$/);
-  expect(bucket.objects.has(`${prefix}manifest.json`)).toBe(true);
-  expect(await h.hub.backups()).toEqual([prefix!.split("/")[1]]);
-  // Nothing changed since, so no backup is pending.
+  expect(await h.hub.backup()).toEqual({ queued: true });
+  await runJobs(h);
+  const [run] = await h.hub.backups();
+  expect(run).toMatch(/^\d{4}-\d{2}-\d{2}T\d{9}Z$/);
+  expect(bucket.objects.has(`acme/${run}/manifest.json`)).toBe(true);
+  // That backup covered everything, so none is pending.
   expect(h.ctx.sqlStorage.exec(`SELECT value FROM settings WHERE key = 'backup_due_at'`).toArray()).toEqual([]);
 
   h.hub.delete(id);
-  await h.hub.restore(prefix!.split("/")[1]);
+  expect(await h.hub.restore(run)).toEqual({ queued: true });
+  await runJobs(h);
   expect(h.hub.files(id)).toEqual(files);
+  expect(h.hub.access(ADMIN).offline).toBe(false);
+  // A fresh backup ran first, so the pre-restore state is kept too.
+  expect((await h.hub.backups()).length).toBe(2);
   expect(h.directory.workspace("acme")!.stats).toMatchObject({ artifacts: 1, members: 2 });
+});
+
+test("a restore checks every page first and changes nothing if one doesn't fit", async () => {
+  const bucket = new FakeR2();
+  h = await createHub({ BACKUPS: bucket });
+  await h.hub.setMember(MEMBER, "member", ADMIN);
+  const id = await make();
+  await h.hub.backup();
+  await runJobs(h);
+  const [run] = await h.hub.backups();
+  // Corrupt the backup: a column this schema doesn't have, in a late table.
+  const key = [...bucket.objects.keys()].find((k) => k.startsWith(`acme/${run}/events/`))!;
+  bucket.objects.set(key, JSON.stringify([{ seq: 1, nope: 1 }]));
+  await h.hub.restore(run);
+  await runJobs(h);
+  expect(h.hub.files(id)).toEqual(files);
+  expect(h.hub.access(ADMIN).offline).toBe(false);
+  expect(h.ctx.sqlStorage.exec(`SELECT value FROM settings WHERE key = 'last_job_error'`).toArray()[0].value).toContain("nope");
+});
+
+test("big backups resume across alarms", async () => {
+  const bucket = new FakeR2();
+  h = await createHub({ BACKUPS: bucket });
+  await h.hub.setMember(MEMBER, "member", ADMIN);
+  // Enough state to need many pages and pass the snapshot limit.
+  for (let a = 0; a < 4; a++) {
+    const id = await make(MEMBER, `Big ${a}`);
+    for (let i = 0; i < 40; i++) h.hub.setState(id, { [`big/${i}`]: "x".repeat(60_000) }, null);
+    for (let i = 0; i < 10; i++) h.hub.setState(id, { [`k/${i}`]: i }, null);
+  }
+  const { stepBackup, startBackup } = await import("../src/worker/snapshot.ts");
+  const { DATA_TABLES } = await import("../src/worker/tables.ts");
+  // A deadline in the past still makes progress one page at a time.
+  let r = await stepBackup(bucket as never, "acme", DATA_TABLES, (t, a) => h.hub.exportPage(t, a), startBackup("2026-01-01T000000000Z"), 3, 0);
+  let steps = 1;
+  while ("next" in r) {
+    r = await stepBackup(bucket as never, "acme", DATA_TABLES, (t, a) => h.hub.exportPage(t, a), r.next, 3, 0);
+    steps++;
+  }
+  expect(steps).toBeGreaterThan(5);
+  expect(r.done.tables.state).toBe(200);
+  // Pages were uploaded as it went, not all at the end.
+  expect([...bucket.objects.keys()].filter((k) => k.includes('/state/')).length).toBeGreaterThan(1);
 });
 
 test("renders store their screenshot as bytes and hand it back as base64", async () => {
@@ -234,10 +286,37 @@ test("small workspaces back up as a point-in-time snapshot", async () => {
     }
     return put(k, v);
   };
-  const prefix = await h.hub.backup();
-  const history = JSON.parse(bucket.objects.get(`${prefix}history/00000.json`)!);
-  const artifacts = JSON.parse(bucket.objects.get(`${prefix}artifacts/00000.json`)!);
+  await h.hub.backup();
+  await runJobs(h);
+  const [run] = await h.hub.backups();
+  const history = JSON.parse(bucket.objects.get(`acme/${run}/history/00000.json`)!);
+  const artifacts = JSON.parse(bucket.objects.get(`acme/${run}/artifacts/00000.json`)!);
   // Both tables describe the same moment: version 1 everywhere, not a mix.
   expect(artifacts[0].version).toBe(1);
   expect(history.map((r: any) => r.version)).toEqual([1]);
+});
+
+test("a deleted workspace answers as missing and stores nothing; a stray object stays empty", async () => {
+  await h.hub.destroy();
+  expect(h.hub.access(null).slug).toBe("");
+  expect(h.hub.job()).toBeNull();
+  const { FakeCtx } = await import("./support/do-harness.ts");
+  const { Workspace } = await import("../src/worker/hub.ts");
+  const ctx = new FakeCtx();
+  const stray = new Workspace(ctx as never, h.env as never);
+  expect(stray.access(null).slug).toBe("");
+  expect(ctx.sqlStorage.exec(`SELECT name FROM sqlite_master`).toArray()).toEqual([]);
+});
+
+test("a live source can create its data file", async () => {
+  const id = await make();
+  h.hub.setSource(id, { path: "data/live.json", url: "https://api.example.com/x", everyMinutes: 60 });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ ok: 1 })) as unknown as typeof fetch;
+  try {
+    await h.hub.setHostAllowed("api.example.com", true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  expect(JSON.parse(h.hub.files(id)["data/live.json"])).toEqual({ ok: 1 });
 });

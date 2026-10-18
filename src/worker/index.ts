@@ -8,6 +8,7 @@ import {
   adminPage,
   consentPage,
   continuePage,
+  linkSwitchPage,
   frameDocument,
   indexPage,
   loginPage,
@@ -21,6 +22,7 @@ import {
   type Brand,
 } from "./pages.ts";
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
+import { sendCode, sendInvite, sendShare } from "./mail.ts";
 import {
   b64url,
   clearSessionCookie,
@@ -81,7 +83,7 @@ const PREVIEW_BOT =
 const FRAME_TTL = 10 * 60;
 const OG_TTL = 10 * 365 * 86400;
 const WORKSPACE_CACHE_MS = 30_000;
-const MISSING_CACHE_MS = 10_000;
+const MISSING_CACHE_MS = 5_000;
 const WORKSPACE_CACHE_MAX = 2000;
 const NONCE_COOKIE = "__Host-art_login";
 
@@ -99,20 +101,22 @@ export default {
       url.hostname = env.APEX_HOST;
       return Response.redirect(url.toString(), 301);
     }
-    if (url.hostname === env.APEX_HOST) response = await apex(request, env);
+    if (url.hostname === env.APEX_HOST) response = await apex(request, env, ctx);
     else {
       // Unknown hosts stop here, so a random subdomain never wakes a Durable Object.
       const slug = slugOf(url.hostname, env);
-      const record = slug ? await workspaceRecord(env, slug) : null;
+      const record = slug ? await workspaceRecord(env, slug, ctx) : null;
       response = record
         ? await providerFor(url.origin).fetch(request, env, ctx)
         : messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
     }
     await renewSession(request, env, response);
-    // Nothing here should be indexed by search engines, public artifacts included.
-    if (!response.headers.has("X-Robots-Tag") && response.status !== 101) {
+    if (response.status !== 101) {
       try {
-        response.headers.set("X-Robots-Tag", "noindex, nofollow");
+        // Nothing here should be indexed by search engines, public artifacts included.
+        if (!response.headers.has("X-Robots-Tag")) response.headers.set("X-Robots-Tag", "noindex, nofollow");
+        response.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+        if (!response.headers.has("X-Content-Type-Options")) response.headers.set("X-Content-Type-Options", "nosniff");
       } catch {
         // immutable headers (e.g. redirects); those pages carry no content
       }
@@ -147,20 +151,50 @@ function apexBrand(env: Env): Brand {
   return { name: "Artifacts", home: "/", apex: apexOrigin(env) };
 }
 
-/**
- * Workspace records, cached briefly per isolate so a page load doesn't ask the
- * directory, and so a random subdomain never creates a Durable Object.
- */
-const workspaceCache = new Map<string, { record: WorkspaceRecord | null; at: number }>();
+type Routable = Pick<WorkspaceRecord, "slug" | "name" | "suspended">;
+type WorkspaceList = { at: string; list: Record<string, { name: string; suspended: boolean }> };
+const WORKSPACE_LIST_KEY = "artifacts:workspaces";
+/** How old the KV list must be before a slug missing from it is trusted to be missing. */
+const LIST_SETTLE_MS = 120_000;
 
-async function workspaceRecord(env: Env, slug: string): Promise<WorkspaceRecord | null> {
+/**
+ * The workspace for a host, without touching the directory on ordinary
+ * requests: the list of workspaces is mirrored to KV (edge-cached for a
+ * minute) whenever one is created, renamed, suspended or deleted. A slug the
+ * list doesn't have is answered from the list alone once it has settled, so
+ * random subdomains never reach the directory or wake a Durable Object; only
+ * just after a change does a miss fall back to asking the directory.
+ */
+const workspaceCache = new Map<string, { record: Routable | null; at: number }>();
+let publishing = false;
+
+async function workspaceRecord(env: Env, slug: string, ctx?: ExecutionContext): Promise<Routable | null> {
   const hit = workspaceCache.get(slug);
   if (hit && Date.now() - hit.at < (hit.record ? WORKSPACE_CACHE_MS : MISSING_CACHE_MS)) return hit.record;
+  const remember = (record: Routable | null) => {
+    // Random subdomains shouldn't grow an isolate's memory without bound.
+    if (workspaceCache.size >= WORKSPACE_CACHE_MAX) workspaceCache.clear();
+    workspaceCache.set(slug, { record, at: Date.now() });
+    return record;
+  };
+  const listed = (await env.OAUTH_KV.get<WorkspaceList>(WORKSPACE_LIST_KEY, { type: "json", cacheTtl: 60 }).catch(() => null)) ?? null;
+  const entry = listed?.list[slug];
+  if (entry) return remember({ slug, ...entry });
+  if (listed && Date.now() - Date.parse(listed.at) > LIST_SETTLE_MS) return remember(null);
+  if (!listed && ctx && !publishing) {
+    publishing = true;
+    ctx.waitUntil(publishWorkspaces(env).finally(() => (publishing = false)));
+  }
   const record = await directory(env).workspace(slug);
-  // Random subdomains shouldn't grow an isolate's memory without bound.
-  if (workspaceCache.size >= WORKSPACE_CACHE_MAX) workspaceCache.clear();
-  workspaceCache.set(slug, { record, at: Date.now() });
-  return record;
+  return remember(record ? { slug, name: record.name, suspended: record.suspended } : null);
+}
+
+/** Mirror the workspace list to KV for routing (see workspaceRecord). */
+async function publishWorkspaces(env: Env) {
+  const all = await directory(env).workspaces();
+  const value: WorkspaceList = { at: new Date().toISOString(), list: Object.fromEntries(all.map((w) => [w.slug, { name: w.name, suspended: w.suspended }])) };
+  await env.OAUTH_KV.put(WORKSPACE_LIST_KEY, JSON.stringify(value));
+  workspaceCache.clear();
 }
 
 // ---- workspace hosts: OAuth around the app --------------------------------------------
@@ -209,16 +243,23 @@ function oauthFor(origin: string) {
   return entry;
 }
 
+/** An MCP-shaped refusal, so clients show the reason rather than a bare HTTP status. */
+function mcpRefusal(status: number, message: string): Response {
+  return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32001, message } }, { status });
+}
+
 async function mcpApi(request: Request, env: Env, props: McpProps): Promise<Response> {
   const url = new URL(request.url);
   const slug = slugOf(url.hostname, env);
   const record = slug ? await workspaceRecord(env, slug) : null;
-  if (!slug || !record || props.slug !== slug) return Response.json({ error: "unknown workspace" }, { status: 404 });
-  if (record.suspended) return Response.json({ error: "this workspace is suspended" }, { status: 403 });
+  if (!slug || !record || props.slug !== slug) return mcpRefusal(404, "unknown workspace");
+  if (record.suspended) return mcpRefusal(403, `${record.name} is suspended`);
   const hub = workspaceHub(env, slug);
+  const access = await hub.access(props.email);
+  if (access.offline) return mcpRefusal(503, `${record.name} is being restored; try again in a few minutes`);
   // Leaving the workspace ends an agent's access, whatever token it holds.
-  if (!(await hub.access(props.email)).member) return Response.json({ error: `${props.email} is no longer a member of ${slug}` }, { status: 403 });
-  return handleMcp(request, { hub, origin: url.origin, env, slug, person: props.email, actor: "agent" });
+  if (!access.member) return mcpRefusal(403, `${props.email} is no longer a member of ${record.name}; ask a workspace admin to add you back`);
+  return handleMcp(request, { hub, origin: url.origin, env, slug, workspace: record.name, admin: access.member === "admin", person: props.email, actor: "agent" });
 }
 
 async function workspaceRoute(request: Request, env: Env): Promise<Response> {
@@ -232,6 +273,14 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (!record) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
   if (record.suspended) return messagePage("Workspace suspended", `${record.name} is suspended. Contact whoever runs it.`, 403, { href: apexOrigin(env), label: "Artifacts" }, brand);
   const hub = workspaceHub(env, slug);
+  const state = await hub.access(null, url.origin);
+  // A deleted workspace's object may still be cached here for a few seconds.
+  if (state.slug !== slug) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: "Artifacts" }, apexBrand(env));
+  if (state.offline) {
+    const res = messagePage("Back in a few minutes", `${record.name} is being restored from a backup. Try again in a few minutes.`, 503, { href: path, label: "Try again" }, brand);
+    res.headers.set("Retry-After", "60");
+    return res;
+  }
 
   const og = /^\/og\/([a-z0-9]+)\.jpg$/.exec(path);
   if (og) return ogImage(og[1], url, env, hub, slug);
@@ -266,13 +315,12 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
     return continuePage(`${apexOrigin(env)}/signed-out`, new Headers({ "Set-Cookie": clearSessionCookie() }));
   }
   const presigned = /^\/s\/([A-Za-z0-9_.-]+)$/.exec(path);
-  if (presigned) return presignedSignIn(presigned[1], url, env, hub, slug, brand);
+  if (presigned) return presignedSignIn(request, presigned[1], url, env, hub, slug, brand, session);
 
   if (path === "/" || path === "/archived") {
     if (!viewer.email) return indexPage({ email: null, member: null }, [], brand);
-    const { member } = await hub.access(viewer.email);
-    const artifacts = await hub.list(viewer.email);
-    return indexPage({ email: viewer.email, member }, artifacts, brand, await hub.shareSummaries(viewer.email), path === "/archived");
+    const data = await hub.indexData(viewer.email);
+    return indexPage({ email: viewer.email, member: data.member }, data.artifacts, brand, data.summaries, path === "/archived");
   }
   if (path === "/me") {
     if (!viewer.email) return signIn("/me");
@@ -282,11 +330,25 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (path === "/settings") {
     if (!viewer.email) return signIn("/settings");
     const { member } = await hub.access(viewer.email);
-    if (!member) return messagePage("Members only", `${viewer.email} isn't a member of ${record.name}.`, 403, undefined, brand);
+    if (!member) return messagePage("Members only", `${viewer.email} isn't a member of ${record.name}. Ask a workspace admin to add you.`, 403, undefined, brand);
     return settingsPage(viewer.email, brand);
   }
   if (path === "/api/settings" || path.startsWith("/api/settings/")) return settingsApi(request, url, env, hub, viewer, slug);
   if (path === "/authorize") return authorize(request, url, env, hub, viewer, record, brand);
+  // "Sign in with a different email": end this workspace's session and the apex's, then sign in again.
+  if (path === "/switch") {
+    const next = safeNext(url.searchParams.get("return"));
+    const nonce = b64url(crypto.getRandomValues(new Uint8Array(18)));
+    const target = new URL(`${apexOrigin(env)}/login`);
+    target.searchParams.set("to", url.origin);
+    target.searchParams.set("n", nonce);
+    target.searchParams.set("return", next);
+    target.searchParams.set("switch", "1");
+    const headers = new Headers({ Location: target.href });
+    headers.append("Set-Cookie", clearSessionCookie());
+    headers.append("Set-Cookie", `${NONCE_COOKIE}=${nonce}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=900`);
+    return new Response(null, { status: 302, headers });
+  }
 
   const frame = /^\/frame\/([a-z0-9]+)$/.exec(path);
   if (frame) {
@@ -326,14 +388,17 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (art) {
     const [, id, sub] = art;
     const here = session.only === id ? session : viewer;
-    const full = await hub.roleFor(id, here.email);
+    const scoped = Boolean(here.only);
+    // The page itself gets everything in one call; sync and error reports only need the role.
+    const opened = sub ? null : await hub.openArtifact(id, here.email, scoped);
+    const full = opened ? opened.role : await hub.roleFor(id, here.email);
     // From a link, even an owner gets the page, not its management.
-    const role = full === "owner" && here.only ? "edit" : full;
+    const role = full === "owner" && scoped ? "edit" : full;
     if (!role) {
       if (!here.email && !sub) return signIn(path);
       return sub
         ? new Response("forbidden", { status: 403 })
-        : messagePage("Not available", `${here.email} doesn't have access to this artifact, or it doesn't exist.`, 403, undefined, brand);
+        : messagePage("Not available", `${here.email} doesn't have access to this artifact, or it doesn't exist.`, 403, { href: `/switch?return=${encodeURIComponent(path)}`, label: "Sign in with a different email" }, brand);
     }
     if (sub === "/sync") {
       if (request.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
@@ -351,11 +416,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
       if (body?.message) await hub.recordError(id, here.email, String(body.message), body.stack ? String(body.stack) : undefined);
       return new Response(null, { status: 204 });
     }
-    const meta = await hub.meta(id);
-    if (!meta) return messagePage("Not found", "This artifact doesn't exist.", 404, undefined, brand);
+    const { meta, visit, member } = opened as Extract<typeof opened, { meta: unknown }>;
     const token = await signToken(env.SESSION_SECRET, "frame", FRAME_TTL, { id, e: here.email, w: slug });
-    const visit = here.email ? await hub.visit(id, here.email) : null;
-    const member = here.email ? (await hub.access(here.email)).member : null;
     return shellPage(
       {
         artifactId: id,
@@ -366,6 +428,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
         viewer: { email: here.email, role: role as Role },
         apex: apexOrigin(env),
         member: Boolean(member),
+        admin: member === "admin" && !scoped,
+        scoped,
         ...(meta.archivedAt ? { archivedAt: meta.archivedAt } : {}),
         ...(visit ? { since: visit.since, readSeq: visit.readSeq, watch: visit.watch } : {}),
       },
@@ -376,9 +440,34 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   return messagePage("Not found", "There's nothing here.", 404, undefined, brand);
 }
 
+/**
+ * Email someone who was just added (as a member, or a workspace's first admin).
+ * Returns whether it went out; a full daily quota or a send failure never
+ * fails the action that triggered it.
+ */
+async function invite(env: Env, hub: HubApi, to: string, input: { workspace: string; url: string; by: string | null; role: string }): Promise<boolean> {
+  try {
+    if (!(await hub.allowMail(1))) return false;
+    await sendInvite(env, to, input);
+    return true;
+  } catch (err) {
+    console.error("invite email failed", err);
+    return false;
+  }
+}
+
+/** Note a sign-in to a workspace: members' "last seen", or the workspace among a guest's on the apex. */
+async function noteSignIn(env: Env, slug: string, email: string) {
+  try {
+    if (!(await workspaceHub(env, slug).signedIn(email))) await directory(env).recordVisit(email, slug);
+  } catch (err) {
+    console.error("noting sign-in failed", err);
+  }
+}
+
 // ---- apex: front door, sign-in, account and operator -------------------------------------
 
-async function apex(request: Request, env: Env): Promise<Response> {
+async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const brand = apexBrand(env);
@@ -400,7 +489,7 @@ async function apex(request: Request, env: Env): Promise<Response> {
   }
   // Where a workspace's Sign out lands: end the apex session too, so the next sign-in asks again.
   if (path === "/signed-out") {
-    const res = splashPage(brand, "You're signed out.");
+    const res = splashPage(brand, "You're signed out. Other workspaces you opened sign out separately.");
     res.headers.append("Set-Cookie", clearSessionCookie());
     return res;
   }
@@ -414,7 +503,7 @@ async function apex(request: Request, env: Env): Promise<Response> {
     if (!operator) return messagePage("Not available", "This page is for whoever runs this deployment.", 403, undefined, brand);
     return adminPage(viewer.email, brand);
   }
-  if (path.startsWith("/api/admin/")) return operatorApi(request, url, env, viewer);
+  if (path.startsWith("/api/admin/")) return operatorApi(request, url, env, viewer, ctx);
   return messagePage("Not found", "There's nothing here.", 404, undefined, brand);
 }
 
@@ -430,6 +519,12 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
   const ret = safeNext(field("return") || null);
   const state = { to, n: nonce, return: ret };
   if (!form) {
+    if (url.searchParams.get("switch") === "1") {
+      // Signing in as someone else: the apex session goes too.
+      const res = loginPage({ ...state, step: "email" }, brand);
+      res.headers.append("Set-Cookie", clearSessionCookie());
+      return res;
+    }
     if (viewer.email) return finishLogin(viewer.email, to, nonce, ret, env, false);
     return loginPage({ ...state, step: "email" }, brand);
   }
@@ -437,7 +532,7 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
   const email = field("email").toLowerCase();
   if (!/^[^\s@]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(email)) return loginPage({ ...state, step: "email", email, error: "Enter a valid email address." }, brand, 400);
   if (form.has("code")) {
-    if (!(await directory(env).verifyLogin(email, field("code")))) {
+    if (!(await directory(env).verifyLogin(email, field("code"), clientNetwork(request)))) {
       return loginPage({ ...state, step: "code", email, error: "That code didn't work. Check it, or send a new one." }, brand, 400);
     }
     const res = await finishLogin(email, to, nonce, ret, env, true);
@@ -447,7 +542,7 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
   }
   let code: string;
   try {
-    code = await directory(env).startLogin(email, request.headers.get("CF-Connecting-IP"));
+    code = await directory(env).startLogin(email, clientNetwork(request));
   } catch (err) {
     // Rate limits; the message is written for the person signing in.
     return loginPage({ ...state, step: "email", email, error: (err as Error).message }, brand, 429);
@@ -461,16 +556,19 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
   return loginPage({ ...state, step: "code", email }, brand);
 }
 
-async function sendCode(env: Env, email: string, code: string) {
-  if (!env.EMAIL) throw new Error("no EMAIL binding");
-  const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
-  await env.EMAIL.send({
-    from: { name: "Artifacts", email: env.MAIL_FROM },
-    to: email,
-    subject: `${spaced} is your Artifacts code`,
-    text: `Your Artifacts sign-in code is ${spaced}.\n\nIt works once, for 10 minutes. If you didn't try to sign in, ignore this email.\n`,
-    html: `<div style="font-family:system-ui,sans-serif;font-size:15px;color:#222"><p>Your Artifacts sign-in code is</p><p style="font-size:28px;font-weight:600;letter-spacing:4px">${spaced}</p><p style="color:#666">It works once, for 10 minutes. If you didn't try to sign in, ignore this email.</p></div>`,
-  });
+/** The client's network for rate limits: its IPv4 address, or its IPv6 /64 (one host can hold a whole /64). */
+export function clientNetwork(request: Request): string | null {
+  const ip = request.headers.get("CF-Connecting-IP");
+  if (!ip || !ip.includes(":")) return ip;
+  const full = ip.includes("::") ? expandIpv6(ip) : ip.split(":");
+  return `${full.slice(0, 4).join(":")}::/64`;
+}
+
+function expandIpv6(ip: string): string[] {
+  const [head, tail] = ip.split("::");
+  const a = head ? head.split(":") : [];
+  const b = tail ? tail.split(":") : [];
+  return [...a, ...Array(8 - a.length - b.length).fill("0"), ...b];
 }
 
 /** Send a signed-in browser on: to a workspace via a one-minute hand-off code, or to a page here. */
@@ -498,7 +596,10 @@ async function authCallback(request: Request, url: URL, env: Env): Promise<Respo
   if (!claims || claims.aud !== url.origin || !nonce || !claims.n || !timingSafeEqual(claims.n, nonce)) {
     return messagePage("Sign-in failed", "That sign-in link expired. Try again.", 400, { href: "/login", label: "Sign in" });
   }
-  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: claims.e.toLowerCase(), h: url.hostname });
+  const email = claims.e.toLowerCase();
+  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: url.hostname });
+  const slug = slugOf(url.hostname, env);
+  if (slug) await noteSignIn(env, slug, email);
   const headers = new Headers({ Location: safeNext(url.searchParams.get("next")) });
   headers.append("Set-Cookie", sessionCookie(session));
   headers.append("Set-Cookie", `${NONCE_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`);
@@ -510,16 +611,28 @@ async function authCallback(request: Request, url: URL, env: Env): Promise<Respo
  * browser in as the link's email and opens the artifact. The link only grants
  * what that email already has, so unsharing still cuts it off.
  */
-async function presignedSignIn(code: string, url: URL, env: Env, hub: HubApi, slug: string, brand: Brand): Promise<Response> {
-  const claims = await verifyToken<{ e: string; a: string; w: string }>(env.LOGIN_SECRET, "link", code);
-  if (!claims || claims.w !== slug) return messagePage("Link expired", "This link has expired or is invalid. Ask for a new one.", 400, undefined, brand);
+async function presignedSignIn(request: Request, code: string, url: URL, env: Env, hub: HubApi, slug: string, brand: Brand, session: Viewer): Promise<Response> {
+  const claims = await verifyToken<{ e: string; a: string; w: string; exp: number }>(env.LOGIN_SECRET, "link", code);
+  if (!claims || claims.w !== slug) {
+    return messagePage("Link expired", "This link has expired or is invalid. Ask for a new one, or sign in with your email.", 400, { href: "/login?return=/", label: "Sign in" }, brand);
+  }
   const email = claims.e.toLowerCase();
-  if (!(await hub.roleFor(claims.a, email))) return messagePage("Not available", `${email} doesn't have access to this artifact anymore.`, 403, undefined, brand);
-  // The session opens this artifact only; signing in with email gives the rest.
-  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: url.hostname, a: claims.a });
+  const target = `/a/${claims.a}`;
+  if (!(await hub.roleFor(claims.a, email))) {
+    return messagePage("Not available", `${email} doesn't have access to this artifact anymore.`, 403, { href: `/switch?return=${encodeURIComponent(target)}`, label: "Sign in with a different email" }, brand);
+  }
+  // Already signed in here as this person: keep the full session.
+  if (session.email === email && !session.only) return new Response(null, { status: 303, headers: { Location: target } });
+  // Signed in as someone else: ask before switching, so a link can't silently swap who you are.
+  if (session.email && session.email !== email && request.method !== "POST") return linkSwitchPage(url, session.email, email, brand);
+  if (request.method === "POST" && !sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
+  // The session opens this artifact only, and lasts no longer than the link; signing in with email gives the rest.
+  const ttl = Math.max(60, Math.min(SESSION_TTL, Math.floor(claims.exp - Date.now() / 1000)));
+  const cookie = await signToken(env.SESSION_SECRET, "session", ttl, { e: email, h: url.hostname, a: claims.a });
+  await noteSignIn(env, slug, email);
   return new Response(null, {
     status: 303,
-    headers: { Location: `/a/${claims.a}`, "Set-Cookie": sessionCookie(session), "Referrer-Policy": "no-referrer" },
+    headers: { Location: target, "Set-Cookie": sessionCookie(cookie, ttl), "Referrer-Policy": "no-referrer" },
   });
 }
 
@@ -539,8 +652,9 @@ async function currentViewer(request: Request, env: Env): Promise<Viewer> {
 async function renewSession(request: Request, env: Env, response: Response) {
   if (response.status === 101 || response.headers.has("Set-Cookie")) return;
   const claims = await verifyToken<{ e: string; h: string; a?: string }>(env.SESSION_SECRET, "session", readCookie(request, SESSION_COOKIE));
-  if (!claims || claims.h !== new URL(request.url).hostname || claims.exp - Date.now() / 1000 > SESSION_TTL - 86400) return;
-  const fresh = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: claims.e, h: claims.h, ...(claims.a ? { a: claims.a } : {}) });
+  // Link sessions end when their link would have; only real sign-ins slide.
+  if (!claims || claims.a || claims.h !== new URL(request.url).hostname || claims.exp - Date.now() / 1000 > SESSION_TTL - 86400) return;
+  const fresh = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: claims.e, h: claims.h });
   try {
     response.headers.append("Set-Cookie", sessionCookie(fresh));
   } catch {
@@ -592,21 +706,26 @@ async function jsonBody(request: Request): Promise<Record<string, unknown>> {
 
 /** Validation errors from a Durable Object arrive as plain Errors over RPC, so every failure is shown as its message. */
 function failure(err: unknown): Response {
-  return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 400 });
+  const message = err instanceof Error ? err.message : String(err);
+  // Storage and runtime errors aren't for the browser.
+  if (/SQLITE|no such (table|column)|D1_|internal error|Network connection lost/i.test(message)) {
+    console.error(err);
+    return Response.json({ error: "Something went wrong on our side. Try again." }, { status: 500 });
+  }
+  return Response.json({ error: message }, { status: 400 });
 }
 
 // ---- OAuth consent ---------------------------------------------------------------------
 
-async function authorize(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer, record: WorkspaceRecord, brand: Brand): Promise<Response> {
+async function authorize(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer, record: Routable, brand: Brand): Promise<Response> {
   // Not env.OAUTH_PROVIDER: the library sets that once per isolate, so it would
   // belong to whichever workspace this isolate served first.
   const oauth = oauthApi(url.origin, env);
   const local = (message: string, status = 400) => messagePage("Can't connect", message, status, undefined, brand);
   try {
     if (!viewer.email) return Response.redirect(`${url.origin}/login?return=${encodeURIComponent(url.pathname + url.search)}`, 302);
-    if (!(await hub.access(viewer.email)).member) {
-      return local(`${viewer.email} isn't a member of ${record.name}, so it can't connect an agent here.`, 403);
-    }
+    const member = (await hub.access(viewer.email)).member;
+    if (!member) return local(`${viewer.email} isn't a member of ${record.name}, so it can't connect an agent here. Ask a workspace admin to add you.`, 403);
     const userId = grantUser(record.slug, viewer.email);
     const remember = { secret: env.CONSENT_SECRET, subject: userId };
     const complete = async (authRequest: Awaited<ReturnType<OAuthHelpers["parseAuthRequest"]>>, headers = new Headers()) => {
@@ -632,7 +751,7 @@ async function authorize(request: Request, url: URL, env: Env, hub: HubApi, view
       if (await oauth.isConsentRemembered(request, authRequest, remember)) return complete(authRequest);
       const details = await oauth.describeConsent(authRequest);
       const consent = await oauth.beginConsent(authRequest);
-      const page = consentPage(details, consent.handle, viewer.email, brand);
+      const page = consentPage(details, consent.handle, viewer.email, brand, member === "admin");
       for (const [k, v] of consent.headers) if (k.toLowerCase() !== "content-type") page.headers.append(k, v);
       return page;
     }
@@ -658,7 +777,7 @@ async function authorize(request: Request, url: URL, env: Env, hub: HubApi, view
 
 /** The OAuth library's user id for a person in one workspace (it may not contain ":"). */
 function grantUser(slug: string, email: string): string {
-  return `${slug}/${email}`;
+  return `${slug}/${encodeURIComponent(email)}`;
 }
 
 /**
@@ -717,16 +836,18 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
     if (path === "/api/settings/name" && request.method === "POST") {
       if (!admin) return adminOnly();
       const info = await hub.rename(String(body.name ?? ""));
-      workspaceCache.delete(slug);
+      await publishWorkspaces(env);
       return Response.json(info);
     }
     if (path === "/api/settings/members" && request.method === "POST") {
       if (!admin) return adminOnly();
       const role = body.role === null ? null : (String(body.role) as WorkspaceRole);
       const target = String(body.email ?? "").trim().toLowerCase();
+      const existed = (await hub.members()).some((m) => m.email === target);
       const members = await hub.setMember(target, role, email);
       if (role === null) await revokeGrants(env, url.origin, slug, target, hub);
-      return Response.json({ members });
+      const emailed = role !== null && !existed && (await invite(env, hub, target, { workspace: name, url: url.origin, by: email, role }));
+      return Response.json({ members, existed, emailed });
     }
     if (path === "/api/settings/tokens" && request.method === "POST") {
       return Response.json(await hub.createToken(email, String(body.label ?? "")));
@@ -799,7 +920,7 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
   if (request.method !== "GET" && !sameOrigin(request, url)) return Response.json({ error: "bad origin" }, { status: 403 });
   try {
     if (url.pathname === "/api/me" && request.method === "GET") {
-      return Response.json({ email, watches: await hub.watches(email), account: `${apexOrigin(env)}/me` });
+      return Response.json({ email, workspace: { name: (await hub.access(null)).name }, watches: await hub.watches(email), account: `${apexOrigin(env)}/me` });
     }
     if (url.pathname === "/api/me/watch" && request.method === "POST") {
       const body = await jsonBody(request);
@@ -849,6 +970,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
     const m = /^\/api\/me\/channels\/([a-z0-9]+)(\/test)?$/.exec(url.pathname);
     if (m && request.method === "DELETE" && !m[2]) return Response.json({ removed: await dir.removeChannel(email, m[1]) });
     if (m && request.method === "POST" && m[2]) {
+      await dir.allowChannelTest(email);
       const channel = await dir.channelConfig(email, m[1]);
       if (!channel) return Response.json({ error: "not found" }, { status: 404 });
       const result = await sendToChannel(
@@ -887,7 +1009,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
  * The last two exist for end-to-end checks and only accept test addresses
  * (example.com/.org/.net, .test, .invalid), so they can't act as a real person.
  */
-async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer): Promise<Response> {
+async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer, ctx: ExecutionContext): Promise<Response> {
   const auth = request.headers.get("Authorization") ?? "";
   const bearer = auth.startsWith("Bearer ") && Boolean(env.OPERATOR_TOKEN) && timingSafeEqual(auth.slice(7), env.OPERATOR_TOKEN);
   const session = viewer.email !== null && operatorEmails(env).has(viewer.email) && (request.method === "GET" || sameOrigin(request, url));
@@ -904,7 +1026,14 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer)
       return Response.json({ cookie: `${SESSION_COOKIE}=${await signToken(env.SESSION_SECRET, "session", 3600, { e: email, h: host })}` });
     }
     if (path === "/api/admin/workspaces" && request.method === "GET") {
-      return Response.json({ workspaces: (await dir.workspaces()).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) })) });
+      const all = await dir.workspaces();
+      const jobs = await Promise.all(all.map((w) => Promise.resolve().then(() => workspaceHub(env, w.slug).job()).catch(() => null)));
+      return Response.json({
+        workspaces: all.map((w, i) => {
+          const job = jobs[i];
+          return { ...w, url: workspaceOrigin(env, w.slug), job: job ? { kind: job.kind, phase: job.phase, error: job.error, startedAt: job.startedAt } : null };
+        }),
+      });
     }
     if (path === "/api/admin/workspaces" && request.method === "POST") {
       const body = await jsonBody(request);
@@ -918,15 +1047,17 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer)
         await dir.removeWorkspace(slug);
         throw err;
       }
-      workspaceCache.delete(slug);
-      return Response.json({ workspace: { ...record, url: workspaceOrigin(env, slug) } });
+      await publishWorkspaces(env);
+      const origin = workspaceOrigin(env, slug);
+      const emailed = await invite(env, workspaceHub(env, slug), admin, { workspace: record.name, url: origin, by: null, role: "admin" });
+      return Response.json({ workspace: { ...record, url: origin }, emailed });
     }
     // The directory's own data: names, channels, memberships and the workspace list.
     const d = /^\/api\/admin\/directory\/([a-z]+)$/.exec(path);
     if (d) {
       const body = request.method === "POST" ? await jsonBody(request) : {};
       const done = await snapshotAction(dir, d[1], request.method, url, body);
-      workspaceCache.clear();
+      if (d[1] === "restore" || (d[1] === "import" && body.step === "end")) await publishWorkspaces(env);
       return done ?? Response.json({ error: "not found" }, { status: 404 });
     }
     const m = /^\/api\/admin\/workspaces\/([a-z0-9-]+)(?:\/([a-z]+))?$/.exec(path);
@@ -935,17 +1066,36 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer)
     if (!(await dir.workspace(slug))) return Response.json({ error: `no workspace ${slug}` }, { status: 404 });
     const hub = workspaceHub(env, slug);
     const body = request.method === "POST" ? await jsonBody(request) : {};
-    workspaceCache.delete(slug);
     if (!action && request.method === "POST") {
-      if (typeof body.suspended === "boolean") await dir.setSuspended(slug, body.suspended);
+      if (typeof body.suspended === "boolean") {
+        await dir.setSuspended(slug, body.suspended);
+        // Open pages reconnect and meet the suspended page.
+        if (body.suspended) await hub.closeSockets();
+        await publishWorkspaces(env);
+      }
       return Response.json({ workspace: await dir.workspace(slug) });
     }
     if (!action && request.method === "DELETE") {
-      // Agents' OAuth grants live outside the workspace; end them first.
-      for (const m of await hub.members()) await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email, hub);
-      await hub.destroy();
+      // Gone from routing first, then agents' OAuth grants (they live outside the workspace), then the data.
       await dir.removeWorkspace(slug);
+      await publishWorkspaces(env);
+      for (const m of await hub.members().catch(() => [])) await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email, hub);
+      await hub.destroy();
       return Response.json({ deleted: slug });
+    }
+    // Fix the admins without a role inside the workspace: say, a mistyped first admin.
+    if (action === "members" && request.method === "POST") {
+      const target = String(body.email ?? "").trim().toLowerCase();
+      const role = body.role === null ? null : (String(body.role) as WorkspaceRole);
+      const existed = (await hub.members()).some((m) => m.email === target);
+      const members = await hub.setMember(target, role, null);
+      if (role === null) await revokeGrants(env, workspaceOrigin(env, slug), slug, target, hub);
+      const emailed = role !== null && !existed && (await invite(env, hub, target, { workspace: (await hub.access(null)).name, url: workspaceOrigin(env, slug), by: null, role }));
+      return Response.json({ members, emailed });
+    }
+    if (action === "job" && request.method === "DELETE") {
+      await hub.cancelJob();
+      return Response.json({ cancelled: true });
     }
     if (action === "stats" && request.method === "POST") {
       const stats = await hub.stats();
@@ -965,10 +1115,11 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer)
   return Response.json({ error: "not found" }, { status: 404 });
 }
 
-type Snapshots = Pick<HubApi, "exportPage" | "importRows" | "backup" | "backups"> & {
+type Snapshots = Pick<HubApi, "exportPage" | "importRows" | "backups"> & {
   importBegin(): Promise<unknown>;
   importEnd(): Promise<unknown>;
-  restore(date: string): Promise<unknown>;
+  backup(): Promise<unknown>;
+  restore(run: string): Promise<unknown>;
 };
 
 /** Export, import and backup actions, the same for a workspace and the directory. Null when `action` isn't one. */
@@ -985,9 +1136,15 @@ async function snapshotAction(store: Snapshots, action: string, method: string, 
     if (body.step === "end") return Response.json({ done: await store.importEnd() });
     return Response.json({ error: "step must be begin, rows or end" }, { status: 400 });
   }
-  if (action === "backups" && method === "GET") return Response.json({ dates: await store.backups() });
-  if (action === "backup" && method === "POST") return Response.json({ prefix: await store.backup() });
-  if (action === "restore" && method === "POST") return Response.json({ done: await store.restore(String(body.date ?? "")) });
+  if (action === "backups" && method === "GET") return Response.json({ runs: await store.backups() });
+  if (action === "backup" && method === "POST") {
+    const r = await store.backup();
+    return Response.json(typeof r === "string" ? { prefix: r } : (r ?? { error: "no backup bucket" }));
+  }
+  if (action === "restore" && method === "POST") {
+    const r = await store.restore(String(body.run ?? ""));
+    return Response.json(r && typeof r === "object" && "queued" in r ? r : { done: r });
+  }
   return null;
 }
 

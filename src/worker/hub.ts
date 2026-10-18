@@ -14,7 +14,7 @@ import { migrate, type Migration } from "./migrate.ts";
 import { randomId, type DirectoryApi, type WorkspaceRole, type WorkspaceStats } from "./directory.ts";
 import { b64url } from "./session.ts";
 import { DATA_TABLES } from "./tables.ts";
-import { backupDates, clearTables, deletePrefix, exportPage, fromB64, importRows, nextBackupAt, readBackup, SNAPSHOT_MAX_BYTES, toB64, writeBackup, type Page } from "./snapshot.ts";
+import { backupRuns, clearTables, deletePrefix, exportPage, fromB64, importRows, newRun, nextBackupAt, pruneBackups, startBackup, startRestore, stepBackup, stepRestore, toB64, unknownColumn, type BackupCursor, type Page, type RestoreCursor } from "./snapshot.ts";
 import {
   SHARED_STATE_MAX_BYTES,
   SHARED_VALUE_MAX_BYTES,
@@ -52,7 +52,7 @@ export type Actor = string;
 /** `email` is a full address, "@domain" for everyone at that domain, or "workspace" for every member. */
 export type ShareEntry = { email: string; role: Exclude<Role, "owner"> };
 
-export type Member = { email: string; role: WorkspaceRole; addedAt: string; addedBy: string | null };
+export type Member = { email: string; role: WorkspaceRole; addedAt: string; addedBy: string | null; lastSeenAt: string | null };
 
 export type AgentToken = { id: string; email: string; label: string; createdAt: string; lastUsedAt: string | null };
 
@@ -61,6 +61,13 @@ export type WriteResult =
   | { ok: false; errors: CompileError[]; version?: number };
 
 export class HubError extends Error {}
+
+type JobBase = { startedAt: string; phase?: string; error?: string; retryAt?: string; tries?: number };
+type BackupJob = JobBase & { kind: "backup"; cursor: BackupCursor };
+type RestoreJob = JobBase & { kind: "restore"; run: string; cursor: RestoreCursor | null };
+type ImportJob = JobBase & { kind: "import" };
+export type Job = BackupJob | RestoreJob | ImportJob;
+type QueuedJob = { kind: "backup" } | { kind: "restore"; run: string };
 
 export type HubEnv = CheckEnv &
   NotifyEnv & {
@@ -78,11 +85,11 @@ export type HubApi = AsyncMethods<
   Pick<
     Workspace,
     | "provision" | "access" | "info" | "rename" | "stats" | "destroy" | "members" | "setMember" | "createToken" | "tokens"
-    | "revokeToken" | "verifyAgentToken" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
+    | "revokeToken" | "verifyAgentToken" | "signedIn" | "closeSockets" | "allowMail" | "indexData" | "openArtifact" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
-    | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "threads" | "addComment"
+    | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "cancelJob" | "threads" | "addComment"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "previewInfo" | "previewImage" | "watches" | "setWatch"
   >
 > & { fetch(request: Request): Promise<Response> };
@@ -92,6 +99,7 @@ type SocketTag = { id: string; email: string | null; role: Role; origin?: string
 const HISTORY_KEEP = 50;
 const ASSETS_MAX_BYTES = 20 * 1024 * 1024;
 const SOURCE_MAX_BYTES = 1024 * 1024;
+const SOURCES_PER_RUN = 20;
 const EVENTS_KEEP = 5000;
 const COMMENT_MAX_CHARS = 5000;
 const ANCHOR_MAX_BYTES = 2048;
@@ -108,7 +116,11 @@ const CHECK_SPACING_MS = 1_000;
 const CHECK_INLINE_WAIT_MS = 8_000;
 const ERRORS_KEEP = 30;
 const BACKUPS_KEEP = 30;
+/** How long one alarm spends on a backup or restore before yielding. */
+const JOB_STEP_MS = 10_000;
 const TOKEN_TOUCH_MS = 3600_000;
+/** Invitations and "shared with you" emails a workspace may send per day. */
+const MAIL_PER_DAY = 200;
 
 /** Tables keyed by artifact, cleared when an artifact is deleted. */
 const ARTIFACT_TABLES = [
@@ -180,6 +192,18 @@ const MIGRATIONS: Migration[] = [
   // OAuth grants, mirrored here so settings can list and revoke them at once
   // (the OAuth library's own list reads KV, which lags by up to a minute).
   (sql) => sql.exec(`CREATE TABLE grants (id TEXT PRIMARY KEY, email TEXT NOT NULL, client TEXT NOT NULL, created_at TEXT NOT NULL)`),
+  // Indexes for the queries notifications, deletes and threads run, and when each member last signed in.
+  (sql) =>
+    sql.exec(`
+      CREATE INDEX watches_by_artifact ON watches (artifact_id, level);
+      CREATE INDEX outbox_by_due ON outbox (due_at);
+      CREATE INDEX outbox_by_person ON outbox (email, artifact_id, kind);
+      CREATE INDEX outbox_by_artifact ON outbox (artifact_id);
+      CREATE INDEX errors_by_artifact ON errors (artifact_id, at);
+      CREATE INDEX comments_by_thread ON comments (thread_id, seq);
+      CREATE INDEX seen_by_artifact ON seen (artifact_id);
+      ALTER TABLE members ADD COLUMN last_seen_at TEXT;
+    `),
 ];
 
 export class Workspace extends DurableObject {
@@ -192,8 +216,13 @@ export class Workspace extends DurableObject {
     super(ctx, env as never);
     this.hubEnv = env;
     this.sql = ctx.storage.sql;
-    migrate(ctx.storage, MIGRATIONS);
+    // Only a provisioned workspace has tables. An object woken for a slug that
+    // doesn't exist (or was just deleted) stays empty and stores nothing.
+    this.ready = ctx.storage.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = '_schema'`).toArray().length > 0;
+    if (this.ready) migrate(ctx.storage, MIGRATIONS);
   }
+
+  private ready: boolean;
 
   private directory(): DirectoryApi {
     return this.hubEnv.DIRECTORY.getByName("directory") as unknown as DirectoryApi;
@@ -212,6 +241,10 @@ export class Workspace extends DurableObject {
 
   /** First-time setup by the operator: name the workspace and add its first admin. */
   async provision(input: { slug: string; name: string; admin: string }) {
+    if (!this.ready) {
+      migrate(this.ctx.storage, MIGRATIONS);
+      this.ready = true;
+    }
     const existing = this.setting("slug");
     if (existing && existing !== input.slug) throw new HubError(`this object already belongs to ${existing}`);
     this.setSetting("slug", input.slug);
@@ -222,6 +255,7 @@ export class Workspace extends DurableObject {
   }
 
   info(): { slug: string; name: string; createdAt: string | null } {
+    if (!this.ready) return { slug: "", name: "", createdAt: null };
     const slug = this.setting("slug") ?? "";
     return { slug, name: this.setting("name") ?? slug, createdAt: this.setting("created_at") };
   }
@@ -235,9 +269,12 @@ export class Workspace extends DurableObject {
   }
 
   /** What the Worker needs per request: the workspace and this person's membership. */
-  access(email: string | null): { slug: string; name: string; member: WorkspaceRole | null } {
+  access(email: string | null, origin?: string): { slug: string; name: string; member: WorkspaceRole | null; offline: boolean } {
     const { slug, name } = this.info();
-    return { slug, name, member: email ? this.memberRole(email) : null };
+    if (!this.ready) return { slug, name, member: null, offline: false };
+    // Remembered for notifications queued by work that had no request (the alarm, imports).
+    if (origin && slug && this.setting("origin") !== origin) this.setSetting("origin", origin);
+    return { slug, name, member: email ? this.memberRole(email) : null, offline: this.offline() };
   }
 
   stats(): WorkspaceStats {
@@ -251,12 +288,16 @@ export class Workspace extends DurableObject {
 
   /** Deletes everything this workspace stores, including its backups. */
   async destroy() {
+    // Marked first, so an alarm or a backup that runs during the awaits below does nothing.
+    this.setSetting("destroyed", new Date().toISOString());
     for (const ws of this.ctx.getWebSockets()) ws.close(4004, "workspace deleted");
     const slug = this.info().slug;
+    await this.ctx.storage.deleteAlarm();
     const bucket = this.hubEnv.BACKUPS;
     if (bucket && slug) await deletePrefix(bucket, `${slug}/`);
-    await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
+    // No tables any more: this instance now answers as a workspace that doesn't exist.
+    this.ready = false;
   }
 
   // ---- members and agent tokens ----------------------------------------------------
@@ -269,7 +310,13 @@ export class Workspace extends DurableObject {
     return this.sql
       .exec(`SELECT * FROM members ORDER BY role, email`)
       .toArray()
-      .map((r) => ({ email: r.email as string, role: r.role as WorkspaceRole, addedAt: r.added_at as string, addedBy: (r.added_by as string | null) ?? null }));
+      .map((r) => ({
+        email: r.email as string,
+        role: r.role as WorkspaceRole,
+        addedAt: r.added_at as string,
+        addedBy: (r.added_by as string | null) ?? null,
+        lastSeenAt: (r.last_seen_at as string | null) ?? null,
+      }));
   }
 
   /** Add, change or (role null) remove a member. The last admin can't be removed or demoted. */
@@ -306,6 +353,21 @@ export class Workspace extends DurableObject {
     for (const ws of this.ctx.getWebSockets()) if ((ws.deserializeAttachment() as SocketTag).email === clean) ws.close(4003, "access changed");
     await this.directory().setMembership(this.info().slug, clean, role);
     return this.members();
+  }
+
+  /** Take `n` from today's email quota (invitations and share emails); false when it's used up. */
+  allowMail(n: number): boolean {
+    const day = new Date().toISOString().slice(0, 10);
+    const used = JSON.parse(this.setting("mail_sent") ?? "{}") as { day?: string; n?: number };
+    const count = used.day === day ? (used.n ?? 0) : 0;
+    if (count + n > MAIL_PER_DAY) return false;
+    this.setSetting("mail_sent", JSON.stringify({ day, n: count + n }));
+    return true;
+  }
+
+  /** Someone signed in here: note it for members ("hasn't signed in yet"); returns whether they're a member. */
+  signedIn(email: string): boolean {
+    return this.sql.exec(`UPDATE members SET last_seen_at = ? WHERE email = ?`, new Date().toISOString(), email).rowsWritten > 0;
   }
 
   /** A new personal agent token. The plain token is returned only here. */
@@ -654,14 +716,9 @@ export class Workspace extends DurableObject {
       if (input.public !== undefined) this.sql.exec(`UPDATE artifacts SET public = ? WHERE id = ?`, input.public ? 1 : 0, id);
     });
     this.markDirty();
-    // Drop live sockets that may have lost access; they reconnect and are re-checked.
-    const touched = new Set([...(input.remove ?? []), ...(input.add ?? []).map((s) => s.email)].map(sharePrincipal));
-    for (const ws of this.ctx.getWebSockets(id)) {
-      const tag = ws.deserializeAttachment() as SocketTag;
-      const affected =
-        tag.email !== null && (touched.has(tag.email) || touched.has(domainOf(tag.email)) || touched.has(WORKSPACE_PRINCIPAL));
-      if (affected || (input.public === false && !tag.email)) ws.close(4003, "access changed");
-    }
+    // Every open page reconnects and is checked against the new sharing; working
+    // out exactly who lost access (public, domain, workspace, role changes) isn't worth the risk.
+    this.closeSockets(id);
     return this.meta(id);
   }
 
@@ -813,23 +870,43 @@ export class Workspace extends DurableObject {
     }
   }
 
+  /** Each step on its own, so one failing (say, the directory being down) doesn't starve the rest. */
   private async runDue() {
-    const next = this.sql.exec(`SELECT artifact_id, origin FROM checks WHERE status = 'queued' ORDER BY at LIMIT 1`).toArray()[0];
-    if (next && Date.now() >= this.nextCheckAt) {
+    if (!this.ready || this.setting("destroyed")) return;
+    const step = async (name: string, fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+      } catch (err) {
+        console.error(`alarm ${name} failed`, err);
+      }
+    };
+    await step("jobs", () => this.stepJobs(Date.now() + JOB_STEP_MS));
+    // Nothing else touches data while a restore or import replaces it.
+    if (this.offline()) return;
+    const backupAt = Number(this.setting("backup_due_at") ?? NaN);
+    if (backupAt <= Date.now() && !this.job()) this.queueJobs([{ kind: "backup" }]);
+    await step("render check", async () => {
+      const next = this.sql.exec(`SELECT artifact_id, origin FROM checks WHERE status = 'queued' ORDER BY at LIMIT 1`).toArray()[0];
+      if (!next || Date.now() < this.nextCheckAt) return;
       const id = next.artifact_id as string;
       const row = this.sql.exec(`SELECT version FROM artifacts WHERE id = ?`, id).toArray()[0];
-      if (!row) {
-        this.sql.exec(`DELETE FROM checks WHERE artifact_id = ?`, id);
-      } else {
+      if (!row) this.sql.exec(`DELETE FROM checks WHERE artifact_id = ?`, id);
+      else {
         this.nextCheckAt = Date.now() + CHECK_SPACING_MS;
         await this.runCheck(id, row.version as number, next.origin as string);
       }
-    }
-    await this.deliverDue();
-    const sourcesAt = this.nextSourceAt();
-    if (sourcesAt !== null && sourcesAt <= Date.now()) await this.refreshSources();
-    const backupAt = Number(this.setting("backup_due_at") ?? NaN);
-    if (backupAt <= Date.now()) await this.backup();
+    });
+    await step("notifications", () => this.deliverDue());
+    await step("sources", async () => {
+      const sourcesAt = this.nextSourceAt();
+      if (sourcesAt !== null && sourcesAt <= Date.now()) await this.refreshSources();
+    });
+  }
+
+  /** A restore or a scripted import is replacing the data: no requests or alarm work until it's done. */
+  private offline(): boolean {
+    const kind = this.job()?.kind;
+    return kind === "restore" || kind === "import";
   }
 
   /**
@@ -837,6 +914,7 @@ export class Workspace extends DurableObject {
    * notification, due live data source and pending backup.
    */
   private async armAlarm() {
+    if (!this.ready) return;
     const times: number[] = [];
     const queued = this.sql.exec(`SELECT COUNT(*) AS n FROM checks WHERE status = 'queued'`).one().n as number;
     if (queued > 0) times.push(Math.max(Date.now() + CHECK_SPACING_MS, this.nextCheckAt));
@@ -846,6 +924,9 @@ export class Workspace extends DurableObject {
     if (source !== null) times.push(source);
     const backup = this.setting("backup_due_at");
     if (backup) times.push(Number(backup));
+    const job = this.job();
+    if (job && job.kind !== "import") times.push(job.retryAt ? Date.parse(job.retryAt) : Date.now());
+    else if (!job && this.setting("jobs_next")) times.push(Date.now());
     if (!times.length) return;
     const at = Math.max(Math.min(...times), Date.now() + 1000);
     const existing = await this.ctx.storage.getAlarm();
@@ -862,7 +943,8 @@ export class Workspace extends DurableObject {
     this.sql.exec(
       `INSERT INTO checks (artifact_id, version, origin, status, result, screenshot, at) VALUES (?, ?, ?, 'done', ?, ?, ?)
        ON CONFLICT (artifact_id) DO UPDATE SET version = excluded.version, origin = excluded.origin,
-         status = 'done', result = excluded.result, screenshot = excluded.screenshot, at = excluded.at`,
+         status = 'done', result = excluded.result, screenshot = excluded.screenshot, at = excluded.at
+       WHERE checks.version <= excluded.version`,
       id,
       version,
       origin,
@@ -1010,7 +1092,8 @@ export class Workspace extends DurableObject {
       return now - last >= (r.every_minutes as number) * 60_000 - 60_000;
     });
     const results: SourceInfo[] = [];
-    for (const r of rows) {
+    // A bounded number per alarm run; the rest are still due on the next one.
+    for (const r of only ? rows : rows.slice(0, SOURCES_PER_RUN)) {
       const info = toSource(r, allowed);
       if (!info.approved) {
         results.push(info);
@@ -1019,7 +1102,7 @@ export class Workspace extends DurableObject {
       let status = "ok";
       let error: string | null = null;
       try {
-        const value = await fetchSource(info.url, info.pick);
+        const value = await fetchSource(info.url, info.pick, allowed);
         await this.replaceDataFile(info.id, info.path, `${JSON.stringify(value, null, 2)}\n`);
       } catch (err) {
         status = "error";
@@ -1041,13 +1124,25 @@ export class Workspace extends DurableObject {
 
   /** Swap one data file's content and rebuild, without a new version or history entry. */
   private async replaceDataFile(id: string, path: string, content: string) {
+    const hash = await sha256Hex(content);
+    const current = this.sql.exec(`SELECT hash FROM files WHERE artifact_id = ? AND path = ?`, id, path).toArray()[0];
+    // The data didn't change: nothing to do.
+    if (current?.hash === hash) return;
+    const version = this.requireArtifact(id).version as number;
     const files = this.files(id);
     files[path] = content;
     const { build, errors } = await buildArtifact(files);
     if (!build) throw new Error(errors.map((e) => e.message).join("; "));
-    const hash = await sha256Hex(content);
-    const version = this.requireArtifact(id).version as number;
+    let raced = false;
     this.ctx.storage.transactionSync(() => {
+      // An edit committed while this compiled: its build is newer, so this refresh waits for next time.
+      const now = this.sql.exec(`SELECT version FROM artifacts WHERE id = ?`, id).toArray()[0];
+      const still = this.sql.exec(`SELECT hash FROM files WHERE artifact_id = ? AND path = ?`, id, path).toArray()[0];
+      // ...or an edit deleted the file this refreshes.
+      if (!now || now.version !== version || Boolean(still) !== Boolean(current)) {
+        raced = true;
+        return;
+      }
       this.sql.exec(`INSERT OR IGNORE INTO blobs (artifact_id, hash, content) VALUES (?, ?, ?)`, id, hash, content);
       this.sql.exec(
         `INSERT INTO files (artifact_id, path, hash) VALUES (?, ?, ?) ON CONFLICT (artifact_id, path) DO UPDATE SET hash = excluded.hash`,
@@ -1058,88 +1153,215 @@ export class Workspace extends DurableObject {
       this.sql.exec(`UPDATE builds SET build = ?, version = ? WHERE artifact_id = ?`, JSON.stringify(build), version, id);
       this.collectBlobs(id);
     });
+    if (raced) throw new Error("the artifact changed while refreshing; retrying next time");
     this.touch(id);
   }
 
   // ---- owner overview ------------------------------------------------------------
 
+  /** Everything the index page needs, in one call: membership, the list, and sharing for what you manage. */
+  indexData(email: string) {
+    const artifacts = this.list(email);
+    return { member: this.memberRole(email), artifacts, summaries: this.shareSummaries(email, artifacts) };
+  }
+
+  /**
+   * Everything the artifact page needs, in one call. `scoped` is a
+   * presigned-link session: it gets the page but never its management.
+   */
+  openArtifact(id: string, email: string | null, scoped: boolean) {
+    const full = this.roleFor(id, email);
+    const role: Role | null = full === "owner" && scoped ? "edit" : full;
+    if (!role) return { role: null };
+    const meta = this.meta(id)!;
+    const member = email ? this.memberRole(email) : null;
+    return { role, meta, member, visit: email ? this.visit(id, email) : null };
+  }
+
   /** Sharing summary per artifact, for the people who manage them on the index. */
-  shareSummaries(email: string): Record<string, { shares: ShareEntry[]; public: boolean }> {
+  shareSummaries(email: string, listed = this.list(email)): Record<string, { shares: ShareEntry[]; public: boolean }> {
     const out: Record<string, { shares: ShareEntry[]; public: boolean }> = {};
-    for (const a of this.list(email)) if (a.role === "owner") out[a.id] = { shares: [], public: a.public };
+    for (const a of listed) if (a.role === "owner") out[a.id] = { shares: [], public: a.public };
     for (const s of this.sql.exec(`SELECT artifact_id, email, role FROM shares ORDER BY email`)) {
       out[s.artifact_id as string]?.shares.push({ email: s.email as string, role: s.role as ShareEntry["role"] });
     }
     return out;
   }
 
-  // ---- export, import and backups --------------------------------------------------
+  // ---- export, import, backups and restores ----------------------------------------
+  //
+  // Backups and restores run as jobs on the alarm, in steps of a few seconds,
+  // so their size is never limited by one invocation; the job and its cursor
+  // live in settings. A restore first checks every page of the backup against
+  // the schema, then clears and loads; it is queued behind a fresh backup, and
+  // the workspace is offline (see access()) while it or a scripted import runs.
 
   /** One bounded page of a table after the given rowid (see snapshot.ts). */
   exportPage(table: string, after = 0): Page {
     return exportPage(this.sql, DATA_TABLES, table, after);
   }
 
-  /** Start replacing every data table (members included) with imported rows. */
+  /** Start replacing every data table (members included) with rows from importRows. The workspace is offline until importEnd. */
   importBegin() {
+    if (this.job()?.kind === "restore") throw new HubError("a restore is running; cancel it first");
+    this.setJob({ kind: "import", startedAt: new Date().toISOString() });
+    this.setSetting("jobs_next", null);
+    this.clearData();
+  }
+
+  importRows(table: string, rows: Record<string, unknown>[]): number {
+    if (this.job()?.kind !== "import") throw new HubError("call importBegin first");
+    return importRows(this.ctx.storage, DATA_TABLES, table, rows);
+  }
+
+  async importEnd() {
+    if (this.job()?.kind !== "import") throw new HubError("no import is running");
+    await this.afterLoad();
+    this.setJob(null);
+    return this.stats();
+  }
+
+  /** Queue a backup now. It runs on the alarm; job() shows its progress. */
+  async backup(): Promise<{ queued: true } | null> {
+    if (!this.hubEnv.BACKUPS || !this.info().slug) return null;
+    this.queueJobs([{ kind: "backup" }]);
+    await this.armAlarm();
+    return { queued: true };
+  }
+
+  /** Complete backup runs, newest first. */
+  async backups(): Promise<string[]> {
+    const slug = this.info().slug;
+    return this.hubEnv.BACKUPS && slug ? backupRuns(this.hubEnv.BACKUPS, slug) : [];
+  }
+
+  /** Queue a fresh backup, then a restore of `run`. */
+  async restore(run: string): Promise<{ queued: true }> {
+    const bucket = this.hubEnv.BACKUPS;
+    const slug = this.info().slug;
+    if (!bucket) throw new HubError("no backup bucket is bound");
+    if (!(await bucket.head(`${slug}/${run}/manifest.json`))) throw new HubError(`no complete backup ${run}`);
+    this.queueJobs([{ kind: "backup" }, { kind: "restore", run }]);
+    await this.armAlarm();
+    return { queued: true };
+  }
+
+  /** The running job, if any (for the operator console). */
+  job(): Job | null {
+    if (!this.ready) return null;
+    const raw = this.setting("job");
+    return raw ? (JSON.parse(raw) as Job) : null;
+  }
+
+  /** Drop the running and queued jobs. A restore cancelled mid-load leaves what it had loaded. */
+  cancelJob() {
+    this.setJob(null);
+    this.setSetting("jobs_next", null);
+  }
+
+  private setJob(job: Job | null) {
+    this.setSetting("job", job ? JSON.stringify(job) : null);
+  }
+
+  private queueJobs(jobs: QueuedJob[]) {
+    const queue = JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[];
+    for (const j of jobs) {
+      // One pending backup is enough.
+      if (j.kind === "backup" && queue.some((q) => q.kind === "backup") && jobs.length === 1) continue;
+      queue.push(j);
+    }
+    this.setSetting("jobs_next", JSON.stringify(queue));
+  }
+
+  /** Run the current job (starting the next queued one) until it finishes or `deadline` passes. */
+  private async stepJobs(deadline: number) {
+    const bucket = this.hubEnv.BACKUPS;
+    const slug = this.info().slug;
+    let job = this.job();
+    if (job?.kind === "import") return;
+    if (job?.retryAt && Date.parse(job.retryAt) > Date.now()) return;
+    if (!job) {
+      const queue = JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[];
+      const next = queue.shift();
+      if (!next) return;
+      this.setSetting("jobs_next", queue.length ? JSON.stringify(queue) : null);
+      const startedAt = new Date().toISOString();
+      job = next.kind === "backup" ? { kind: "backup", startedAt, cursor: startBackup(this.nextRun()) } : { kind: "restore", startedAt, run: next.run, cursor: null };
+      this.setJob(job);
+      if (job.kind === "backup") {
+        // This backup covers everything so far; later writes schedule the next.
+        this.setSetting("backup_due_at", null);
+        this.dirty = false;
+      }
+    }
+    if (!bucket || !slug) return this.setJob(null);
+    try {
+      if (job.kind === "backup") {
+        const r = await stepBackup(bucket, slug, DATA_TABLES, (t, after) => this.exportPage(t, after), job.cursor, this.schemaVersion(), deadline);
+        if ("next" in r) return this.setJob({ ...job, cursor: r.next, phase: `${DATA_TABLES[r.next.table] ?? "finishing"}`, error: undefined });
+        this.setJob(null);
+        await pruneBackups(bucket, slug, BACKUPS_KEEP);
+        await this.directory().recordStats(slug, this.stats(), this.info().name);
+        return;
+      }
+      const cursor = job.cursor ?? (await startRestore(bucket, slug, job.run, DATA_TABLES, this.schemaVersion()));
+      const next = await stepRestore(bucket, cursor, deadline, {
+        check: (table, rows) => {
+          if (!DATA_TABLES.includes(table)) throw new Error(`backup has an unknown table ${table}`);
+          const bad = unknownColumn(this.sql, table, rows);
+          if (bad) throw new Error(`backup ${job!.kind === "restore" ? (job as RestoreJob).run : ""}: ${table} has a column this version doesn't (${bad})`);
+        },
+        begin: () => this.clearData(),
+        load: (table, rows) => importRows(this.ctx.storage, DATA_TABLES, table, rows),
+      });
+      if (next) return this.setJob({ ...job, cursor: next, phase: `${next.phase} ${next.index}/${next.keys.length}`, error: undefined });
+      await this.afterLoad();
+      this.setJob(null);
+    } catch (err) {
+      const message = (err as Error).message.slice(0, 300);
+      const restoring = job.kind === "restore";
+      // Nothing was changed yet: a failed check or a failed backup just ends the job.
+      if (job.kind === "backup" || (restoring && (!job.cursor || job.cursor.phase === "validate"))) {
+        const tries = (job.tries ?? 0) + 1;
+        if (job.kind === "backup" && tries < 6) return this.setJob({ ...job, tries, error: message, retryAt: new Date(Date.now() + tries * 600_000).toISOString() });
+        this.setJob(null);
+        this.setSetting("last_job_error", `${job.kind}: ${message}`);
+        // Drop a restore that was queued behind this backup: it was meant to follow a good backup.
+        if (job.kind === "backup") this.setSetting("jobs_next", null);
+        return;
+      }
+      // Mid-load: stay offline with the error until the operator retries or cancels.
+      this.setJob({ ...job, error: message, retryAt: new Date(Date.now() + 3600_000).toISOString() });
+    }
+  }
+
+  /** A run id later than any before it here, even for two backups in the same millisecond. */
+  private nextRun(): string {
+    const last = this.setting("last_run");
+    let at = Date.now();
+    while (last && newRun(new Date(at)) <= last) at++;
+    const run = newRun(new Date(at));
+    this.setSetting("last_run", run);
+    return run;
+  }
+
+  private schemaVersion(): number {
+    return this.sql.exec(`SELECT version FROM _schema`).one().version as number;
+  }
+
+  private clearData() {
     for (const ws of this.ctx.getWebSockets()) ws.close(4003, "data restored");
     clearTables(this.ctx.storage, DATA_TABLES);
   }
 
-  importRows(table: string, rows: Record<string, unknown>[]): number {
-    return importRows(this.ctx.storage, DATA_TABLES, table, rows);
-  }
-
-  /** Finish an import: mirror the members to the directory and re-arm the alarm. */
-  async importEnd() {
+  /** After a restore or import: mirror the members, report stats, and back up the new state tonight. */
+  private async afterLoad() {
     const { slug, name } = this.info();
     const directory = this.directory();
     await directory.replaceMemberships(slug, this.members());
     await directory.recordStats(slug, this.stats(), name);
-    this.markDirty();
-    await this.armAlarm();
-    return this.stats();
-  }
-
-  /** Writes a backup to R2 under <slug>/<date>/ and keeps the newest 30 days. */
-  async backup(): Promise<string | null> {
-    const bucket = this.hubEnv.BACKUPS;
-    const { slug, name } = this.info();
-    if (!bucket || !slug) return null;
-    // Cleared first so writes during the backup schedule the next one; put back if it fails.
-    const due = this.setting("backup_due_at");
-    this.setSetting("backup_due_at", null);
     this.dirty = false;
-    let prefix: string;
-    try {
-      prefix = await writeBackup(bucket, slug, DATA_TABLES, (t, after) => this.exportPage(t, after), BACKUPS_KEEP, this.sql.databaseSize <= SNAPSHOT_MAX_BYTES);
-    } catch (err) {
-      // Try again in an hour (the alarm re-arms whatever happens).
-      this.setSetting("backup_due_at", String(Date.now() + 3600_000));
-      throw err;
-    }
-    await this.directory().recordStats(slug, this.stats(), name);
-    return prefix;
-  }
-
-  /** Dates with a complete backup, newest first. */
-  async backups(): Promise<string[]> {
-    const slug = this.info().slug;
-    return this.hubEnv.BACKUPS && slug ? backupDates(this.hubEnv.BACKUPS, slug) : [];
-  }
-
-  /** Replace everything with the backup from `date`, page by page. */
-  async restore(date: string) {
-    const bucket = this.hubEnv.BACKUPS;
-    const slug = this.info().slug;
-    if (!bucket) throw new HubError("no backup bucket is bound");
-    if (!(await bucket.head(`${slug}/${date}/manifest.json`))) throw new HubError(`no complete backup for ${date}`);
-    // Nothing else runs against a half-restored workspace.
-    return this.ctx.blockConcurrencyWhile(async () => {
-      this.importBegin();
-      await readBackup(bucket, slug, date, DATA_TABLES, (table, rows) => this.importRows(table, rows));
-      return this.importEnd();
-    });
+    this.markDirty();
   }
 
   /** Something worth backing up changed: schedule tonight's backup if none is pending. */
@@ -1596,12 +1818,14 @@ export class Workspace extends DurableObject {
       if (!this.canOpen(id, email)) continue;
       this.enqueue(email, id, "comment", { thread: c.thread, by: actor, text: c.text.slice(0, 300), why, reply: c.reply, origin: c.origin }, COMMENT_DELAY_MS);
     }
+    void this.armAlarm();
   }
 
   private notifyResolved(id: string, actor: Actor, thread: Thread, origin?: string, onBehalf?: string) {
     const author = thread.by;
     if (author === actor || author === onBehalf || !author.includes("@") || this.watchLevel(author, id) === "mute" || !this.canOpen(id, author)) return;
     this.enqueue(author, id, "resolve", { thread: thread.id, by: actor, addressedIn: thread.addressedIn ?? null, origin }, COMMENT_DELAY_MS);
+    void this.armAlarm();
   }
 
   /** Page updates reach "all" watchers, except whoever made them (or had their agent make them), batched over a quiet period. */
@@ -1636,7 +1860,6 @@ export class Workspace extends DurableObject {
       JSON.stringify(data),
       Date.now() + delayMs,
     );
-    void this.armAlarm();
   }
 
   /** Send due notifications, one message per person and artifact, skipping people who have the page open. */
@@ -1654,23 +1877,30 @@ export class Workspace extends DurableObject {
     const actors = due.map((r) => (JSON.parse(r.data as string) as { by?: string }).by).filter((b): b is string => Boolean(b?.includes("@")));
     const names = await directory.names(actors);
     let sends = 0;
-    for (const rows of groups.values()) {
-      const email = rows[0].email as string;
-      const id = rows[0].artifact_id as string;
+    const results: { id: string; result: { ok: boolean; error?: string; gone?: boolean } }[] = [];
+    for (const group of groups.values()) {
+      const email = group[0].email as string;
+      const id = group[0].artifact_id as string;
       const mine = channels[email] ?? [];
       if (sends + mine.length > SENDS_PER_ALARM && sends > 0) break;
-      for (const r of rows) this.sql.exec(`DELETE FROM outbox WHERE id = ?`, r.id);
+      // Claim the rows as they are now: an update coalesced into one of them
+      // during the awaits above (pushing it later) stays queued.
+      const rows = this.sql
+        .exec(`DELETE FROM outbox WHERE id IN (${group.map(() => "?").join(", ")}) AND due_at <= ? RETURNING *`, ...group.map((r) => r.id), now)
+        .toArray();
+      if (!rows.length) continue;
       const art = this.sql.exec(`SELECT title FROM artifacts WHERE id = ?`, id).toArray()[0];
       if (!art || !mine.length || this.isViewing(id, email) || !this.canOpen(id, email)) continue;
       const items: OutboxItem[] = rows.map((r) => ({ kind: r.kind as OutboxItem["kind"], data: JSON.parse(r.data as string) }));
-      const origin = items.map((i) => i.data.origin).find((o): o is string => typeof o === "string") ?? "";
+      const origin = items.map((i) => i.data.origin).find((o): o is string => typeof o === "string" && o !== "") ?? this.setting("origin") ?? "";
       const msg = composeMessage({ title: art.title as string, artifactId: id, origin, items, nameOf: (e) => names[e] ?? null });
       for (const c of mine) {
         sends++;
         const result = await sendToChannel(c.type, c.config, msg, this.hubEnv).catch((err: Error) => ({ ok: false as const, error: err.message }));
-        await directory.recordChannelResult(c.id, result);
+        results.push({ id: c.id, result });
       }
     }
+    if (results.length) await directory.recordChannelResults(results);
     return sends;
   }
 
@@ -1798,6 +2028,11 @@ export class Workspace extends DurableObject {
     }
   }
 
+  /** Close live sockets (one artifact's, or all) so they reconnect and are re-checked. */
+  closeSockets(id?: string, code = 4003, reason = "access changed") {
+    for (const ws of id ? this.ctx.getWebSockets(id) : this.ctx.getWebSockets()) ws.close(code, reason);
+  }
+
   private broadcastPresence(id: string, closing?: WebSocket) {
     const viewers = new Set<string>();
     for (const ws of this.ctx.getWebSockets(id)) {
@@ -1869,12 +2104,24 @@ function toSource(r: Record<string, SqlStorageValue>, allowed: Set<string>): Sou
 }
 
 /** GET a JSON document (no credentials, size- and time-limited) and optionally pick a dot path. */
-async function fetchSource(url: string, pick: string | null): Promise<JsonValue> {
-  const res = await fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": "Artifacts/1 (+https://github.com/micthiesen/artifacts)" },
-    redirect: "follow",
-    signal: AbortSignal.timeout(10_000),
-  });
+async function fetchSource(url: string, pick: string | null, allowed: Set<string>): Promise<JsonValue> {
+  // Redirects are followed by hand so every hop stays on an approved https host.
+  let target = url;
+  let res: Response | null = null;
+  for (let hop = 0; hop < 5; hop++) {
+    res = await fetch(target, {
+      headers: { Accept: "application/json", "User-Agent": "Artifacts/1 (+https://github.com/micthiesen/artifacts)" },
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+    });
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get("Location") : null;
+    if (!location) break;
+    const next = new URL(location, target);
+    if (next.protocol !== "https:" || !allowed.has(next.hostname.toLowerCase())) throw new Error(`redirected to ${next.hostname}, which isn't approved`);
+    target = next.href;
+    res = null;
+  }
+  if (!res) throw new Error("too many redirects");
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const text = await res.text();
   if (text.length > SOURCE_MAX_BYTES) throw new Error(`response is over ${SOURCE_MAX_BYTES / 1024} KB`);

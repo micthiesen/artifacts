@@ -40,8 +40,9 @@ wildcard DNS record, so deploy prod first.
 
 ## Operating
 
-- **Backups:** each workspace backs itself up to R2 at 10:00 UTC on days it changed, keeping 30. The operator console backs up or restores on demand.
-- **Off-Cloudflare copy:** `bun scripts/export.ts <slug>` writes `exports/<slug>-<time>.json`; `bun scripts/import.ts <slug> <file>` replaces that workspace's data with it.
+- **Backups:** each workspace backs itself up to R2 at 10:00 UTC on days it changed, keeping 30 runs, as a resumable job. The operator console starts a backup, or a restore (which backs up first and takes the workspace offline until it's loaded), and shows each job's progress.
+- **Off-Cloudflare copy:** `bun scripts/export.ts <slug|directory>` writes `exports/<slug>-<time>.json`; `bun scripts/import.ts <slug|directory> <file>` replaces that data with it (the workspace is offline while it loads).
+- **Fixing a workspace:** from `/admin`, add or replace its admins (say, a mistyped first admin) without a role inside it.
 - **Schema changes:** add a numbered migration (`src/worker/migrate.ts`); each workspace applies it the first time it wakes after the deploy.
 
 ## Checks

@@ -10,7 +10,7 @@ check("protected resource metadata names this workspace", prm.resource === `${or
 const asm = (await (await fetch(`${origin}/.well-known/oauth-authorization-server`)).json()) as any;
 check("authorization server metadata", asm.issuer === origin && asm.registration_endpoint === `${origin}/oauth/register` && asm.authorization_endpoint === `${origin}/authorize`, asm);
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
-check("initialize", init.body.result?.serverInfo?.name === "artifacts", init.body);
+check("initialize names the workspace", init.body.result?.serverInfo?.name === `artifacts-${slug}` && init.body.result?.serverInfo?.title === "Artifacts · E2E", init.body.result?.serverInfo);
 const list = await rpc("tools/list");
 check("tools/list", list.body.result?.tools?.length >= 10, list.body.result?.tools?.map((t: any) => t.name));
 
@@ -188,9 +188,13 @@ const page = await operator(`/workspaces/${slug}/export?table=artifacts&after=0`
 check("operator export", page.rows?.some((a: any) => a.id === id), page);
 check("operator API needs the token", (await fetch(`${apex}/api/admin/workspaces`)).status === 403);
 const backup = await operator(`/workspaces/${slug}/backup`, {});
-check("backup to R2", typeof backup.prefix === "string" && backup.prefix.startsWith(`${slug}/`), backup);
-const dates = await operator(`/workspaces/${slug}/backups`);
-check("backup listed as complete", dates.dates?.length === 1, dates);
+check("backup queued", backup.queued === true, backup);
+let runs: string[] = [];
+for (let i = 0; i < 20 && !runs.length; i++) {
+  await Bun.sleep(1500);
+  runs = (await operator(`/workspaces/${slug}/backups`)).runs ?? [];
+}
+check("backup job finished and is listed", runs.length === 1, runs);
 
 // Sliding sessions: a session close to expiry (the test cookies last an hour) gets renewed.
 const renewed = await fetch(`${origin}/`, { headers: { Cookie: cookie } });

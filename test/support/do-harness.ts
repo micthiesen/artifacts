@@ -176,6 +176,13 @@ export class FakeCtx {
     deleteAlarm: async () => {
       this.alarm = null;
     },
+    /** Like the runtime: every table, the schema included, is gone. */
+    deleteAll: async () => {
+      const db = this.sqlStorage.db;
+      for (const r of db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).all() as { name: string }[]) {
+        db.run(`DROP TABLE IF EXISTS "${r.name}"`);
+      }
+    },
   };
 
   acceptWebSocket(ws: FakeSocket, tags: string[] = []) {
@@ -250,7 +257,7 @@ export type Connection = {
   disconnect(): Promise<void>;
 };
 
-export async function createHub(env: Partial<HarnessEnv> = {}): Promise<Harness> {
+export async function createHub(env: Partial<HarnessEnv> = {}, slug = "acme"): Promise<Harness> {
   const { Workspace } = await import("../../src/worker/hub.ts");
   const { Directory } = await import("../../src/worker/directory.ts");
   const ctx = new FakeCtx();
@@ -262,9 +269,9 @@ export async function createHub(env: Partial<HarnessEnv> = {}): Promise<Harness>
   };
   const directory = new Directory(new FakeCtx() as never, fullEnv as never);
   fullEnv.DIRECTORY = { getByName: () => directory };
-  directory.createWorkspace("acme", "Acme");
+  directory.createWorkspace(slug, slug[0].toUpperCase() + slug.slice(1));
   const hub = new Workspace(ctx as never, fullEnv as never);
-  await hub.provision({ slug: "acme", name: "Acme", admin: ADMIN });
+  await hub.provision({ slug, name: slug[0].toUpperCase() + slug.slice(1), admin: ADMIN });
   return { hub, directory, ctx, env: fullEnv, connections: [] };
 }
 
@@ -356,4 +363,14 @@ export class FakeKV {
     const keys = [...this.data.keys()].filter((k) => k.startsWith(opts.prefix ?? "")).sort().map((name) => ({ name }));
     return { keys, list_complete: true, cursor: "" };
   }
+}
+
+/** Run the workspace's alarm until its backup/restore jobs are done. */
+export async function runJobs(h: Harness, max = 50) {
+  for (let i = 0; i < max; i++) {
+    const pending = h.ctx.sqlStorage.exec(`SELECT 1 FROM settings WHERE key IN ('job', 'jobs_next')`).toArray().length;
+    if (!pending) return;
+    await h.hub.alarm();
+  }
+  throw new Error(`jobs still running after ${max} alarms: ${JSON.stringify(h.hub.job())}`);
 }

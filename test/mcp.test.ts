@@ -56,6 +56,10 @@ test("links default to the agent's person and are bound to the workspace", async
   await call(MIA, "artifact_share", { id, add: [{ email: OLU, role: "view" }] });
   expect((await call(OLU, "artifact_link", { id, email: MIA })).text).toContain("has view access");
   expect((await call(OLU, "artifact_link", { id })).error).toBe(false);
+  // Someone who has signed in before signs in as themselves: no link that could stand in for them.
+  expect((await call(MIA, "artifact_link", { id, email: OLU })).error).toBe(false);
+  await h.directory.verifyLogin(OLU, await h.directory.startLogin(OLU));
+  expect((await call(MIA, "artifact_link", { id, email: OLU })).text).toContain("sign in as themselves");
 });
 
 test("agent comments don't notify their own person", async () => {
@@ -76,5 +80,29 @@ test("no presigned link for someone who manages the artifact", async () => {
   const id = (await call(MIA, "artifact_create", { title: "x", files })).data.id as string;
   const r = await call(MIA, "artifact_link", { id, email: ADMIN });
   expect(r.error).toBe(true);
-  expect(r.text).toContain("sign in themselves");
+  expect(r.text).toContain("sign in as themselves");
+});
+
+test("sharing emails each person: a link if they're new, the page if they've signed in before", async () => {
+  const sent: { to: string; subject: string; text: string }[] = [];
+  h.env.EMAIL = { send: async (m: { to: string; subject: string; text: string }) => void sent.push(m) };
+  h.env.MAIL_FROM = "sign-in@mail.test";
+  await h.directory.verifyLogin(OLU, await h.directory.startLogin(OLU));
+  const id = (await call(MIA, "artifact_create", { title: "Plan", files })).data.id as string;
+  const r = await call(MIA, "artifact_share", { id, add: [{ email: "new@client.test", role: "view" }, { email: OLU, role: "view" }] });
+  expect(r.data.links["new@client.test"]).toContain("/s/");
+  expect(r.data.links[OLU]).toBe(`https://acme.artifacts.test/a/${id}`);
+  expect(sent.map((m) => m.to).sort()).toEqual(["new@client.test", OLU].sort());
+  expect(sent[0].subject).toContain("“Plan”");
+  // notify: false sends nothing.
+  await call(MIA, "artifact_share", { id, add: [{ email: "quiet@client.test", role: "view" }], notify: false });
+  expect(sent.length).toBe(2);
+});
+
+test("an agent's shared-state writes are its person's: it can't vote as someone else", async () => {
+  const id = (await call(MIA, "artifact_create", { title: "Poll", files })).data.id as string;
+  expect((await call(MIA, "artifact_state", { id, set: { [`poll/p/${OLU}`]: "A" } })).error).toBe(true);
+  expect((await call(MIA, "artifact_state", { id, set: { [`poll/p/${MIA}`]: "A" } })).error).toBe(false);
+  await call(MIA, "artifact_state", { id, set: { "comments/main/1": { text: "hi", by: OLU } } });
+  expect(h.hub.state(id)["comments/main/1"]).toMatchObject({ by: MIA });
 });

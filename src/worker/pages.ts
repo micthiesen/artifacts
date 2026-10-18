@@ -76,9 +76,18 @@ function topBar(brand: Brand, right = ""): string {
   return `<header class="bar"><span class="lead"><a class="mark" href="${escapeHtml(brand.home)}" aria-label="${escapeHtml(brand.name)}">◆</a><a class="title" href="${escapeHtml(brand.home)}">${escapeHtml(brand.name)}</a></span>${right}</header>`;
 }
 
-/** The avatar slot account.js mounts the menu into. `context` decides which links it offers. */
-function avatar(email: string, brand: Brand, context: "account" | "workspace", member = false): string {
-  return `<span id="me" class="me" data-email="${escapeHtml(email)}" data-apex="${escapeHtml(brand.apex)}" data-context="${context}"${member ? ' data-member="1"' : ""}></span>`;
+/** The avatar slot account.js mounts the menu into. `context` and the flags decide which links it offers. */
+function avatar(email: string, brand: Brand, context: "account" | "workspace", flags: { member?: boolean; scoped?: boolean; operator?: boolean } = {}): string {
+  const attrs = [
+    `data-email="${escapeHtml(email)}"`,
+    `data-apex="${escapeHtml(brand.apex)}"`,
+    `data-context="${context}"`,
+    ...(context === "workspace" ? [`data-workspace="${escapeHtml(brand.name)}"`] : []),
+    ...(flags.member ? ['data-member="1"'] : []),
+    ...(flags.scoped ? ['data-scoped="1"'] : []),
+    ...(flags.operator ? ['data-operator="1"'] : []),
+  ];
+  return `<span id="me" class="me" ${attrs.join(" ")}></span>`;
 }
 
 const ACCOUNT_SCRIPT = `<script type="module" src="${asset("/static/account.js")}"></script>`;
@@ -122,7 +131,7 @@ export function indexPage(
   archived = false,
 ): Response {
   const account = viewer.email
-    ? `${avatar(viewer.email, brand, "workspace", Boolean(viewer.member))}${ACCOUNT_SCRIPT}`
+    ? `${avatar(viewer.email, brand, "workspace", { member: Boolean(viewer.member) })}${ACCOUNT_SCRIPT}`
     : `<a class="button small" href="/login?return=${archived ? "/archived" : "/"}">Sign in</a>`;
   const artifacts = all.filter((a) => Boolean(a.archivedAt) === archived);
   if (archived) artifacts.sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
@@ -326,7 +335,7 @@ export function loginPage(state: LoginState, brand: Brand, status = 200): Respon
 /** The apex for someone signed in: their workspaces. */
 export function workspacesPage(
   email: string,
-  workspaces: { slug: string; name: string; role: WorkspaceRole; suspended: boolean; url: string }[],
+  workspaces: { slug: string; name: string; role: WorkspaceRole | "guest"; suspended: boolean; url: string }[],
   operator: boolean,
   brand: Brand,
 ): Response {
@@ -340,7 +349,7 @@ export function workspacesPage(
     ? `<h1 class="page-title">Your workspaces</h1><ul class="list">${rows}</ul>`
     : `<section class="empty"><h1>No workspaces yet</h1><p class="muted">${escapeHtml(email)} isn't a member of a workspace. Artifacts shared with you open from the links you were sent.</p></section>`;
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
-  return page("Artifacts", `${topBar(brand, `${avatar(email, brand, "account")}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>`);
+  return page("Artifacts", `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${admin}</main>`);
 }
 
 /**
@@ -349,8 +358,8 @@ export function workspacesPage(
  */
 export function profilePage(email: string, context: "account" | "workspace", brand: Brand, webPush: boolean, pushover: boolean): Response {
   return page(
-    `Notifications · ${brand.name}`,
-    `${topBar(brand, avatar(email, brand, context))}<main class="content profile" id="profile" data-context="${context}" data-webpush="${webPush ? "1" : ""}" data-pushover="${pushover ? "1" : ""}"><h1 class="page-title">Notifications</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/me.js")}"></script>`,
+    context === "account" ? "Account · Artifacts" : `Notifications · ${brand.name}`,
+    `${topBar(brand, avatar(email, brand, context))}<main class="content profile" id="profile" data-context="${context}" data-webpush="${webPush ? "1" : ""}" data-pushover="${pushover ? "1" : ""}"><h1 class="page-title">${context === "account" ? "Account" : `Notifications in ${escapeHtml(brand.name)}`}</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/me.js")}"></script>`,
   );
 }
 
@@ -358,7 +367,7 @@ export function profilePage(email: string, context: "account" | "workspace", bra
 export function settingsPage(email: string, brand: Brand): Response {
   return page(
     `Settings · ${brand.name}`,
-    `${topBar(brand, avatar(email, brand, "workspace", true))}<main class="content profile" id="settings"><h1 class="page-title">Workspace settings</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/settings.js")}"></script>`,
+    `${topBar(brand, avatar(email, brand, "workspace", { member: true }))}<main class="content profile" id="settings"><h1 class="page-title">Workspace settings</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/settings.js")}"></script>`,
   );
 }
 
@@ -366,7 +375,7 @@ export function settingsPage(email: string, brand: Brand): Response {
 export function adminPage(email: string, brand: Brand): Response {
   return page(
     "Operator · Artifacts",
-    `${topBar(brand, avatar(email, brand, "account"))}<main class="content profile wide" id="admin"><h1 class="page-title">Workspaces</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/admin.js")}"></script>`,
+    `${topBar(brand, avatar(email, brand, "account", { operator: true }))}<main class="content profile wide" id="admin"><h1 class="page-title">Workspaces</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/admin.js")}"></script>`,
   );
 }
 
@@ -376,6 +385,7 @@ export function consentPage(
   handle: string,
   email: string,
   brand: Brand,
+  admin = false,
 ): Response {
   const name = escapeHtml(details.clientName);
   const origin = details.clientDomain
@@ -390,7 +400,7 @@ export function consentPage(
 <h1>Connect ${name} to ${escapeHtml(brand.name)}?</h1>
 <p class="muted">${origin} Access goes to <strong>${escapeHtml(details.redirectHost)}</strong>.</p>
 ${local}
-<p>It will act as <strong>${escapeHtml(email)}</strong> here: list, create and edit your artifacts, share them, and read and reply to comments. You can disconnect it any time in workspace settings.</p>
+<p>It will act as <strong>${escapeHtml(email)}</strong> in ${escapeHtml(brand.name)}, with your access: create artifacts, edit and share the ones you manage${admin ? " (as an admin, that's every artifact here)" : ""}, and read and reply to comments. You can disconnect it any time in workspace settings.</p>
 <form method="post" action="/authorize" class="consent-actions"><input type="hidden" name="handle" value="${escapeHtml(handle)}">
 <button class="button" name="decision" value="approve" type="submit">Connect</button>
 <button class="button secondary" name="decision" value="deny" type="submit">Cancel</button>
@@ -420,6 +430,15 @@ export function continuePage(location: string, headers: Headers = new Headers())
   return res;
 }
 
+/** A presigned link for someone other than whoever is signed in here: switch only if they say so. */
+export function linkSwitchPage(url: URL, current: string, linked: string, brand: Brand): Response {
+  return page(
+    `Switch account · ${brand.name}`,
+    `${topBar(brand)}<main class="content"><section class="empty"><h1>Open as ${escapeHtml(linked)}?</h1><p class="muted">You're signed in here as <strong>${escapeHtml(current)}</strong>. This link signs in as <strong>${escapeHtml(linked)}</strong> and opens one artifact.</p>
+<form method="post" action="${escapeHtml(url.pathname)}" class="consent-actions"><button class="button" type="submit">Continue as ${escapeHtml(linked)}</button><a class="button secondary" href="/">Stay as ${escapeHtml(current)}</a></form></section></main>`,
+  );
+}
+
 export function messagePage(title: string, message: string, status: number, action?: { href: string; label: string }, brand?: Brand): Response {
   const b = brand ?? { name: "Artifacts", home: "/", apex: "" };
   const act = action ?? { href: "/", label: brand && brand.name !== "Artifacts" ? "All artifacts" : "Home" };
@@ -435,7 +454,7 @@ export function shellPage(boot: ShellBoot, brand: Brand): Response {
     boot.title,
     `<div class="shell">
 <header class="bar"><span class="lead"><a class="mark" href="/" title="${escapeHtml(brand.name)}" aria-label="${escapeHtml(brand.name)}">◆</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status"></span><span id="presence" class="presence"></span>${
-      boot.viewer.email ? avatar(boot.viewer.email, brand, "workspace", boot.member) : ""
+      boot.viewer.email ? avatar(boot.viewer.email, brand, "workspace", { member: boot.member, scoped: boot.scoped }) : ""
     }</header>
 <div id="since" class="since" hidden></div>
 <div class="workspace"><div id="frame-host" class="frame-host"></div><aside id="threads" class="threads" hidden aria-label="Comments"></aside></div>
@@ -451,7 +470,8 @@ export function frameCsp(origin: string, sandbox = true): string {
     // The render checker opens frames top-level with no cookies; Browser Run
     // doesn't run module scripts from an opaque origin, so check mode is the
     // one case served unsandboxed. Network access stays blocked either way.
-    ...(sandbox ? ["sandbox allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"] : []),
+    // No popups: the frame asks the shell to open links (see shell.ts openLink).
+    ...(sandbox ? ["sandbox allow-scripts allow-forms allow-modals allow-downloads"] : []),
     "default-src 'none'",
     `script-src 'unsafe-inline' data: ${kit}`,
     `style-src 'unsafe-inline' ${kit}`,
@@ -497,6 +517,7 @@ ${DARK_HEAD}
       "Content-Security-Policy": frameCsp(origin, !check),
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
+      "X-DNS-Prefetch-Control": "off",
       // no-transform keeps Cloudflare's analytics beacon out of artifact content:
       // the shell page already counts the view, and the frame CSP would block it.
       "Cache-Control": "private, no-store, no-transform",

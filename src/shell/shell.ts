@@ -66,10 +66,15 @@ if (meSlot && boot.viewer.email) {
       archivedAt = at;
       panel?.reload();
     });
-    panel = initOwnerMenu(boot, avatar, (at) => {
-      archivedAt = at;
-      bar.set(at);
-    });
+    panel = initOwnerMenu(
+      boot,
+      avatar,
+      (at) => {
+        archivedAt = at;
+        bar.set(at);
+      },
+      { isAdmin: boot.admin },
+    );
   } else {
     mountAccountMenu(meSlot, boot.viewer.email, { ...common, copyLink: async () => location.href, copyLabel: "Copy page link" });
   }
@@ -102,7 +107,8 @@ const theme = () => "dark" as const;
 const iframe = document.createElement("iframe");
 iframe.setAttribute(
   "sandbox",
-  "allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads",
+  // No popups: links go through the shell's "open" message, which asks first.
+  "allow-scripts allow-forms allow-modals allow-downloads",
 );
 iframe.setAttribute("allow", "clipboard-write");
 iframe.setAttribute("referrerpolicy", "no-referrer");
@@ -223,7 +229,7 @@ window.addEventListener("message", (event) => {
       break;
     }
     case "open":
-      if (/^https?:\/\//i.test(msg.url)) window.open(msg.url, "_blank", "noopener,noreferrer");
+      openLink(String(msg.url));
       break;
     case "comment:new":
       drawer.compose(msg.anchor);
@@ -388,3 +394,27 @@ function renderPresence() {
 }
 
 connect();
+
+/**
+ * Open a link the artifact asked for. Artifact code is untrusted and a URL can
+ * carry whatever it read (your email, shared state), so leaving the site asks
+ * first, once per host per page view; links within this site just open.
+ */
+const allowedHosts = new Set<string>();
+function openLink(raw: string) {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return;
+  const apex = new URL(boot.apex).hostname;
+  const ours = url.hostname === apex || url.hostname.endsWith(`.${apex}`);
+  if (!ours && !allowedHosts.has(url.host)) {
+    const shown = url.href.length > 160 ? `${url.href.slice(0, 160)}…` : url.href;
+    if (!confirm(`This page wants to open a link on ${url.host}:\n\n${shown}\n\nOpen it?`)) return;
+    allowedHosts.add(url.host);
+  }
+  window.open(url.href, "_blank", "noopener,noreferrer");
+}
