@@ -59,6 +59,32 @@ async function tool(token: string, name: string, args: unknown) {
   return result;
 }
 
+/**
+ * Write one shared key the way a person does on the page, over the artifact's
+ * socket. Approvals and form responses only come from people, never agents.
+ */
+async function setOnPage(email: string, id: string, key: string, value: unknown) {
+  const cookie = (await operator("/session", { email, host })).cookie as string;
+  const ws = new WebSocket(`wss://${host}/a/${id}/sync`, { headers: { Cookie: cookie, Origin: origin } } as never);
+  const cid = crypto.randomUUID();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${key}: no answer from the page`)), 15_000);
+      ws.addEventListener("error", () => reject(new Error(`${key}: socket error`)));
+      ws.addEventListener("open", () => ws.send(JSON.stringify({ t: "set", cid, key, value })));
+      ws.addEventListener("message", (e) => {
+        const m = JSON.parse(String(e.data));
+        if (m.cid !== cid) return;
+        clearTimeout(timer);
+        if (m.t === "rejected") reject(new Error(`${key}: ${m.reason}`));
+        else resolve();
+      });
+    });
+  } finally {
+    ws.close();
+  }
+}
+
 async function walk(dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const e of await readdir(dir, { withFileTypes: true })) {
@@ -127,7 +153,8 @@ try {
     if (!existing || reseed) {
       const now = Date.now();
       for (const e of ex.seed) {
-        await tool(tokens.get(e.by)!.token, "artifact_state", { id, set: { [e.key]: seedValue(e, now) } });
+        if (/^(approve|form)\//.test(e.key)) await setOnPage(e.by, id, e.key, seedValue(e, now));
+        else await tool(tokens.get(e.by)!.token, "artifact_state", { id, set: { [e.key]: seedValue(e, now) } });
       }
     }
     links[ex.slug] = `${origin}/a/${id}`;
