@@ -75,6 +75,8 @@ button.link:hover { text-decoration: underline; text-underline-offset: 3px; }
   background: color-mix(in oklab, var(--bg) 60%, transparent); color: var(--fg); font: inherit;
   transition: border-color .15s, box-shadow .15s;
 }
+/* Form controls never get wider than their container: a long option or value would otherwise widen the page on phones. */
+select, input, textarea { max-width: 100%; }
 .input::placeholder { color: color-mix(in oklab, var(--muted-fg) 80%, transparent); }
 .input:hover { border-color: color-mix(in oklab, var(--muted-fg) 40%, var(--input)); }
 .input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); }

@@ -31,6 +31,7 @@ import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { publicMessage } from "./errors.ts";
 import { isPlan } from "./plans.ts";
+import { checkLayout } from "./layout.ts";
 import { exportRun, latestManifest } from "./snapshot.ts";
 import { DATA_TABLES } from "./tables.ts";
 import { PasskeyError, registrationOptions, signInOptions, verifyRegistration, verifySignIn } from "./passkeys.ts";
@@ -1217,6 +1218,21 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
     }
     if (path === "/api/admin/signins" && request.method === "GET") {
       return Response.json(await dir.signInDiagnostics(String(url.searchParams.get("email") ?? "").toLowerCase()));
+    }
+    // Phone-width overflow check of one of our own pages (spikes/e2e-layout.ts).
+    if (path === "/api/admin/layout" && request.method === "POST") {
+      const body = await jsonBody(request);
+      let target: URL;
+      try {
+        target = new URL(String(body.url ?? ""));
+      } catch {
+        return Response.json({ error: "url must be a URL" }, { status: 400 });
+      }
+      if (target.protocol !== "https:" || (target.hostname !== env.APEX_HOST && !target.hostname.endsWith(env.WORKSPACE_SUFFIX))) {
+        return Response.json({ error: "only this site's own pages" }, { status: 400 });
+      }
+      const cookie = typeof body.cookie === "string" && /^[\w-]+=/.test(body.cookie) ? { name: body.cookie.split("=")[0], value: body.cookie.slice(body.cookie.indexOf("=") + 1) } : undefined;
+      return Response.json(await checkLayout(env as never, target.href, cookie));
     }
     if (path === "/api/admin/workspaces" && request.method === "GET") {
       // Jobs come from the directory, which each workspace reports to, so this wakes no workspace.

@@ -52,4 +52,5 @@ wildcard DNS record, so deploy prod first.
 ## Checks
 
 - `bun run test` and `bun run typecheck` locally.
-- `bun run e2e` and `bun spikes/e2e-collab.ts` against the deployment (`STAGE=<name>` for another stage). Each makes a throwaway workspace and deletes it afterwards; the second waits about a minute for a notification alarm. New Worker code can take a minute to reach every edge location, so wait that long after a deploy.
+- `bun run e2e` and `bun spikes/e2e-collab.ts` against the deployment (`STAGE=<name>` for another stage).
+- `bun spikes/e2e-layout.ts` loads every page at phone width (390 px) in Browser Run and fails on anything that sticks out sideways. Run it after UI changes. Each makes a throwaway workspace and deletes it afterwards; the second waits about a minute for a notification alarm. New Worker code can take a minute to reach every edge location, so wait that long after a deploy.
