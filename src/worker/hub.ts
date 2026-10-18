@@ -1578,7 +1578,7 @@ function toSource(r: Record<string, SqlStorageValue>, allowed: Set<string>): Sou
 /** GET a JSON document (no credentials, size- and time-limited) and optionally pick a dot path. */
 async function fetchSource(url: string, pick: string | null): Promise<JsonValue> {
   const res = await fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": "Shared-Artifacts/1 (+https://github.com/micthiesen/artifacts)" },
+    headers: { Accept: "application/json", "User-Agent": "Artifacts/1 (+https://github.com/micthiesen/artifacts)" },
     redirect: "follow",
     signal: AbortSignal.timeout(10_000),
   });

@@ -31,7 +31,7 @@ async function call(name: string, args: unknown) {
 
 check("mcp rejects bad token", (await rpc("tools/list", undefined, "nope")).status === 401);
 const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
-check("initialize", init.body.result?.serverInfo?.name === "shared-artifacts", init.body);
+check("initialize", init.body.result?.serverInfo?.name === "artifacts", init.body);
 const list = await rpc("tools/list");
 check("tools/list", list.body.result?.tools?.length >= 10, list.body.result?.tools?.map((t: any) => t.name));
 

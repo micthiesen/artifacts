@@ -1,5 +1,5 @@
 /*
- * Shared Artifacts theme. Self-contained (no @import): the kit stylesheet and
+ * Artifacts theme. Self-contained (no @import): the kit stylesheet and
  * every artifact's per-version stylesheet include this file verbatim, so a
  * class like `bg-muted text-primary` resolves from these tokens alone.
  *

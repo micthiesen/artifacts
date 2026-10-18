@@ -1,4 +1,4 @@
-// Shared Artifacts Worker: viewer pages, sessions, frame documents, sync and MCP.
+// Artifacts Worker: viewer pages, sessions, frame documents, sync and MCP.
 import { handleMcp, runOwnerTool } from "./mcp.ts";
 import { frameDocument, indexPage, messagePage, previewPage, profilePage, shellPage } from "./pages.ts";
 import { ChannelError, prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
@@ -450,7 +450,7 @@ async function meApi(request: Request, url: URL, env: Env, hub: HubApi, viewer: 
       const result = await sendToChannel(
         channel.type,
         channel.config,
-        { title: "Shared Artifacts", body: "Test notification: this channel works.", url: `${url.origin}/me`, tag: "test" },
+        { title: "Artifacts", body: "Test notification: this channel works.", url: `${url.origin}/me`, tag: "test" },
         env,
       );
       await hub.recordChannelResult(m[1], result);

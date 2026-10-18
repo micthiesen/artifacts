@@ -96,7 +96,7 @@ let initSent = false;
 type SetMessage = Extract<SyncClientMessage, { t: "set" }>;
 const pending = new Map<string, SetMessage>();
 
-// Shared Artifacts is dark only; the frame renders dark whatever it is told.
+// Artifacts is dark only; the frame renders dark whatever it is told.
 const theme = () => "dark" as const;
 
 const iframe = document.createElement("iframe");

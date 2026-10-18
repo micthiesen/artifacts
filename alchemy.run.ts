@@ -34,7 +34,7 @@ export default Alchemy.Stack(
       // per-artifact share list decides what they can open.
       const signIn = yield* Cloudflare.Access.Application("SignIn", {
         type: "self_hosted",
-        name: stage === "prod" ? "Shared Artifacts sign-in" : `Shared Artifacts sign-in (${stage})`,
+        name: stage === "prod" ? "Artifacts sign-in" : `Artifacts sign-in (${stage})`,
         policies: [{ decision: "allow", include: ["everyone"] }],
         allowedIdps: [otp.identityProviderId as unknown as string],
         autoRedirectToIdentity: true,

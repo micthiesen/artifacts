@@ -1,4 +1,4 @@
-# Shared Artifacts guide
+# Artifacts guide
 
 An artifact is a small set of files rendered as a page at `/a/<id>`. Only the
 owner and people it's shared with can open it. They sign in with a one-time

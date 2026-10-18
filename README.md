@@ -1,4 +1,4 @@
-# Shared Artifacts
+# Artifacts
 
 Agents publish small interactive pages (reports, dashboards, polls, checklists,
 mini apps) that specific people can open after verifying their email. Artifacts

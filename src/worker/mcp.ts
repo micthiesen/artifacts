@@ -9,12 +9,12 @@ import type { Env } from "./index.ts";
 import guideIntro from "../../docs/guide.md";
 import catalog from "../kit/CATALOG.md";
 
-export const SERVER_NAME = "shared-artifacts";
-const SERVER_TITLE = "Shared Artifacts";
+export const SERVER_NAME = "artifacts";
+const SERVER_TITLE = "Artifacts";
 const SERVER_VERSION = "0.1.0";
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS = `Shared Artifacts publishes small interactive pages (reports, dashboards, polls, checklists, mini apps) that verified people can open in a browser, with per-viewer browser storage and live shared state. Use these artifact_* tools, not Executor's built-in create-artifact, whenever you make an artifact. Call artifact_guide once before writing your first artifact in a session. Change existing artifacts with artifact_edit, artifact_patch_data or artifact_write_files; never recreate one to change it. Every write reports a render check; fix a failed one (or wait for a queued one with artifact_check) before giving the user a link. Hand the user an artifact_link URL (it opens with no login). Readers can comment; use artifact_activity to pick up their feedback and pass note and resolves on the edit that addresses it.`;
+const INSTRUCTIONS = `This server publishes small interactive pages (reports, dashboards, polls, checklists, mini apps) that verified people can open in a browser, with per-viewer browser storage and live shared state. Use these artifact_* tools, not Executor's built-in create-artifact, whenever you make an artifact. Call artifact_guide once before writing your first artifact in a session. Change existing artifacts with artifact_edit, artifact_patch_data or artifact_write_files; never recreate one to change it. Every write reports a render check; fix a failed one (or wait for a queued one with artifact_check) before giving the user a link. Hand the user an artifact_link URL (it opens with no login). Readers can comment; use artifact_activity to pick up their feedback and pass note and resolves on the edit that addresses it.`;
 
 type Hub = HubApi;
 type Ctx = { hub: Hub; origin: string; env: Env; /** Owner-menu calls act as the signed-in owner; MCP calls as "agent". */ actor?: string };
@@ -135,18 +135,18 @@ async function checkAndRecord(ctx: Ctx, id: string, force = false): Promise<{ ch
 export const TOOLS: Tool[] = [
   {
     name: "artifact_guide",
-    title: "Shared Artifacts: authoring guide",
+    title: "Artifacts: authoring guide",
     description:
-      "Shared Artifacts: returns the authoring guide and the component and hook reference. Read it once before writing your first artifact.",
+      "Artifacts: returns the authoring guide and the component and hook reference. Read it once before writing your first artifact.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true },
     run: async () => ({ text: `${guideIntro}\n\n${catalog}` }),
   },
   {
     name: "artifact_list",
-    title: "Shared Artifacts: list",
+    title: "Artifacts: list",
     description:
-      "Shared Artifacts: list artifacts (id, title, description, version, url), newest first. Optional text filter. Archived artifacts are left out unless archived is true.",
+      "Artifacts: list artifacts (id, title, description, version, url), newest first. Optional text filter. Archived artifacts are left out unless archived is true.",
     inputSchema: {
       type: "object",
       properties: {
@@ -184,9 +184,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_create",
-    title: "Shared Artifacts: create",
+    title: "Artifacts: create",
     description:
-      "Shared Artifacts: create a new artifact from files and return its URL. Validates and compiles everything; nothing is saved if any file fails. Optionally share it in the same call. To change an existing artifact use artifact_edit instead.",
+      "Artifacts: create a new artifact from files and return its URL. Validates and compiles everything; nothing is saved if any file fails. Optionally share it in the same call. To change an existing artifact use artifact_edit instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -215,9 +215,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_read",
-    title: "Shared Artifacts: read",
+    title: "Artifacts: read",
     description:
-      "Shared Artifacts: without path, returns the artifact's version, file list with sizes, sharing and URL. With path, returns that file's text (optionally a 1-based line range). Read only what you need to edit.",
+      "Artifacts: without path, returns the artifact's version, file list with sizes, sharing and URL. With path, returns that file's text (optionally a 1-based line range). Read only what you need to edit.",
     inputSchema: {
       type: "object",
       properties: {
@@ -263,9 +263,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_grep",
-    title: "Shared Artifacts: grep",
+    title: "Artifacts: grep",
     description:
-      "Shared Artifacts: search an artifact's files (regex, case-insensitive) and return matching lines with line numbers. Use it to find exact text for artifact_edit without reading whole files.",
+      "Artifacts: search an artifact's files (regex, case-insensitive) and return matching lines with line numbers. Use it to find exact text for artifact_edit without reading whole files.",
     inputSchema: {
       type: "object",
       properties: { id, pattern: { type: "string" }, path: { type: "string", description: "Limit to one file." } },
@@ -283,9 +283,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_edit",
-    title: "Shared Artifacts: edit file",
+    title: "Artifacts: edit file",
     description:
-      "Shared Artifacts: change one file with exact find-and-replace edits, applied in order. Each oldText must match exactly once (whitespace included) unless replaceAll is set. All-or-nothing: if an edit misses or the result fails to compile, nothing is saved and the errors are returned. Prefer this for small code or text changes.",
+      "Artifacts: change one file with exact find-and-replace edits, applied in order. Each oldText must match exactly once (whitespace included) unless replaceAll is set. All-or-nothing: if an edit misses or the result fails to compile, nothing is saved and the errors are returned. Prefer this for small code or text changes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -315,9 +315,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_patch_data",
-    title: "Shared Artifacts: patch data file",
+    title: "Artifacts: patch data file",
     description:
-      'Shared Artifacts: change a data/*.json file with RFC 6902 JSON Patch operations, e.g. [{"op":"replace","path":"/2/price","value":"$4"}, {"op":"add","path":"/-","value":{...}}]. Cheapest way to update rows or values. All-or-nothing.',
+      'Artifacts: change a data/*.json file with RFC 6902 JSON Patch operations, e.g. [{"op":"replace","path":"/2/price","value":"$4"}, {"op":"add","path":"/-","value":{...}}]. Cheapest way to update rows or values. All-or-nothing.',
     inputSchema: {
       type: "object",
       properties: {
@@ -351,9 +351,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_write_files",
-    title: "Shared Artifacts: write files",
+    title: "Artifacts: write files",
     description:
-      "Shared Artifacts: add, fully replace, or delete (null) whole files in one atomic change. Use for new files or rewrites; use artifact_edit for small changes to existing files.",
+      "Artifacts: add, fully replace, or delete (null) whole files in one atomic change. Use for new files or rewrites; use artifact_edit for small changes to existing files.",
     inputSchema: {
       type: "object",
       properties: {
@@ -378,9 +378,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_update",
-    title: "Shared Artifacts: update details or archive",
+    title: "Artifacts: update details or archive",
     description:
-      "Shared Artifacts: change an artifact's title or description, archive or unarchive it, or turn rich link previews on or off. Archiving hides an artifact the user is done with from everyone's list; it stays readable at its link with its history and can be unarchived. Prefer archiving over artifact_delete unless the user explicitly asks to delete. With preview on, links pasted into Slack, iMessage and similar apps show the title, description and a screenshot; off (the default for private artifacts), they show a generic card.",
+      "Artifacts: change an artifact's title or description, archive or unarchive it, or turn rich link previews on or off. Archiving hides an artifact the user is done with from everyone's list; it stays readable at its link with its history and can be unarchived. Prefer archiving over artifact_delete unless the user explicitly asks to delete. With preview on, links pasted into Slack, iMessage and similar apps show the title, description and a screenshot; off (the default for private artifacts), they show a generic card.",
     inputSchema: {
       type: "object",
       properties: {
@@ -409,9 +409,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_share",
-    title: "Shared Artifacts: share",
+    title: "Artifacts: share",
     description:
-      "Shared Artifacts: share an artifact with people by email, or with everyone at a domain (\"@example.com\"), change roles, remove entries, or toggle a public read-only link. A person's own entry overrides their domain's role. Removal takes effect immediately. Returns the current sharing and a sign-in link for each person added (domains get none; make one per person with artifact_link).",
+      "Artifacts: share an artifact with people by email, or with everyone at a domain (\"@example.com\"), change roles, remove entries, or toggle a public read-only link. A person's own entry overrides their domain's role. Removal takes effect immediately. Returns the current sharing and a sign-in link for each person added (domains get none; make one per person with artifact_link).",
     inputSchema: {
       type: "object",
       properties: {
@@ -454,9 +454,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_link",
-    title: "Shared Artifacts: sign-in link",
+    title: "Artifacts: sign-in link",
     description:
-      "Shared Artifacts: make a presigned link that opens an artifact already signed in as one email, with no login step. Defaults to the owner (the user), so use it when handing the user a link. The email must be the owner, shared directly, or at a shared @domain. Valid 7 days by default (max 30); unsharing still revokes it. Anyone holding the link acts as that email, so give each link only to its person.",
+      "Artifacts: make a presigned link that opens an artifact already signed in as one email, with no login step. Defaults to the owner (the user), so use it when handing the user a link. The email must be the owner, shared directly, or at a shared @domain. Valid 7 days by default (max 30); unsharing still revokes it. Anyone holding the link acts as that email, so give each link only to its person.",
     inputSchema: {
       type: "object",
       properties: {
@@ -484,9 +484,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_asset",
-    title: "Shared Artifacts: images and files",
+    title: "Artifacts: images and files",
     description:
-      'Shared Artifacts: upload (base64) or delete an image or other file used by an artifact, e.g. path "assets/logo.png". Reference it in MDX as ![alt](assets/logo.png) or in code with useAsset("assets/logo.png"). External image URLs are blocked, so upload images instead. Max 1.5 MB each, 20 MB per artifact.',
+      'Artifacts: upload (base64) or delete an image or other file used by an artifact, e.g. path "assets/logo.png". Reference it in MDX as ![alt](assets/logo.png) or in code with useAsset("assets/logo.png"). External image URLs are blocked, so upload images instead. Max 1.5 MB each, 20 MB per artifact.',
     inputSchema: {
       type: "object",
       properties: {
@@ -524,9 +524,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_source",
-    title: "Shared Artifacts: live data source",
+    title: "Artifacts: live data source",
     description:
-      'Shared Artifacts: keep a data/*.json file updated from a public HTTPS JSON URL on a schedule (every 15 min to 7 days). Optional pick extracts a dot path such as "data.items". The URL\'s host must be approved by the user in the artifact\'s owner menu before anything is fetched; if it is not, tell the user to approve it. Also lists, removes or refreshes sources.',
+      'Artifacts: keep a data/*.json file updated from a public HTTPS JSON URL on a schedule (every 15 min to 7 days). Optional pick extracts a dot path such as "data.items". The URL\'s host must be approved by the user in the artifact\'s owner menu before anything is fetched; if it is not, tell the user to approve it. Also lists, removes or refreshes sources.',
     inputSchema: {
       type: "object",
       properties: {
@@ -572,9 +572,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_state",
-    title: "Shared Artifacts: shared state",
+    title: "Artifacts: shared state",
     description:
-      "Shared Artifacts: read an artifact's live shared state (poll votes, checklist items, comments, useShared keys), and optionally set keys (null deletes). Viewers see changes immediately.",
+      "Artifacts: read an artifact's live shared state (poll votes, checklist items, comments, useShared keys), and optionally set keys (null deletes). Viewers see changes immediately.",
     inputSchema: {
       type: "object",
       properties: {
@@ -596,9 +596,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_activity",
-    title: "Shared Artifacts: activity",
+    title: "Artifacts: activity",
     description:
-      "Shared Artifacts: what people did since you last looked: new comment threads and replies (with the quoted text and block they point at), resolves, votes, checklist ticks, shared-state edits and new versions, oldest first. Pass the returned cursor as `since` next time to get only newer events. Omit `id` for every artifact. Use this to pick up feedback, then change the artifact (pass `resolves` with the thread ids you addressed) or reply with artifact_comment.",
+      "Artifacts: what people did since you last looked: new comment threads and replies (with the quoted text and block they point at), resolves, votes, checklist ticks, shared-state edits and new versions, oldest first. Pass the returned cursor as `since` next time to get only newer events. Omit `id` for every artifact. Use this to pick up feedback, then change the artifact (pass `resolves` with the thread ids you addressed) or reply with artifact_comment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -636,9 +636,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_threads",
-    title: "Shared Artifacts: comment threads",
+    title: "Artifacts: comment threads",
     description:
-      "Shared Artifacts: list an artifact's comment threads with every comment, what each points at (block id, quoted text, table row) and whether it is open, resolved or addressed. Open threads only unless includeResolved.",
+      "Artifacts: list an artifact's comment threads with every comment, what each points at (block id, quoted text, table row) and whether it is open, resolved or addressed. Open threads only unless includeResolved.",
     inputSchema: {
       type: "object",
       properties: { id, includeResolved: { type: "boolean" } },
@@ -657,9 +657,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_comment",
-    title: "Shared Artifacts: comment",
+    title: "Artifacts: comment",
     description:
-      'Shared Artifacts: reply to a comment thread, resolve or reopen it, or start a new thread (optionally anchored to a block id from artifact_threads, or to an exact quote). Your comments show as "Agent". Prefer fixing the artifact and passing `resolves` on the edit; reply when you need to answer a question or explain why you did not change something.',
+      'Artifacts: reply to a comment thread, resolve or reopen it, or start a new thread (optionally anchored to a block id from artifact_threads, or to an exact quote). Your comments show as "Agent". Prefer fixing the artifact and passing `resolves` on the edit; reply when you need to answer a question or explain why you did not change something.',
     inputSchema: {
       type: "object",
       properties: {
@@ -703,9 +703,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_errors",
-    title: "Shared Artifacts: runtime errors",
+    title: "Artifacts: runtime errors",
     description:
-      "Shared Artifacts: recent runtime errors reported by viewers' browsers (newest first). Check after a change if someone reports a problem.",
+      "Artifacts: recent runtime errors reported by viewers' browsers (newest first). Check after a change if someone reports a problem.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { readOnlyHint: true },
     run: async (args, { hub }) => {
@@ -718,8 +718,8 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_history",
-    title: "Shared Artifacts: history",
-    description: "Shared Artifacts: list stored versions (newest first, last 50) with what changed.",
+    title: "Artifacts: history",
+    description: "Artifacts: list stored versions (newest first, last 50) with what changed.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { readOnlyHint: true },
     run: async (args, { hub }) => {
@@ -729,8 +729,8 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_revert",
-    title: "Shared Artifacts: revert",
-    description: "Shared Artifacts: restore the files of an earlier version as a new version. Shared state is not changed.",
+    title: "Artifacts: revert",
+    description: "Artifacts: restore the files of an earlier version as a new version. Shared state is not changed.",
     inputSchema: {
       type: "object",
       properties: { id, version: { type: "integer", minimum: 1 } },
@@ -742,9 +742,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_check",
-    title: "Shared Artifacts: render check",
+    title: "Artifacts: render check",
     description:
-      "Shared Artifacts: render the current version in a headless browser, report runtime errors, and return a screenshot of the first screen. Writes already run the check; use this to see the page, re-check, or collect a queued result.",
+      "Artifacts: render the current version in a headless browser, report runtime errors, and return a screenshot of the first screen. Writes already run the check; use this to see the page, re-check, or collect a queued result.",
     inputSchema: {
       type: "object",
       properties: { id, screenshot: { type: "boolean", description: "Include the screenshot (default true)." } },
@@ -767,9 +767,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "artifact_delete",
-    title: "Shared Artifacts: delete",
+    title: "Artifacts: delete",
     description:
-      "Shared Artifacts: permanently delete an artifact, its history and its shared state. Only when the user explicitly asks to delete; to tidy up finished work, archive it with artifact_update instead.",
+      "Artifacts: permanently delete an artifact, its history and its shared state. Only when the user explicitly asks to delete; to tidy up finished work, archive it with artifact_update instead.",
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { destructiveHint: true },
     run: async (args, { hub }) => {

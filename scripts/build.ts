@@ -30,7 +30,7 @@ await cp("src/shell/icons/favicon-32.png", "dist/kit/favicon.ico");
 await Bun.write(
   "dist/kit/manifest.webmanifest",
   JSON.stringify({
-    name: "Shared Artifacts",
+    name: "Artifacts",
     short_name: "Artifacts",
     start_url: "/",
     display: "standalone",

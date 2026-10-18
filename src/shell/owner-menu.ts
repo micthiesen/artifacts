@@ -621,7 +621,7 @@ export function initOwnerMenu(
                   h(
                     "p",
                     { class: "muted om-small" },
-                    `Approving lets Shared Artifacts fetch from ${s.host} on a schedule for any artifact that uses it. Approve only hosts you trust.`,
+                    `Approving lets any of your artifacts fetch from ${s.host} on a schedule. Approve only hosts you trust.`,
                   ),
                 h(
                   "div",
@@ -657,7 +657,7 @@ export function initOwnerMenu(
         "div",
         { class: "om-group" },
         h("h3", { class: "om-h" }, "Approved hosts"),
-        h("p", { class: "muted om-small" }, "Hosts Shared Artifacts may fetch live data from. This list applies to all your artifacts."),
+        h("p", { class: "muted om-small" }, "Hosts your artifacts may fetch live data from. This list applies to all of them."),
         d.hosts.length
           ? h(
               "ul",

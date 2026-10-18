@@ -60,7 +60,7 @@ function page(title: string, body: string, init: ResponseInit = {}): Response {
 }
 
 function topBar(right = ""): string {
-  return `<header class="bar"><span class="lead"><a class="mark" href="/" aria-label="All artifacts">◆</a><a class="title" href="/">Shared Artifacts</a></span>${right}</header>`;
+  return `<header class="bar"><span class="lead"><a class="mark" href="/" aria-label="All artifacts">◆</a><a class="title" href="/">Artifacts</a></span>${right}</header>`;
 }
 
 function relativeTime(iso: string): string {
@@ -113,7 +113,7 @@ export function indexPage(
   const archivedLink = `<p class="archived-link"${archivedCount ? "" : " hidden"}><a href="/archived">${ICON_ARCHIVE}Archived · <span data-archived-count>${archivedCount}</span></a></p>`;
   let body: string;
   if (!viewer.email) {
-    body = `<section class="empty"><h1>Shared Artifacts</h1><p class="muted">${
+    body = `<section class="empty"><h1>Artifacts</h1><p class="muted">${
       loginConfigured
         ? "Sign in with your email to see artifacts shared with you."
         : "Open the link you were sent to view an artifact."
@@ -130,7 +130,7 @@ export function indexPage(
     body = `<h1 class="page-title">Artifacts</h1>${list(artifacts, viewer, summaries, false)}<section class="empty" data-list-empty hidden><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}`;
   }
   const script = `<script type="module" src="${asset("/static/home.js")}"></script>`;
-  return page(archived ? "Archived · Shared Artifacts" : "Shared Artifacts", `${topBar(account)}<main class="content">${body}</main>${script}`);
+  return page(archived ? "Archived · Artifacts" : "Artifacts", `${topBar(account)}<main class="content">${body}</main>${script}`);
 }
 
 function list(artifacts: ListedArtifact[], viewer: { owner?: boolean }, summaries: Record<string, ShareSummary> | undefined, archived: boolean): string {
@@ -164,7 +164,7 @@ function activityBadge(a: { unseen?: boolean; unread?: number }): string {
  */
 export function previewPage(p: { url: string; origin: string; title?: string; description?: string; image?: string }): Response {
   const title = p.title ?? "Private artifact";
-  const description = p.title ? p.description || "Shared Artifacts" : "Shared Artifacts · sign in to view";
+  const description = p.title ? p.description || "Artifacts" : "Artifacts · sign in to view";
   const image = p.image ?? `${p.origin}${asset("/static/icons/og.png")}`;
   const [w, h] = p.image ? [1024, 768] : [1200, 630];
   const html = `<!doctype html>
@@ -174,7 +174,7 @@ export function previewPage(p: { url: string; origin: string; title?: string; de
 <meta name="robots" content="noindex, nofollow">
 <meta name="description" content="${escapeHtml(description)}">
 <meta name="theme-color" content="#7c6cff">
-<meta property="og:site_name" content="Shared Artifacts">
+<meta property="og:site_name" content="Artifacts">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${escapeHtml(p.url)}">
 <meta property="og:title" content="${escapeHtml(title)}">
@@ -197,7 +197,7 @@ export function previewPage(p: { url: string; origin: string; title?: string; de
 /** Profile and notification settings; the client (me.js) loads and edits everything through /api/me. */
 export function profilePage(email: string, webPush: boolean, pushover: boolean): Response {
   return page(
-    "Notifications · Shared Artifacts",
+    "Notifications · Artifacts",
     `${topBar(`<span id="me" class="me" data-email="${escapeHtml(email)}"></span>`)}<main class="content profile" id="profile" data-webpush="${webPush ? "1" : ""}" data-pushover="${pushover ? "1" : ""}"><h1 class="page-title">Profile and notifications</h1><p class="muted">Loading…</p></main><script type="module" src="${asset("/static/account.js")}"></script><script type="module" src="${asset("/static/me.js")}"></script>`,
   );
 }

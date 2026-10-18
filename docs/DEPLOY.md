@@ -27,7 +27,7 @@ still work through MCP.
 
 1. **Zero Trust:** create a Zero Trust organization (free for up to 50 users) and add the One-time PIN login method.
 2. **Token:** give the deploy token Access: Apps and Policies → Edit, and Access: Organizations, Identity Providers, and Groups → Read.
-3. **Deploy:** set `ACCESS_TEAM_DOMAIN` (e.g. `https://<team>.cloudflareaccess.com`) and deploy. Alchemy creates the "Shared Artifacts sign-in" Access application (one-time PIN only, allow everyone) in front of the `<worker>-auth` Worker (at `auth.<domain>`, or its `workers.dev` URL) and passes its AUD tag to it. Per-artifact sharing is enforced by the main Worker.
+3. **Deploy:** set `ACCESS_TEAM_DOMAIN` (e.g. `https://<team>.cloudflareaccess.com`) and deploy. Alchemy creates the "Artifacts sign-in" Access application (one-time PIN only, allow everyone) in front of the `<worker>-auth` Worker (at `auth.<domain>`, or its `workers.dev` URL) and passes its AUD tag to it. Per-artifact sharing is enforced by the main Worker.
 
 ## Presigned links
 
@@ -57,6 +57,6 @@ version.
 
 ## Connect agents
 
-Add an MCP server named **Shared Artifacts** pointing at
+Add an MCP server named **Artifacts** pointing at
 `https://<domain>/mcp` (or `https://<worker>.<subdomain>.workers.dev/mcp` without `DOMAIN`) with header
 `Authorization: Bearer <MCP_TOKEN>`.
