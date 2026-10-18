@@ -167,6 +167,13 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
   document.addEventListener("click", (e) => {
     if (!menu.hidden && !menu.contains(e.target as Node)) setOpen(false);
   });
+  // Clicks inside the artifact iframe never reach this document; they show up
+  // here as the window losing focus to the frame.
+  window.addEventListener("blur", () => {
+    setTimeout(() => {
+      if (!menu.hidden && document.activeElement instanceof HTMLIFrameElement) setOpen(false);
+    });
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !menu.hidden) {
       setOpen(false);

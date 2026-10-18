@@ -2,7 +2,7 @@
 // history, sharing, shared state and live sync sockets. One instance ("hub") is
 // plenty for a handful of viewers and keeps every write transactional.
 import { DurableObject } from "cloudflare:workers";
-import { buildArtifact, type Build, type CompileError } from "./compile.ts";
+import { BUILD_STAMP, buildArtifact, type Build, type CompileError } from "./compile.ts";
 import { renderCheck, type CheckEnv, type CheckOutcome, type RenderCheck } from "./check.ts";
 import { domainOf, sharePrincipal } from "./principal.ts";
 import { applyJsonPatch, applyTextEdits, EditError, grepFiles, type JsonPatchOp, type TextEdit } from "./edit.ts";
@@ -255,11 +255,27 @@ export class ArtifactHub extends DurableObject {
     return grepFiles(this.files(id), pattern, path);
   }
 
-  build(id: string): { meta: ArtifactMeta; build: Build } | null {
+  async build(id: string): Promise<{ meta: ArtifactMeta; build: Build } | null> {
     const row = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).toArray()[0];
-    const b = this.sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, id).toArray()[0];
+    const b = this.sql.exec(`SELECT version, build FROM builds WHERE artifact_id = ?`, id).toArray()[0];
     if (!row || !b) return null;
-    return { meta: toMeta(row), build: JSON.parse(b.build as string) };
+    const build: Build = JSON.parse(b.build as string);
+    if (build.stamp === BUILD_STAMP) return { meta: toMeta(row), build };
+    // Built by an older compiler (for example before a theme change): recompile
+    // the same files. Keep serving the stored build if that fails.
+    const fresh = (await buildArtifact(this.files(id))).build;
+    if (!fresh) return { meta: toMeta(row), build };
+    // An edit may have landed while compiling; only replace the version we read.
+    const updated = this.sql.exec(
+      `UPDATE builds SET build = ? WHERE artifact_id = ? AND version = ?`,
+      JSON.stringify(fresh),
+      id,
+      b.version,
+    ).rowsWritten;
+    if (updated) return { meta: toMeta(row), build: fresh };
+    const now = this.sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, id).toArray()[0];
+    const meta = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, id).toArray()[0];
+    return now && meta ? { meta: toMeta(meta), build: JSON.parse(now.build as string) } : null;
   }
 
   history(id: string) {

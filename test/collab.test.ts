@@ -47,7 +47,7 @@ afterEach(() => {
 
 test("blocks get stable ids and hashes", async () => {
   const id = await make();
-  const build = h.hub.build(id)!.build;
+  const build = (await h.hub.build(id))!.build;
   expect(build.blocks!.map((b) => b.id)).toEqual(["plan", "plan-1", "costs", "costs-1", "risks", "risks-1"]);
 });
 

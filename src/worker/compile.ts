@@ -232,6 +232,8 @@ export type Build = {
   data: Record<string, JsonValue>;
   /** Top-level blocks of an MDX/MD entry, in order (empty for app.tsx). */
   blocks?: BlockInfo[];
+  /** BUILD_STAMP of the compiler that produced this build; absent on old builds. */
+  stamp?: string;
 };
 
 const ART_PREFIX = "@art/";
@@ -301,12 +303,30 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
   } catch (err) {
     return { errors: [{ path: "", message: `stylesheet: ${(err as Error).message}` }] };
   }
-  return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks }, errors: [] };
+  return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks, stamp: BUILD_STAMP }, errors: [] };
 }
 
 const ARTIFACT_CSS_ENTRY = `@import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 ${kitThemeCss}`;
+
+/**
+ * Identifies the stylesheet inputs baked into every build. Each build inlines
+ * the kit theme, so a build made before a theme change keeps the old colours
+ * until it is recompiled; the hub rebuilds any build whose stamp differs.
+ * Bump BUILD_FORMAT for compiler changes that should also trigger a rebuild.
+ */
+const BUILD_FORMAT = 1;
+export const BUILD_STAMP = `${BUILD_FORMAT}.${fnv1a(themeCss + utilitiesCss + ARTIFACT_CSS_ENTRY)}`;
+
+function fnv1a(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
 
 async function rewriteRelativeImports(from: string, code: string, files: Set<string>): Promise<string> {
   await initLexer;

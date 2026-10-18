@@ -96,3 +96,18 @@ test("archive keeps access and updated_at, and unarchives", async () => {
   expect(h.hub.roleFor(id, "a@corp.com", false)).toBe("view");
   expect(h.hub.updateMeta(id, { archived: false }).archivedAt).toBeNull();
 });
+
+test("a build from an older compiler is recompiled on read and saved", async () => {
+  const id = await make();
+  // Simulate a build stored before a theme change: no stamp, old inlined colours.
+  const sql = h.ctx.sqlStorage;
+  const stale = { ...(await h.hub.build(id))!.build, stamp: undefined, css: ":root{--background: oklch(0.185 0.006 60)}" };
+  sql.exec(`UPDATE builds SET build = ? WHERE artifact_id = ?`, JSON.stringify(stale), id);
+
+  const served = (await h.hub.build(id))!.build;
+  expect(served.css).not.toContain("oklch(0.185 0.006 60)");
+  expect(served.css).toContain("--background: oklch(0.16 0.017 275)");
+  const stored = JSON.parse(sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, id).toArray()[0].build as string);
+  expect(stored.stamp).toBe(served.stamp);
+  expect(stored.stamp).toBeTruthy();
+});
