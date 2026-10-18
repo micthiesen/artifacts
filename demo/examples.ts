@@ -44,8 +44,10 @@ export const EXAMPLES: Example[] = [
     slug: "launch-plan",
     label: "Launch plan",
     title: "Launch plan: billing v2",
-    blurb: "MDX with a diagram, a chart, and a poll, checklist and comments that everyone shares.",
+    blurb: "MDX with a diagram, a chart, and a poll, sign-off, checklist and comments that everyone shares.",
     seed: [
+      { by: PRIYA, key: `approve/go/${PRIYA}`, value: { decision: "approve", note: "Docs and support macros are ready.", by: PRIYA }, minutesAgo: 50 },
+      { by: TOM, key: `approve/go/${TOM}`, value: { decision: "approve", by: TOM }, minutesAgo: 20 },
       { by: PRIYA, key: `poll/day/${PRIYA}`, value: ["This Thursday"] },
       { by: MARCUS, key: `poll/day/${MARCUS}`, value: ["Next Thursday"] },
       { by: ANA, key: `poll/day/${ANA}`, value: ["This Thursday"] },

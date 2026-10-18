@@ -3,8 +3,9 @@
 import { Check, Plus, Send, Trash2, X } from "./icons.ts";
 import * as React from "react";
 import { useShared, useSharedMap, useViewer } from "../hooks.ts";
-import { Avatar, AvatarGroup, Button, Input, Textarea } from "./primitives.tsx";
-import { Tooltip } from "./controls.tsx";
+import { Avatar, AvatarGroup, Badge, Button, Input, Label, Textarea } from "./primitives.tsx";
+import { Checkbox, Select, Tooltip } from "./controls.tsx";
+import { Table } from "./table.tsx";
 import { cn, displayName, relativeTime, slugify, useNow } from "./utils.ts";
 
 function ReadOnlyNote({ email }: { email: string | null }) {
@@ -356,6 +357,391 @@ export function Notes({ id, placeholder = "Write shared notes…", rows = 6, cla
         ) : null}
       </div>
       {!viewer.canWrite && <ReadOnlyNote email={viewer.email} />}
+    </div>
+  );
+}
+
+// ---- Approval ---------------------------------------------------------------------
+
+type Decision = { decision: "approve" | "changes"; note?: string; by?: string; at?: number };
+
+/**
+ * Sign-off. Each person's decision lives at `approve/<id>/<email>` as
+ * { decision: "approve" | "changes", note? }; the server stamps who and when.
+ * With `approvers`, it counts as approved once every one of them approves.
+ */
+export function Approval({
+  id,
+  title = "Approval",
+  description,
+  approvers,
+  className,
+}: {
+  id: string;
+  title?: React.ReactNode;
+  description?: React.ReactNode;
+  approvers?: string[];
+  className?: string;
+}) {
+  const map = useSharedMap<Decision>(`approve/${id}`);
+  const viewer = useViewer();
+  const now = useNow();
+  const mine = viewer.email ? map.get(viewer.email) : undefined;
+  const [note, setNote] = React.useState("");
+  const decisions = map.entries
+    .filter(([, d]) => d && (d.decision === "approve" || d.decision === "changes"))
+    .sort((a, b) => (a[1].at ?? Infinity) - (b[1].at ?? Infinity));
+  const required = (approvers ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const approved = new Set(decisions.filter(([, d]) => d.decision === "approve").map(([email]) => email));
+  const changes = decisions.filter(([, d]) => d.decision === "changes");
+  const waiting = required.filter((e) => !map.get(e));
+  const status =
+    changes.length > 0
+      ? { tone: "caution" as const, text: "Changes requested" }
+      : required.length
+        ? required.every((e) => approved.has(e))
+          ? { tone: "positive" as const, text: "Approved" }
+          : { tone: "neutral" as const, text: `Waiting on ${required.filter((e) => !approved.has(e)).length} of ${required.length}` }
+        : approved.size
+          ? { tone: "positive" as const, text: `Approved by ${approved.size}` }
+          : { tone: "neutral" as const, text: "No decisions yet" };
+
+  function decide(decision: Decision["decision"]) {
+    if (!viewer.canWrite || !viewer.email) return;
+    const text = note.trim();
+    // Clicking your current decision again without a new note changes nothing (and keeps its note).
+    if (mine?.decision === decision && !text) return;
+    map.set(viewer.email, { decision, ...(text ? { note: text } : {}) });
+    setNote("");
+  }
+
+  return (
+    <div className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
+      <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-4 pb-3">
+        <div className="min-w-0">
+          <div className="font-semibold">{title}</div>
+          {description && <div className="mt-0.5 text-sm text-muted-foreground">{description}</div>}
+        </div>
+        <Badge tone={status.tone} role="status">
+          {status.tone === "positive" && <Check />}
+          {status.text}
+        </Badge>
+      </div>
+      {(decisions.length > 0 || waiting.length > 0) && (
+        <ul className="divide-y divide-border/70 border-t border-border">
+          {decisions.map(([email, d]) => (
+            <li key={email} className="flex gap-3 px-5 py-2.5">
+              <Avatar email={email} size="sm" className="mt-0.5" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                  <span className="font-medium">{email === viewer.email ? "You" : displayName(email)}</span>
+                  <span className={d.decision === "approve" ? "text-positive" : "text-caution"}>
+                    {d.decision === "approve" ? "approved" : "requested changes"}
+                  </span>
+                  {d.at && (
+                    <span className="text-[13px] text-muted-foreground" title={new Date(d.at).toLocaleString()}>
+                      {relativeTime(d.at, now)}
+                    </span>
+                  )}
+                </div>
+                {d.note && <p className="mt-0.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap">{d.note}</p>}
+              </div>
+            </li>
+          ))}
+          {waiting.map((email) => (
+            <li key={email} className="flex items-center gap-3 px-5 py-2.5 text-sm text-muted-foreground">
+              <Avatar email={email} size="sm" className="opacity-60" />
+              <span className="min-w-0 flex-1 truncate">{email === viewer.email ? "You" : displayName(email)}</span>
+              <span className="text-[13px]">Waiting</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="border-t border-border px-5 py-3">
+        {viewer.canWrite && viewer.email ? (
+          <div className="flex flex-col gap-2.5">
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={mine ? "Add a note with your new decision (optional)" : "Add a note (optional)"}
+              aria-label="Note with your decision"
+              rows={2}
+              className="min-h-14 bg-background/40"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" size="sm" onClick={() => decide("approve")}>
+                <Check /> {mine?.decision === "approve" ? "Approved" : "Approve"}
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => decide("changes")}>
+                {mine?.decision === "changes" ? "Changes requested" : "Request changes"}
+              </Button>
+              {mine && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    if (viewer.email) map.delete(viewer.email);
+                    setNote("");
+                  }}
+                >
+                  Withdraw
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <ReadOnlyNote email={viewer.email} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Form -------------------------------------------------------------------------
+
+export type FormField = {
+  name: string;
+  label?: string;
+  type?: "text" | "textarea" | "number" | "email" | "date" | "select" | "checkbox";
+  options?: string[];
+  required?: boolean;
+  placeholder?: string;
+  hint?: string;
+};
+type FormValue = string | number | boolean;
+type FormResponse = { values: Record<string, FormValue>; by?: string; at?: number };
+
+function emptyValue(f: FormField): FormValue {
+  return f.type === "checkbox" ? false : "";
+}
+
+/**
+ * One response per person at `form/<id>/<email>` as { values }; the server
+ * stamps who and when. People can edit their response; everyone who can open
+ * the artifact sees the responses.
+ */
+export function Form({
+  id,
+  fields,
+  title,
+  description,
+  submitLabel = "Send",
+  showResponses = true,
+  className,
+}: {
+  id: string;
+  fields: FormField[];
+  title?: React.ReactNode;
+  description?: React.ReactNode;
+  submitLabel?: string;
+  showResponses?: boolean;
+  className?: string;
+}) {
+  const map = useSharedMap<FormResponse>(`form/${id}`);
+  const viewer = useViewer();
+  const now = useNow();
+  const responses = map.entries
+    .filter(([, r]) => r && r.values && typeof r.values === "object" && !Array.isArray(r.values))
+    .sort((a, b) => (a[1].at ?? Infinity) - (b[1].at ?? Infinity));
+  const mine = viewer.email ? responses.find(([email]) => email === viewer.email)?.[1] : undefined;
+  const initial = () => Object.fromEntries(fields.map((f) => [f.name, mine?.values[f.name] ?? emptyValue(f)]));
+  const [values, setValues] = React.useState<Record<string, FormValue>>(initial);
+  // Open while answering for the first time or editing; typing keeps it open even if a response arrives meanwhile.
+  const [editing, setEditing] = React.useState(false);
+  const [error, setError] = React.useState<{ field: string; text: string } | null>(null);
+  const open = viewer.canWrite && (!mine || editing);
+  const errorId = `form-${id}-error`;
+
+  function set(name: string, v: FormValue) {
+    setValues((prev) => ({ ...prev, [name]: v }));
+    setEditing(true);
+    setError(null);
+  }
+
+  function fail(f: FormField, text: string) {
+    setError({ field: f.name, text });
+    document.getElementById(`form-${id}-${f.name}`)?.focus();
+  }
+
+  // Works without native submission (the frame CSP sets form-action 'none').
+  function submit(e?: React.SyntheticEvent) {
+    e?.preventDefault();
+    if (!viewer.canWrite || !viewer.email) return;
+    const out: Record<string, FormValue> = {};
+    for (const f of fields) {
+      const raw = values[f.name];
+      const v = typeof raw === "string" ? raw.trim() : raw;
+      const label = f.label ?? f.name;
+      if (f.required && (v === "" || v === false || v === undefined)) return fail(f, `${label} is required.`);
+      if (v === "" || v === undefined) continue;
+      if (f.type === "number") {
+        // Decimal numbers only, with a comma accepted as the decimal point.
+        const text = String(v).replace(/\s/g, "");
+        if (!/^[-+]?(\d+([.,]\d*)?|[.,]\d+)$/.test(text)) return fail(f, `${label} must be a number.`);
+        out[f.name] = Number(text.replace(",", "."));
+      } else if (f.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v))) {
+        return fail(f, `${label} must be an email address.`);
+      } else out[f.name] = v;
+    }
+    map.set(viewer.email, { values: out });
+    setEditing(false);
+  }
+
+  function field(f: FormField) {
+    const fid = `form-${id}-${f.name}`;
+    const label = f.label ?? f.name;
+    const value = values[f.name] ?? emptyValue(f);
+    const invalid = error?.field === f.name;
+    const describedBy = [f.hint ? `${fid}-hint` : "", invalid ? errorId : ""].filter(Boolean).join(" ") || undefined;
+    const required = f.required ? <span className="text-muted-foreground">*</span> : null;
+    const control =
+      f.type === "checkbox" ? (
+        <Checkbox
+          id={fid}
+          checked={value === true}
+          onCheckedChange={(c) => set(f.name, c === true)}
+          label={<>{label}{required}</>}
+          aria-describedby={describedBy}
+          aria-invalid={invalid || undefined}
+        />
+      ) : f.type === "select" ? (
+        <Select options={f.options ?? []} value={typeof value === "string" && value ? value : null} onValueChange={(v) => set(f.name, String(v ?? ""))} placeholder={f.placeholder} aria-label={label} />
+      ) : f.type === "textarea" ? (
+        <Textarea id={fid} value={String(value)} onChange={(e) => set(f.name, e.target.value)} placeholder={f.placeholder} rows={3} aria-describedby={describedBy} aria-invalid={invalid || undefined} />
+      ) : (
+        <Input
+          id={fid}
+          type={f.type === "number" ? "text" : (f.type ?? "text")}
+          inputMode={f.type === "number" ? "decimal" : undefined}
+          value={String(value)}
+          onChange={(e) => set(f.name, e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) submit(e);
+          }}
+          placeholder={f.placeholder}
+          aria-describedby={describedBy}
+          aria-invalid={invalid || undefined}
+        />
+      );
+    return (
+      <div key={f.name} className="flex flex-col gap-1.5">
+        {f.type === "select" ? (
+          <span className="text-sm leading-none font-medium">
+            {label}
+            {required}
+          </span>
+        ) : f.type !== "checkbox" ? (
+          <Label htmlFor={fid}>
+            {label}
+            {required}
+          </Label>
+        ) : null}
+        {control}
+        {f.hint && (
+          <span id={`${fid}-hint`} className="text-[13px] text-muted-foreground">
+            {f.hint}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  const show = (v: FormValue | undefined) => (v === undefined || v === "" ? "—" : typeof v === "boolean" ? (v ? "Yes" : "No") : String(v));
+
+  return (
+    <div className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
+      {(title || description) && (
+        <div className="px-5 pt-4 pb-1">
+          {title && <div className="font-semibold">{title}</div>}
+          {description && <div className="mt-0.5 text-sm text-muted-foreground">{description}</div>}
+        </div>
+      )}
+      <div className="px-5 py-4">
+        {open ? (
+          <form onSubmit={submit} className="flex flex-col gap-4">
+            {fields.map(field)}
+            {error && (
+              <p id={errorId} role="alert" className="text-sm text-negative">
+                {error.text}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" size="sm" onClick={submit}>
+                <Send /> {mine ? "Save changes" : submitLabel}
+              </Button>
+              {mine && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setEditing(false);
+                    setError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
+          </form>
+        ) : mine ? (
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge tone="positive">
+                <Check /> Sent
+              </Badge>
+              {mine.at && <span className="text-[13px] text-muted-foreground">{relativeTime(mine.at, now)}</span>}
+              {viewer.canWrite && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto"
+                  onClick={() => {
+                    setValues(initial());
+                    setEditing(true);
+                  }}
+                >
+                  Edit response
+                </Button>
+              )}
+            </div>
+            <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+              {fields.map((f) => (
+                <React.Fragment key={f.name}>
+                  <dt className="text-muted-foreground">{f.label ?? f.name}</dt>
+                  <dd className="m-0 break-words whitespace-pre-wrap">{show(mine.values[f.name])}</dd>
+                </React.Fragment>
+              ))}
+            </dl>
+          </div>
+        ) : (
+          <ReadOnlyNote email={viewer.email} />
+        )}
+      </div>
+      {showResponses && (
+        <div className="border-t border-border px-5 py-3">
+          <div className="mb-2 text-[13px] text-muted-foreground">
+            {responses.length === 0 ? "No responses yet." : `${responses.length} ${responses.length === 1 ? "response" : "responses"}`}
+          </div>
+          {responses.length > 0 && (
+            // Field keys are prefixed so a field named "person" or "sent" can't replace those columns.
+            <Table
+              data={responses.map(([email, r]) => ({
+                $person: email === viewer.email ? "You" : displayName(email),
+                ...Object.fromEntries(fields.map((f) => [`f:${f.name}`, show(r.values[f.name])])),
+                $sent: r.at ? relativeTime(r.at, now) : "",
+              }))}
+              columns={[
+                { key: "$person", label: "Person" },
+                ...fields.map((f) => ({ key: `f:${f.name}`, label: f.label ?? f.name, format: "text" as const })),
+                { key: "$sent", label: "Sent" },
+              ]}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

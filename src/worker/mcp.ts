@@ -669,7 +669,7 @@ export const TOOLS: Tool[] = [
     name: "artifact_state",
     title: "artifacts.boo: shared state",
     description:
-      "artifacts.boo: read an artifact's live shared state (poll votes, checklist items, comments, useShared keys), and optionally set keys (null deletes). Viewers see changes immediately.",
+      "artifacts.boo: read an artifact's live shared state (poll votes, approval decisions, form responses, checklist items, comments, useShared keys), and optionally set keys (null deletes). Viewers see changes immediately. Approval decisions and form responses are read-only here: only people make them, on the page.",
     inputSchema: {
       type: "object",
       properties: {
@@ -687,7 +687,7 @@ export const TOOLS: Tool[] = [
       // Writes are stamped with the person the agent acts for: it can't vote or comment as anyone else.
       if (args.set && typeof args.set === "object") {
         const role = (await hub.roleFor(artifactId, ctx.person)) ?? "view";
-        await hub.setState(artifactId, args.set as never, ctx.person, undefined, { role, origin: ctx.origin });
+        await hub.setState(artifactId, args.set as never, ctx.person, undefined, { role, origin: ctx.origin, agent: ctx.actor === "agent" });
       }
       const state = await hub.state(artifactId);
       const prefix = typeof args.prefix === "string" ? args.prefix : "";
@@ -699,7 +699,7 @@ export const TOOLS: Tool[] = [
     name: "artifact_activity",
     title: "artifacts.boo: activity",
     description:
-      "artifacts.boo: what people did since you last looked: new comment threads and replies (with the quoted text and block they point at), resolves, votes, checklist ticks, shared-state edits and new versions, oldest first. Pass the returned cursor as `since` next time to get only newer events. Omit `id` for every artifact. Use this to pick up feedback, then change the artifact (pass `resolves` with the thread ids you addressed) or reply with artifact_comment.",
+      "artifacts.boo: what people did since you last looked: new comment threads and replies (with the quoted text and block they point at), resolves, votes, approval decisions, form responses, checklist ticks, shared-state edits and new versions, oldest first. Pass the returned cursor as `since` next time to get only newer events. Omit `id` for every artifact. Use this to pick up feedback, then change the artifact (pass `resolves` with the thread ids you addressed) or reply with artifact_comment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -756,6 +756,43 @@ export const TOOLS: Tool[] = [
       return {
         text: threads.length ? threads.map(describeThread).join("\n\n") : args.includeResolved ? "No comments yet." : "No open threads.",
         structured: { threads },
+      };
+    },
+  },
+  {
+    name: "artifact_readers",
+    title: "artifacts.boo: who has read it",
+    description:
+      "artifacts.boo: who has opened the artifact and which version they last saw: each person it's shared with (or that they haven't opened it yet), and anyone else who opened it through a domain, workspace or public share while signed in. Use it to tell the user who hasn't seen the latest version before chasing them.",
+    inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    need: "owner",
+    run: async (args, { hub }) => {
+      const artifactId = String(args.id);
+      const [meta, readers] = await Promise.all([hub.meta(artifactId), hub.readers(artifactId)]);
+      if (!meta) return { isError: true, text: `No artifact ${artifactId}; see artifact_list.` };
+      const seen = new Map(readers.map((r) => [r.email, r]));
+      const saw = (r: { version: number; at: string }) => {
+        const behind = meta.version - r.version;
+        return `saw v${r.version}${behind > 0 ? ` (${behind} ${behind === 1 ? "version" : "versions"} behind)` : " (current)"} at ${r.at.slice(0, 16).replace("T", " ")} UTC`;
+      };
+      const people = meta.shares.filter((s) => s.email.includes("@") && !s.email.startsWith("@"));
+      const named = new Set(people.map((s) => s.email));
+      const lines = people.map((s) => {
+        const r = seen.get(s.email);
+        return `- ${s.email} (${s.role}): ${r ? saw(r) : "hasn't opened it"}`;
+      });
+      const others = readers.filter((r) => !named.has(r.email));
+      if (others.length) lines.push("Also opened by:", ...others.map((r) => `- ${r.email}: ${saw(r)}`));
+      const head = `v${meta.version} is current.`;
+      const foot = meta.public ? "\nAnonymous visits through the public link aren't recorded." : "";
+      return {
+        text: `${head}\n${lines.length ? lines.join("\n") : "Not shared with anyone individually, and nobody else has opened it yet."}${foot}`,
+        structured: {
+          version: meta.version,
+          shared: people.map((s) => ({ email: s.email, role: s.role, seen: seen.get(s.email) ?? null })),
+          others,
+        },
       };
     },
   },
@@ -919,11 +956,31 @@ function describeEvent(e: { seq: number; at: string; artifact: string; title: st
       const key = String(e.key);
       if (key.startsWith("comments/")) return `${head} commented in <Comments id="${key.split("/")[1]}">: ${e.value ?? "(deleted)"}`;
       if (key.startsWith("poll/")) return `${head} voted in poll "${key.split("/")[1]}": ${e.value ?? "(cleared)"}`;
+      if (key.startsWith("approve/")) {
+        const d = summaryOf(e.value) as { decision?: string; note?: string } | null;
+        const what = d?.decision === "approve" ? "approved" : d?.decision === "changes" ? "requested changes" : "decided";
+        return `${head} ${e.value ? what : "withdrew their decision"} in approval "${key.split("/")[1]}"${d?.note ? `: “${d.note}”` : ""}`;
+      }
+      if (key.startsWith("form/")) {
+        const r = summaryOf(e.value) as { values?: Record<string, unknown> } | null;
+        const fields = r?.values ? `: ${Object.entries(r.values).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ")}` : e.value ? " (see artifact_state for the values)" : "";
+        return `${head} ${e.value ? "responded" : "withdrew their response"} to form "${key.split("/")[1]}"${fields}`;
+      }
       if (key.startsWith("check/")) return `${head} updated checklist "${key.split("/")[1]}" item "${key.split("/")[2]}": ${e.value ?? "(removed)"}`;
       return `${head} set ${key} = ${e.value ?? "null"}`;
     }
     default:
       return `${head} ${e.type}`;
+  }
+}
+
+/** The logged value of a state event: JSON cut at 400 characters, so long values don't parse. */
+function summaryOf(value: unknown): unknown {
+  if (typeof value !== "string") return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
   }
 }
 

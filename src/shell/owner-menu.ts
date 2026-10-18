@@ -35,6 +35,8 @@ type Overview = {
   }[];
   assets: { path: string; contentType: string; bytes: number }[];
   hosts: string[];
+  /** Signed-in people who opened it (not the owner), most recent first. */
+  readers: { email: string; version: number; at: string }[];
 };
 type ToolResponse = { ok: boolean; text: string; data: Record<string, unknown> | null };
 type TabId = "sharing" | "history" | "problems" | "data" | "settings";
@@ -360,6 +362,17 @@ export function initOwnerMenu(
 
   function renderSharing(d: Overview): Node[] {
     const shares = [...d.meta.shares].sort((a, b) => a.email.localeCompare(b.email));
+    const seen = new Map(d.readers.map((r) => [r.email, r]));
+    // What someone last saw: the current version, an older one, or nothing yet.
+    const seenLine = (r: { version: number; at: string } | undefined) =>
+      h(
+        "div",
+        { class: "muted om-small om-seen" },
+        r ? (r.version >= d.meta.version ? "Seen the latest · " : `Last saw v${r.version} · `) : "Hasn't opened it yet",
+        r ? time(r.at) : null,
+      );
+    const named = new Set(shares.map((s) => s.email));
+    const others = d.readers.filter((r) => !named.has(r.email));
     const list = shares.length
       ? h(
           "ul",
@@ -371,7 +384,7 @@ export function initOwnerMenu(
             return h(
               "li",
               { class: "om-row om-share" },
-              h("span", { class: "om-grow om-ellipsis", title: s.email }, label),
+              h("div", { class: "om-grow" }, h("div", { class: "om-ellipsis", title: s.email }, label), isDomain ? null : seenLine(seen.get(s.email))),
               h(
                 "select",
                 {
@@ -528,8 +541,22 @@ export function initOwnerMenu(
       ),
     );
 
+    const alsoOpened = others.length > 0 && h(
+          "div",
+          { class: "om-group" },
+          h("h3", { class: "om-h" }, "Also opened by"),
+          h(
+            "ul",
+            { class: "om-list" },
+            ...others.map((r) =>
+              h("li", { class: "om-row" }, h("div", { class: "om-grow" }, h("div", { class: "om-ellipsis", title: r.email }, r.email), seenLine(r))),
+            ),
+          ),
+        );
+
     return [
       h("div", { class: "om-group" }, h("h3", { class: "om-h" }, "People"), list, form),
+      ...(alsoOpened ? [alsoOpened] : []),
       h("div", { class: "om-group" }, publicToggle, expiry, previewToggle),
     ];
   }

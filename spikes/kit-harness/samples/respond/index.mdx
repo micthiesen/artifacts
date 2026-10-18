@@ -1,0 +1,24 @@
+# Q3 launch plan
+
+<Summary>Ship the new onboarding on **October 28** behind a 10% rollout.</Summary>
+
+## Sign-off
+
+<Approval id="launch" title="Ship on October 28?" description="Needs design and support before we flip the flag." approvers={["ada.lovelace@example.com", "grace.hopper@example.com", "linus@example.com"]} />
+
+## Tell us what you need
+
+<Form
+  id="needs"
+  title="Support readiness"
+  description="One response per person; you can edit yours."
+  fields={[
+    { name: "team", label: "Team", type: "select", options: ["Support", "Sales", "Success"], required: true },
+    { name: "agents", label: "People who need training", type: "number" },
+    { name: "date", label: "Training date", type: "date" },
+    { name: "macros", label: "We need new macros", type: "checkbox" },
+    { name: "notes", label: "Anything else", type: "textarea", placeholder: "Edge cases, worries…" },
+  ]}
+/>
+
+<Approval id="open" title="Open approval (no named approvers)" />

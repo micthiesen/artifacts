@@ -391,7 +391,7 @@ function addChannels(): HTMLElement {
       "div",
       { class: "add-card" },
       h("h3", {}, "Webhook"),
-      h("p", { class: "muted small" }, "We POST JSON {title, body, url} signed with X-Artifacts-Signature."),
+      h("p", { class: "muted small" }, "We POST JSON {title, body, url, artifact, events} signed with X-Artifacts-Signature. events lists each comment, decision, form response and update, so an automation can wake your agent to act on it."),
       url,
       btn("Add webhook", () =>
         act(async () => {

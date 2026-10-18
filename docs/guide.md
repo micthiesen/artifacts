@@ -25,7 +25,7 @@ so they need no account.
 
 ## Storage
 
-- **Shared state:** `useShared` and `useSharedMap`, and the stateful components (`Poll`, `Checklist`, `Comments`, `Notes`), sync live between everyone viewing. Writes are last-writer-wins per key, so for lists use one key per item (`useSharedMap`). People with view access, and anonymous public visitors, see shared state read-only.
+- **Shared state:** `useShared` and `useSharedMap`, and the stateful components (`Poll`, `Checklist`, `Comments`, `Notes`, `Approval`, `Form`), sync live between everyone viewing. Writes are last-writer-wins per key, so for lists use one key per item (`useSharedMap`). People with view access, and anonymous public visitors, see shared state read-only.
 - **Per-viewer browser storage:** `useLocal(key, default)`. Plain `localStorage` also works.
 
 ## Editing
@@ -42,8 +42,10 @@ so they need no account.
 ## Feedback from readers
 
 - **Comments:** readers can comment on any text, block, table row or the whole page. Each thread records the block it points at (`block` ids follow the outline: a heading's slug, then `<section>-1`, `<section>-2` for the blocks under it), the quoted text and the version it was written on.
+- **Ask for what you need back:** when the user needs a decision or facts from people, put an `Approval` or `Form` in the artifact instead of asking in prose, and share it with those people with `edit` access. Their answers come back through `artifact_activity` and `artifact_state`, signed with their verified email and the version they saw, and the owner is notified. Only people make decisions and responses, on the page; you can read them but not set them. Everyone who can open the artifact sees every response, so don't collect anything private, especially on a public artifact.
 - **Pick up feedback:** call `artifact_activity` (all artifacts, or one `id`) to see new threads, replies, votes, checklist ticks and versions since your last cursor. `artifact_threads` lists an artifact's open threads with every comment.
 - **Act on it:** fix the artifact with the usual edit tools and pass `note` (one line readers will see, e.g. "Split costs per seat") and `resolves` (the thread ids you addressed). Those threads show "Addressed in vN" and their authors are notified. Reply with `artifact_comment` when you need to answer a question or explain why you didn't change something.
+- **Who has read it:** `artifact_readers` lists each person it's shared with and the version they last saw (or that they haven't opened it). Use it before telling the user someone has seen a change.
 - **Notes matter:** every edit's `note` appears in history, in the "Updated since you last looked" bar readers see, and in update notifications. Without one, readers see "edit index.mdx".
 
 ## Sharing

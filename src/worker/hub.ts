@@ -117,7 +117,7 @@ export type HubApi = AsyncMethods<
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
     | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment"
-    | "resolveThread" | "deleteComment" | "activity" | "visit" | "previewInfo" | "previewImage" | "watches" | "setWatch"
+    | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
     | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin"
   >
 > & { fetch(request: Request): Promise<Response> };
@@ -909,16 +909,18 @@ export class Workspace extends DurableObject {
     changes: Record<string, JsonValue | null>,
     by: string | null,
     cid?: string,
-    opts: { role?: Role; origin?: string } = {},
+    opts: { role?: Role; origin?: string; agent?: boolean } = {},
   ): number {
-    this.requireArtifact(id);
+    const version = this.requireArtifact(id).version as number;
     let seq = 0;
     const applied: { key: string; value: JsonValue | null; seq: number; created: boolean }[] = [];
     this.ctx.storage.transactionSync(() => {
       for (const [key, raw] of Object.entries(changes)) {
         if (key.length === 0 || key.length > 200) throw new HubError(`state key "${key.slice(0, 40)}" must be 1-200 chars`);
         const existing = this.sql.exec(`SELECT by FROM state WHERE artifact_id = ? AND key = ?`, id, key).toArray()[0];
-        const value = by ? stampCollab(key, raw, by, Boolean(existing), (existing?.by as string | null) ?? null, opts.role) : raw;
+        // A decision or form response is the person's own act on the page; their agent can read it but not make it.
+        if (opts.agent && RESPONSE_KEY.test(key)) throw new HubError(`${key.split("/")[0] === "approve" ? "decisions" : "form responses"} can only be made by people on the page`);
+        const value = by ? stampCollab(key, raw, by, Boolean(existing), (existing?.by as string | null) ?? null, opts.role, version) : raw;
         seq = this.sql.exec(`UPDATE artifacts SET state_seq = state_seq + 1 WHERE id = ? RETURNING state_seq`, id).one().state_seq as number;
         if (value === null) {
           this.sql.exec(`DELETE FROM state WHERE artifact_id = ? AND key = ?`, id, key);
@@ -957,6 +959,20 @@ export class Workspace extends DurableObject {
         .toArray()
         .map((r) => r.by as string);
       this.notifyComment(id, by, { thread: `comments/${scope}`, text, participants: earlier, reply: false, origin: opts.origin });
+    }
+    // A decision or form response is what the owner asked for, so it notifies like a comment.
+    for (const a of applied) {
+      const m = RESPONSE_KEY.exec(a.key);
+      if (!m || !by || !a.value || typeof a.value !== "object" || Array.isArray(a.value)) continue;
+      const v = a.value as { decision?: string; note?: string };
+      this.notifyResponse(id, by, {
+        component: m[1] === "approve" ? "approval" : "form",
+        block: m[2],
+        ...(v.decision ? { decision: v.decision } : {}),
+        ...(v.note ? { note: v.note.slice(0, 300) } : {}),
+        changed: !a.created,
+        origin: opts.origin,
+      });
     }
     return seq;
   }
@@ -1994,6 +2010,20 @@ export class Workspace extends DurableObject {
     return { since, readSeq, watch: this.watchLevel(email, id) };
   }
 
+  /**
+   * Who has opened the artifact signed in and can still open it, with the
+   * version they last saw and when, most recent first. The owner isn't listed;
+   * anonymous visitors on a public link leave no record.
+   */
+  readers(id: string): { email: string; version: number; at: string }[] {
+    const owner = this.requireArtifact(id).owner as string;
+    return this.sql
+      .exec(`SELECT email, version, at FROM seen WHERE artifact_id = ? AND email != ? ORDER BY at DESC LIMIT 500`, id, owner)
+      .toArray()
+      .filter((r) => this.canOpen(id, r.email as string))
+      .map((r) => ({ email: r.email as string, version: r.version as number, at: r.at as string }));
+  }
+
   private markRead(id: string, email: string, seq: number) {
     this.sql.exec(`UPDATE seen SET read_seq = MAX(read_seq, ?) WHERE email = ? AND artifact_id = ?`, Math.floor(seq), email, id);
   }
@@ -2079,6 +2109,22 @@ export class Workspace extends DurableObject {
       if (why === "all" && level !== "all") continue;
       if (!this.canOpen(id, email)) continue;
       this.enqueue(email, id, "comment", { thread: c.thread, by: actor, text: c.text.slice(0, 300), why, reply: c.reply, origin: c.origin }, COMMENT_DELAY_MS);
+    }
+    void this.armAlarm();
+  }
+
+  /** Approval decisions and form responses reach "all" watchers (the owner by default), batched like comments. */
+  private notifyResponse(
+    id: string,
+    actor: Actor,
+    r: { component: "approval" | "form"; block: string; decision?: string; note?: string; changed: boolean; origin?: string },
+  ) {
+    const owner = this.requireArtifact(id).owner as string;
+    const candidates = new Set<string>([owner]);
+    for (const row of this.sql.exec(`SELECT email FROM watches WHERE artifact_id = ? AND level = 'all'`, id)) candidates.add(row.email as string);
+    for (const email of candidates) {
+      if (email === actor || !email.includes("@") || this.watchLevel(email, id) !== "all" || !this.canOpen(id, email)) continue;
+      this.enqueue(email, id, "response", { ...r, by: actor }, COMMENT_DELAY_MS);
     }
     void this.armAlarm();
   }
@@ -2488,6 +2534,11 @@ function cleanAnchor(anchor: Anchor | null): Anchor | null {
  * Server-side checks and stamps for the kit's collab keys written by a person.
  * Other keys pass through unchanged.
  */
+/** `approve/<id>/<email>` and `form/<id>/<email>`: one decision or form response per person. */
+const RESPONSE_KEY = /^(approve|form)\/([^/]+)\/(.+)$/;
+const RESPONSE_ID = /^[\w.-]{1,64}$/;
+const FORM_FIELDS_MAX = 50;
+
 function stampCollab(
   key: string,
   value: JsonValue | null,
@@ -2495,11 +2546,39 @@ function stampCollab(
   exists: boolean,
   existingBy: string | null,
   role: Role | undefined,
+  version: number,
 ): JsonValue | null {
   const poll = /^poll\/[^/]+\/(.+)$/.exec(key);
   if (poll) {
     if (poll[1] !== by) throw new HubError("you can only change your own vote");
     return value;
+  }
+  // Approvals and form responses are one per person, under their own email, and
+  // carry who and when so an agent can trust them.
+  // Who, when and on which version, so an agent can trust and date them.
+  const response = RESPONSE_KEY.exec(key);
+  if (response) {
+    const [, kind, id, email] = response;
+    if (!RESPONSE_ID.test(id)) throw new HubError(`"${id.slice(0, 40)}" isn't a valid ${kind === "approve" ? "approval" : "form"} id (letters, digits, - _ and . only)`);
+    if (email !== by) throw new HubError(kind === "approve" ? "you can only change your own decision" : "you can only change your own response");
+    if (value === null) return null;
+    if (typeof value !== "object" || Array.isArray(value)) throw new HubError("a response must be an object");
+    if (kind === "approve") {
+      if (value.decision !== "approve" && value.decision !== "changes") throw new HubError('a decision is "approve" or "changes"');
+      const note = typeof value.note === "string" ? value.note.trim() : "";
+      if (note.length > COMMENT_MAX_CHARS) throw new HubError(`notes are limited to ${COMMENT_MAX_CHARS} characters`);
+      return { decision: value.decision, ...(note ? { note } : {}), by, at: Date.now(), version };
+    }
+    const values = value.values;
+    if (!values || typeof values !== "object" || Array.isArray(values)) throw new HubError("a form response needs values");
+    const entries = Object.entries(values);
+    if (entries.length > FORM_FIELDS_MAX) throw new HubError(`a form response has at most ${FORM_FIELDS_MAX} fields`);
+    for (const [name, v] of entries) {
+      if (name.length > 100) throw new HubError("form field names are limited to 100 characters");
+      if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") throw new HubError(`form field "${name.slice(0, 40)}" must be text, a number or true/false`);
+      if (typeof v === "string" && v.length > COMMENT_MAX_CHARS) throw new HubError(`form field "${name.slice(0, 40)}" is limited to ${COMMENT_MAX_CHARS} characters`);
+    }
+    return { values, by, at: Date.now(), version };
   }
   if (key.startsWith("comments/")) {
     if (exists && existingBy !== null && existingBy !== by && role !== "owner") {

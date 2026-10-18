@@ -8,7 +8,11 @@ export type OutboxItem =
       data: { thread: string; by: string; text: string; why: "mention" | "reply" | "all"; reply: boolean; origin?: string };
     }
   | { kind: "resolve"; data: { thread: string; by: string; addressedIn: number | null; origin?: string } }
-  | { kind: "update"; data: { version: number; notes: string[]; origin?: string } };
+  | { kind: "update"; data: { version: number; notes: string[]; origin?: string } }
+  | {
+      kind: "response";
+      data: { component: "approval" | "form"; block: string; by: string; decision?: string; note?: string; changed: boolean; origin?: string };
+    };
 
 const MENTION = /(?:^|[\s(])@([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/gi;
 
@@ -45,6 +49,7 @@ export function composeMessage(input: {
   const comments = items.filter((i): i is Extract<OutboxItem, { kind: "comment" }> => i.kind === "comment");
   const resolves = items.filter((i): i is Extract<OutboxItem, { kind: "resolve" }> => i.kind === "resolve");
   const updates = items.filter((i): i is Extract<OutboxItem, { kind: "update" }> => i.kind === "update");
+  const responses = items.filter((i): i is Extract<OutboxItem, { kind: "response" }> => i.kind === "response");
   const lines: string[] = [];
   let thread: string | undefined;
 
@@ -59,6 +64,17 @@ export function composeMessage(input: {
     if (mentions.length) lines.push(`${name(mentions[0].data.by)} mentioned you: ${quote(mentions[0].data.text, 120)}`);
     const threads = new Set(comments.map((c) => c.data.thread));
     if (threads.size === 1) thread = comments[0].data.thread;
+  }
+  // Newest decision per person and block: changing your mind in the batch window sends one line.
+  const latest = new Map<string, Extract<OutboxItem, { kind: "response" }>["data"]>();
+  for (const r of responses) latest.set(`${r.data.component}/${r.data.block}/${r.data.by}`, r.data);
+  for (const r of latest.values()) {
+    if (r.component === "approval") {
+      const verb = r.decision === "approve" ? "approved" : "requested changes";
+      lines.push(`${name(r.by)} ${verb}${r.note ? `: ${quote(r.note)}` : ""}`);
+    } else {
+      lines.push(`${name(r.by)} ${r.changed ? "updated their" : "sent a"} response to the "${r.block}" form`);
+    }
   }
   for (const r of resolves) {
     lines.push(
@@ -81,5 +97,10 @@ export function composeMessage(input: {
     body: lines.join("\n"),
     url: `${input.origin}/a/${input.artifactId}${hash}`,
     tag: input.artifactId,
+    artifact: { id: input.artifactId, title: input.title },
+    events: items.map(({ kind, data }) => {
+      const { origin: _origin, first: _first, ...rest } = data as Record<string, unknown>;
+      return { kind, ...rest };
+    }),
   };
 }

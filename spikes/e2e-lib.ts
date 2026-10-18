@@ -1,11 +1,13 @@
 // Shared setup for the live end-to-end checks: a throwaway workspace with a test
 // admin, an agent token for MCP, and session cookies for test addresses. Reads
-// DOMAIN and OPERATOR_TOKEN from .env. KEEP=1 keeps the workspace afterwards.
+// DOMAIN and OPERATOR_TOKEN from .env. KEEP=1 keeps the workspace afterwards;
+// STAGE=<name> checks that stage instead of prod (see docs/DEPLOY.md).
 
 export const domain = process.env.DOMAIN!;
-export const apex = `https://${domain}`;
+const stage = process.env.STAGE && process.env.STAGE !== "prod" ? process.env.STAGE : null;
+export const apex = `https://${stage ? `${stage}.` : ""}${domain}`;
 export const slug = `e2e-${Math.random().toString(36).slice(2, 8)}`;
-export const origin = `https://${slug}.${domain}`;
+export const origin = `https://${slug}${stage ? `--${stage}` : ""}.${domain}`;
 export const owner = `admin-${slug}@example.com`;
 
 let failures = 0;

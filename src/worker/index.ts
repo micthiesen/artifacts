@@ -949,7 +949,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
 
 /**
  * Owner menu API (session cookie, same-origin JSON), for the artifact's owner and workspace admins:
- * - GET  /api/a/<id>               overview: meta, shares, history, errors, sources, assets, approved hosts
+ * - GET  /api/a/<id>               overview: meta, shares, history, errors, sources, assets, approved hosts, readers
  * - POST /api/a/<id>/<tool>        one of the owner-menu MCP tools, with the same arguments
  * - POST /api/hosts {host, allowed} approve or revoke a live-data host (workspace admins)
  */
@@ -973,8 +973,10 @@ async function ownerApi(request: Request, url: URL, env: Env, hub: HubApi, viewe
   if (!action && request.method === "GET") {
     const meta = await hub.meta(id);
     if (!meta) return Response.json({ error: "not found" }, { status: 404 });
-    const [history, errors, sources, assets, hosts] = await Promise.all([hub.history(id), hub.errors(id), hub.sources(id), hub.assets(id), hub.allowedHosts()]);
-    return Response.json({ meta, history, errors, sources, assets, hosts });
+    const [history, errors, sources, assets, hosts, readers] = await Promise.all([
+      hub.history(id), hub.errors(id), hub.sources(id), hub.assets(id), hub.allowedHosts(), hub.readers(id),
+    ]);
+    return Response.json({ meta, history, errors, sources, assets, hosts, readers });
   }
   if (action && request.method === "POST") {
     const r = await runOwnerTool(action, { ...(await jsonBody(request)), id }, ctx);

@@ -228,7 +228,7 @@ const linkUrl = ownerLink.structuredContent?.link as string;
 check("owner link issued", typeof linkUrl === "string" && linkUrl.includes("/s/"), ownerLink.content);
 const opened = await fetch(linkUrl, { redirect: "manual" });
 const linkCookie = (opened.headers.get("Set-Cookie") ?? "").split(";")[0];
-check("links are bound to their workspace", (await fetch(linkUrl.replace(origin, `https://other-${slug}.${new URL(apex).hostname}`), { redirect: "manual" })).status !== 303);
+check("links are bound to their workspace", (await fetch(linkUrl.replace(origin, origin.replace(`//${slug}`, `//other-${slug}`)), { redirect: "manual" })).status !== 303);
 check("owner link signs in and redirects", opened.status === 303 && opened.headers.get("Location") === `/a/${id}` && linkCookie.startsWith("__Host-art_session="), opened.status);
 check("owner link session opens private artifact", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: linkCookie } })).status === 200);
 const forOther = await call("artifact_link", { id, email: "nobody@example.com" });

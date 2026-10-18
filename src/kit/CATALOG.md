@@ -52,6 +52,10 @@ Live and shared (they work without extra code; view-only and anonymous viewers s
 - `Checklist({id, items: string[], allowAdd?})`: shows who checked each item.
 - `Comments({id?: "main", title?})`: newest last, with author and time.
 - `Notes({id, placeholder?, rows?})`: a shared textarea that saves as you type and shows who last edited it.
+- `Approval({id, title?, description?, approvers?: string[]})`: sign-off. Each person approves or requests changes, with an optional note; with `approvers` (emails) it reads "Approved" once all of them approve and lists who it's waiting on. Decisions are at `approve/<id>/<email>` as `{decision: "approve"|"changes", note?, by, at, version}`.
+- `Form({id, fields, title?, description?, submitLabel?, showResponses?: true})`: collects one response per person, which they can edit. `fields` is `{name, label?, type?: "text"|"textarea"|"number"|"email"|"date"|"select"|"checkbox", options?, required?, placeholder?, hint?}[]`. Field values are text, numbers or true/false. Responses are at `form/<id>/<email>` as `{values, by, at, version}`, and everyone who can open the artifact can read them (`showResponses={false}` only hides the table).
+- `Approval` and `Form` ids use letters, digits, `-`, `_` and `.`. Only people make decisions and responses, in the page; agents read them with artifact_state.
+- Use `Poll` to pick between options, `Approval` for a go/no-go on the whole artifact, and `Form` when you need specific facts back from each person. Share with `edit` access the people who should take part; `view` is read-only.
 
 ## Hooks (`@a/hooks`)
 

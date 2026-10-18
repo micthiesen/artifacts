@@ -22,6 +22,9 @@ export type NotifyMessage = {
   url: string;
   /** collapse key, e.g. artifact id */
   tag?: string;
+  /** Which artifact and what happened, for webhooks that hand it to an agent or automation. */
+  artifact?: { id: string; title: string };
+  events?: Record<string, unknown>[];
 };
 /** Error whose message is safe to show to the user. */
 export class ChannelError extends Error {
@@ -317,6 +320,8 @@ async function sendWebhook(config: Record<string, unknown>, msg: NotifyMessage):
       body: msg.body,
       url: msg.url,
       tag: msg.tag,
+      ...(msg.artifact ? { artifact: msg.artifact } : {}),
+      ...(msg.events ? { events: msg.events } : {}),
       sentAt: new Date().toISOString(),
     });
   }

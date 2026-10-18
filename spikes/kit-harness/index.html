@@ -89,9 +89,11 @@ window.addEventListener("message", (ev) => {
       send(k, { t: "shared", changes: { [m.key]: shared[m.key] ?? null } });
       return;
     }
-    if (m.value === null || m.value === undefined) delete shared[m.key]; else shared[m.key] = m.value;
+    // Like the hub: decisions and form responses are stamped with who and when.
+    const value = /^(approve|form)\/[^/]+\/./.test(m.key) && m.value && typeof m.value === "object" ? { ...m.value, by: v.email, at: Date.now() } : m.value;
+    if (value === null || value === undefined) delete shared[m.key]; else shared[m.key] = value;
     localStorage.setItem(sk(), JSON.stringify(shared));
-    broadcast({ t: "shared", changes: { [m.key]: m.value ?? null } });
+    broadcast({ t: "shared", changes: { [m.key]: value ?? null } });
   } else if (m.t === "local:set") {
     const local = JSON.parse(localStorage.getItem(localKey(k)) ?? "{}");
     if (m.value === undefined || m.value === null) delete local[m.key]; else local[m.key] = m.value;

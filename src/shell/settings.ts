@@ -123,6 +123,68 @@ const when = (v: string | null) => (v === null ? "never" : new Date(v).toLocaleD
 const mcpAdd = (extra = "") => `claude mcp add --transport http ${data.mcpName} ${data.mcpUrl}${extra}`;
 const bearer = (token: string) => mcpAdd(` --header "Authorization: Bearer ${token}"`);
 
+/** How to add the MCP server in each client, as steps and copyable snippets. */
+const CLIENTS: { id: string; label: string; steps: () => (string | { copy: string })[] }[] = [
+  {
+    id: "claude-code",
+    label: "Claude Code",
+    steps: () => ["Run this, then /mcp in Claude Code to sign in:", { copy: mcpAdd() }],
+  },
+  {
+    id: "codex",
+    label: "Codex",
+    steps: () => ["Add the server, then sign in from the terminal:", { copy: `codex mcp add ${data.mcpName} --url ${data.mcpUrl}` }, { copy: `codex mcp login ${data.mcpName}` }],
+  },
+  {
+    id: "claude-app",
+    label: "Claude app",
+    steps: () => ["On claude.ai or in the desktop app, open Settings → Connectors → Add custom connector, paste this URL, then Connect:", { copy: data.mcpUrl }],
+  },
+  {
+    id: "cursor",
+    label: "Cursor",
+    steps: () => [
+      "Add this to ~/.cursor/mcp.json (or .cursor/mcp.json in a project), then sign in from Cursor's MCP settings:",
+      { copy: JSON.stringify({ mcpServers: { [data.mcpName]: { url: data.mcpUrl } } }) },
+    ],
+  },
+  {
+    id: "vscode",
+    label: "VS Code",
+    steps: () => ["Run this, then start the server from the MCP view and sign in:", { copy: `code --add-mcp '${JSON.stringify({ name: data.mcpName, type: "http", url: data.mcpUrl })}'` }],
+  },
+  {
+    id: "other",
+    label: "Other",
+    steps: () => ["Any MCP client with Streamable HTTP and OAuth works with this URL. Without OAuth, use an agent token below.", { copy: data.mcpUrl }],
+  },
+];
+const CLIENT_KEY = "artifacts.client";
+
+/** Client picker; switching only redraws its own steps, so nothing else on the page resets. */
+function clientSetup() {
+  const steps = h("div", { class: "client-steps" });
+  const tabs = h("div", { class: "client-tabs", role: "group", "aria-label": "Your agent" });
+  let current = localStorage.getItem(CLIENT_KEY) ?? CLIENTS[0].id;
+  if (!CLIENTS.some((c) => c.id === current)) current = CLIENTS[0].id;
+  const show = () => {
+    const client = CLIENTS.find((c) => c.id === current)!;
+    for (const b of tabs.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.client === current));
+    steps.replaceChildren(...client.steps().map((s) => (typeof s === "string" ? h("p", { class: "muted small snippet-label" }, s) : copyRow(s.copy))));
+  };
+  for (const c of CLIENTS) {
+    const b = h("button", { type: "button", class: "client-tab", "data-client": c.id }, c.label);
+    b.addEventListener("click", () => {
+      current = c.id;
+      localStorage.setItem(CLIENT_KEY, c.id);
+      show();
+    });
+    tabs.append(b);
+  }
+  show();
+  return h("div", {}, tabs, steps);
+}
+
 function render() {
   const admin = data.you.role === "admin";
   const sections: HTMLElement[] = [h("h1", { class: "page-title" }, data.workspace.name)];
@@ -152,15 +214,15 @@ function render() {
       "section",
       { class: "card-section" },
       h("h2", {}, "Connect an agent"),
-      h("p", { class: "muted" }, "Add this MCP server to Claude, Codex or any MCP client. It signs in with OAuth in your browser and then acts as you here."),
-      copyRow(data.mcpUrl),
-      h("p", { class: "muted small snippet-label" }, "In Claude Code:"),
-      copyRow(mcpAdd()),
+      h("p", { class: "muted" }, "Add this workspace's MCP server to your agent. It signs in with OAuth in your browser and then acts as you here."),
+      clientSetup(),
       h("h3", { class: "subhead" }, "Connected apps"),
       data.apps.length ? apps : h("p", { class: "muted small" }, "None yet."),
       h("h3", { class: "subhead" }, "Agent tokens"),
       h("p", { class: "muted small" }, "For agents that can't open a browser: send the token as Authorization: Bearer <token> to the MCP URL. In Claude Code:"),
       copyRow(bearer("<token>")),
+      h("p", { class: "muted small snippet-label" }, "In Codex, with the token in ARTIFACTS_TOKEN:"),
+      copyRow(`codex mcp add ${data.mcpName} --url ${data.mcpUrl} --bearer-token-env-var ARTIFACTS_TOKEN`),
       mine.length ? tokens : h("p", { class: "muted small" }, "None yet."),
       h(
         "div",

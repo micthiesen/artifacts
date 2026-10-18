@@ -27,7 +27,7 @@ function socket(id: string, cookie: string) {
 }
 
 // ---- setup -----------------------------------------------------------------------
-const files = { "index.mdx": "# Plan\n\nIntro text.\n\n## Costs\n\nWe pay $10 a month.\n\n<Comments />\n" };
+const files = { "index.mdx": "# Plan\n\nIntro text.\n\n## Costs\n\nWe pay $10 a month.\n\n<Comments />\n\n<Approval id=\"go\" title=\"Go?\" />\n" };
 const created = await call("artifact_create", { title: "E2E collab", description: "e2e collab", files, share: [{ email: viewer, role: "view" }] });
 const id = created.structuredContent?.id as string;
 check("create", Boolean(id), created);
@@ -76,6 +76,30 @@ const boot = JSON.parse(/<script type="application\/json" id="shell-boot">(.*?)<
 check("since banner data", boot.since?.fromVersion === 1 && boot.since.changedBlocks.includes("costs-1"), boot.since);
 const index = await (await fetch(`${origin}/`, { headers: { Cookie: viewerCookie } })).text();
 check("index shows unread badge", /1 new comment/.test(index));
+
+// ---- who has read it, and decisions over the socket ----------------------------------
+const editor = `e2e-editor-${Date.now()}@example.com`;
+await call("artifact_share", { id, add: [{ email: editor, role: "edit" }], notify: false });
+const readers = await call("artifact_readers", { id });
+const readersText = readers.content[0].text as string;
+check(
+  "artifact_readers: the viewer saw v2, the editor hasn't opened it",
+  readersText.includes(`${viewer} (view): saw v2 (current)`) && readersText.includes(`${editor} (edit): hasn't opened it`),
+  readersText,
+);
+const editorCookie = await cookieFor(editor);
+const ed = socket(id, editorCookie);
+await ed.opened;
+ed.send({ t: "set", cid: "a1", key: `approve/go/${editor}`, value: { decision: "changes", note: "Cheaper plan first", by: viewer } });
+const stamped = await ed.next((m) => m.t === "set" && m.key === `approve/go/${editor}`);
+check("a decision is stamped with the editor and a time", stamped?.value?.by === editor && typeof stamped?.value?.at === "number" && stamped?.value?.note === "Cheaper plan first", stamped);
+ed.send({ t: "set", cid: "a2", key: `approve/go/${viewer}`, value: { decision: "approve" } });
+check("nobody can decide for someone else", Boolean(await ed.next((m) => m.t === "rejected" && m.cid === "a2")));
+ed.ws.close();
+const decided = await call("artifact_activity", { id, limit: 5 });
+check("activity shows the decision", /requested changes in approval "go": “Cheaper plan first”/.test(decided.content[0].text), decided.content[0].text);
+const agentDecides = await call("artifact_state", { id, set: { [`approve/go/${owner}`]: { decision: "approve" } } });
+check("an agent can't decide for its person", agentDecides.isError === true && /only be made by people/.test(agentDecides.content[0].text), agentDecides.content);
 
 // ---- link previews -----------------------------------------------------------------
 const bot = { "User-Agent": "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)" };

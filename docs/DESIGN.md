@@ -18,8 +18,9 @@ how each piece works.
   including DNS, routes, the email sender and generated secrets. Schema
   changes ship as code and apply themselves.
 - **Agents write, people read and react.** Agents create and edit artifacts
-  only through MCP. People view, comment, vote and edit shared state in the
-  browser. Owners manage sharing from the page.
+  only through MCP. People view, comment, vote, approve, answer forms and edit
+  shared state in the browser, and agents read what they did back. Owners
+  manage sharing from the page and see who has read which version.
 
 ## Workspaces
 
@@ -121,8 +122,11 @@ publish code people would trust with that. storage, shared state and comments re
 through the shell's postMessage bridge, and the shell scopes all of them to
 one artifact. Comments live in the shell, so artifact code can't read or
 forge them. Every write from a person is checked against their role on the
-server, and collab keys (votes, comments, checklists) are stamped with the
-verified email.
+server, and collab keys (votes, comments, checklists, approvals, form
+responses) are stamped with the verified email. Approval decisions and form
+responses are only ever made by people on the page: an agent acting for
+someone can read them but not make them, since the point of asking is to hear
+from the person.
 
 ## Data and schema changes
 

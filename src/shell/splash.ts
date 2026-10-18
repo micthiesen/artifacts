@@ -28,12 +28,15 @@ window.addEventListener("message", (ev) => {
     const people = [...new Set((seeds[slug] ?? []).map((e) => e.by))];
     send({ t: "init", viewer: { email: YOU, role: "edit" }, local: {}, shared: sharedFor(slug), presence: [YOU, ...people.slice(0, 2)], theme: "dark" });
     frame.closest(".showcase-render")?.classList.add("ready");
+  } else if (msg.t === "shared:set" && /^(approve|form)\/[^/]+\/./.test(msg.key) && msg.value && typeof msg.value === "object" && !Array.isArray(msg.value)) {
+    // Stamped like the hub does, so the visitor's own decision shows who and when.
+    send({ t: "shared", changes: { [msg.key]: { ...msg.value, by: YOU, at: Date.now() } } });
   } else if (msg.t === "open" && typeof msg.url === "string" && /^https?:/i.test(msg.url)) {
     window.open(msg.url, "_blank", "noopener,noreferrer");
   } else if (msg.t === "error") {
     console.warn(`[demo ${slug}]`, msg.message);
   }
-  // shared:set and local:set need no answer: the frame applies its own writes.
+  // Other shared:set and local:set need no answer: the frame applies its own writes.
   // Comment threads, "changed since" marks and printing are shell features the
   // examples don't use, so their messages are never sent.
 });

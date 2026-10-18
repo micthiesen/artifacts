@@ -296,7 +296,7 @@ export function splashPage(brand: Brand, notice?: string, viewer?: { email: stri
 ${notice ? `<p class="splash-notice" role="status">${escapeHtml(notice)}</p>` : ""}
 <p class="splash-kicker">Open source · runs on Cloudflare</p>
 <h1>${escapeHtml(DESCRIPTION)}</h1>
-<p class="splash-lede muted">Your agent writes MDX or React over MCP. People open a link, sign in with an emailed code, and get a live page: shared state, per-person state, presence and comments built in, with no backend to wire up. Everyone it isn't shared with never sees it.</p>
+<p class="splash-lede muted">Your agent (Claude, Codex, Cursor or any MCP client) writes MDX or React over MCP. People open a link, sign in with an emailed code, and get a live page: shared state, per-person state, presence, comments, approvals and forms built in, with no backend to wire up. What they decide comes back to the agent. Everyone it isn't shared with never sees it.</p>
 <p class="splash-actions"><a class="button" href="#examples">See examples</a><a class="button secondary" href="${REPO}">View the source</a></p>
 <span class="splash-ghost" aria-hidden="true"></span>
 </section>
@@ -306,7 +306,7 @@ ${showcase(host)}
 <section class="splash-grid" aria-label="What's different">
 ${card("Live pages, not static HTML", "State, people and data are part of the page, not something to wire up.", [
   "<code>useShared</code>, <code>useSharedMap</code> and <code>useLocal</code> sync over a WebSocket; <code>useViewer</code> and <code>usePresence</code> know who's looking",
-  "Polls, checklists, notes and comments work out of the box, alongside tables, charts and Mermaid diagrams",
+  "Polls, approvals, forms, checklists, notes and comments work out of the box, alongside tables, charts and Mermaid diagrams",
   "A data file can refresh from a JSON URL on a schedule, once a person approves the host",
 ])}
 ${card("An edit-and-check loop for agents", "Agents change artifacts the way they change code, and find out when they broke something.", [
@@ -314,10 +314,10 @@ ${card("An edit-and-check loop for agents", "Agents change artifacts the way the
   "Imports, components and syntax validated before anything is saved",
   "Every write rendered in a headless browser; runtime errors and a screenshot come back in the tool result",
 ])}
-${card("Readers catch up, agents close the loop", "Artifacts people come back to tell them what moved.", [
-  "Comments anchored to the exact text or table row",
-  "Feedback marked addressed in a specific version, with its author notified",
-  "“Changed since your last visit” down to the sections that changed or disappeared",
+${card("People answer, agents close the loop", "An artifact can ask for a decision and get it back, not just be read.", [
+  "Approvals, form responses and comments anchored to exact text, each signed with the person's verified email",
+  "The agent reads every answer over MCP, a webhook can wake it when one arrives, and fixes are marked addressed in the version that made them",
+  "Owners and agents see who has read which version; readers see what changed since their last visit",
 ])}
 ${card("Isolated by construction", "Tenancy and untrusted code are handled by the platform, not by convention.", [
   "Each workspace is its own Durable Object with its own SQLite database, on its own subdomain and browser origin",
@@ -515,7 +515,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <li><strong>Your display name</strong>, if you set one; it's shown on your comments.</li>
 <li><strong>Passkeys</strong>, if you save any: each one's public key, a name for it (such as "iCloud Keychain"), and when it was added and last used. The private key never leaves your device or password manager.</li>
 <li><strong>Artifacts</strong>: the files your agent writes (up to 50 versions each), images and data files, and live data fetched from hosts a workspace admin approved.</li>
-<li><strong>What people do on an artifact</strong>: comments, votes, checklists, notes and other shared state; which version you last saw and which comments you've read; an activity log (the latest 5,000 events per artifact).</li>
+<li><strong>What people do on an artifact</strong>: comments, votes, approvals, form responses, checklists, notes and other shared state; which version you last saw and which comments you've read; an activity log (the latest 5,000 events per artifact).</li>
 <li><strong>Workspace membership</strong>: who belongs to which workspace and in what role, and when members last signed in.</li>
 <li><strong>Agent access</strong>: OAuth grants and personal agent tokens, stored only as hashes, with when each was last used.</li>
 <li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
@@ -529,6 +529,8 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <ul>
 <li>An artifact is visible to its owner, the admins of its workspace, and the people, domains or workspace it's shared with; a public artifact to anyone with its link.</li>
 <li>Workspace admins can see and manage every artifact in their workspace and its member list.</li>
+<li>An artifact's owner, its workspace's admins and their agents can see who has opened it while signed in, which version each person last saw and when. Visits through a public link without signing in aren't recorded.</li>
+<li>Everyone who can open an artifact sees its comments, votes, approvals and form responses, with who made them.</li>
 <li>We, as operator, can access stored data to run the service: backups, restores and support. We don't sell it, use it for advertising, or train models on it.</li>
 </ul>
 <h2>Who else handles it</h2>
