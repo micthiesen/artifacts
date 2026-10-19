@@ -169,3 +169,67 @@ document.addEventListener("click", (e) => {
     setTimeout(() => (b.textContent = "Copy"), 1600);
   });
 });
+
+// Search as you type: rows already on the page filter at once (no request); a pause then fetches the real
+// results (contents too, and every page), one request per pause, about what pressing Enter would cost.
+const searchForm = document.querySelector<HTMLFormElement>("form.list-search");
+const searchInput = searchForm?.querySelector<HTMLInputElement>("input[name=q]");
+if (searchForm && searchInput) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inflight: AbortController | null = null;
+  let shown = searchInput.value.trim();
+  const words = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
+  const filterHere = (q: string) => {
+    const ws = words(q);
+    for (const li of document.querySelectorAll<HTMLLIElement>("ul.list > li[data-id]")) {
+      // The same fields the server searches by name (title and description), not the row's "3 minutes ago".
+      const hay = `${li.dataset.title ?? ""}\n${li.querySelector(".desc")?.textContent ?? ""}`.toLowerCase();
+      li.hidden = !ws.every((w) => hay.includes(w) || (w.length >= 6 && (li.dataset.id ?? "").includes(w)));
+    }
+  };
+  const fetchResults = async (q: string) => {
+    inflight?.abort();
+    const controller = new AbortController();
+    inflight = controller;
+    const url = q ? `${location.pathname}?q=${encodeURIComponent(q)}` : location.pathname;
+    try {
+      const res = await fetch(url, { signal: controller.signal, headers: { Accept: "text/html" } });
+      if (!res.ok || controller !== inflight) return;
+      const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+      const fresh = doc.querySelector("main.content");
+      const main = searchForm.closest("main");
+      if (!fresh || !main || controller !== inflight) return;
+      // Everything but the search box itself, so typing and focus carry on undisturbed.
+      for (const el of [...main.children]) if (el !== searchForm) el.remove();
+      const freshForm = fresh.querySelector("form.list-search");
+      const before = [...fresh.children].slice(0, freshForm ? [...fresh.children].indexOf(freshForm) : 0);
+      const after = [...fresh.children].slice(freshForm ? [...fresh.children].indexOf(freshForm) + 1 : 0);
+      searchForm.before(...before);
+      searchForm.after(...after);
+      // The Clear link comes and goes with the search.
+      searchForm.querySelector(".list-search-clear")?.remove();
+      const clear = freshForm?.querySelector(".list-search-clear");
+      if (clear) searchForm.append(clear);
+      shown = q;
+      history.replaceState(null, "", url);
+      // Typed on since the request went out: keep that filter on the fresh rows.
+      if (searchInput.value.trim() !== q) filterHere(searchInput.value.trim());
+    } catch {
+      // Offline or aborted: the rows filtered here stand.
+    } finally {
+      if (controller === inflight) inflight = null;
+    }
+  };
+  searchInput.addEventListener("input", () => {
+    const q = searchInput.value.trim().replace(/\s+/g, " ");
+    filterHere(q);
+    clearTimeout(timer);
+    if (q === shown) return;
+    timer = setTimeout(() => void fetchResults(q), 350);
+  });
+  searchForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    clearTimeout(timer);
+    void fetchResults(searchInput.value.trim().replace(/\s+/g, " "));
+  });
+}

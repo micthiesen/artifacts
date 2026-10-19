@@ -30,11 +30,12 @@ const WORDS_MAX = 8;
 /** Which artifacts' files contain a word, when contents are searched too. */
 export type InContent = (id: string, word: string) => boolean;
 
-/** Every word of the query must appear in the title, description, id or (with inContent) the artifact's files. Case-insensitive. */
+/** Every word of the query must appear in the title, description, (six or more characters of) the id, or (with inContent) the artifact's files. Case-insensitive. */
 export function matches(a: Listable, q: string, inContent?: InContent): boolean {
   if (!q) return true;
-  const hay = `${a.title}\n${a.description}\n${a.id}`.toLowerCase();
-  return queryWords(q).every((w) => hay.includes(w) || Boolean(inContent?.(a.id, w)));
+  const hay = `${a.title}\n${a.description}`.toLowerCase();
+  // Ids are random letters and digits, so only a longer piece of one (say, pasted from a link) counts as a match.
+  return queryWords(q).every((w) => hay.includes(w) || (w.length >= 6 && a.id.includes(w)) || Boolean(inContent?.(a.id, w)));
 }
 
 export function cleanQuery(q: unknown): string {

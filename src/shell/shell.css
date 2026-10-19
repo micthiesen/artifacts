@@ -797,3 +797,4 @@ div.thread-anchor { cursor: default; }
 .ops-events li .small { overflow-wrap: anywhere; }
 /* Signed in on a phone, the front page's top bar keeps the brand readable: GitHub moves to the footer only. */
 @media (max-width: 480px) { .bar .bar-link[href*="github.com"] { display: none; } }
+.list > li[hidden] { display: none; }
