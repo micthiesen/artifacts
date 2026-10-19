@@ -163,7 +163,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     panel.replaceChildren(head, body);
     if (focusKey) panel.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
     if (pendingFocus) {
-      const target = panel.querySelector(`[data-thread="${pendingFocus}"]`);
+      const target = panel.querySelector(`[data-thread="${CSS.escape(pendingFocus)}"]`);
       target?.scrollIntoView({ block: "nearest" });
       pendingFocus = null;
     }

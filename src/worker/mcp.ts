@@ -143,7 +143,8 @@ function guessType(path: string): string {
 }
 
 const LINK_DEFAULT_DAYS = 7;
-const LINK_MAX_DAYS = 30;
+/** A sign-in link is a bearer credential for its artifact; a week is plenty. */
+const LINK_MAX_DAYS = 7;
 
 function directoryOf(ctx: Ctx): DirectoryApi {
   return (ctx.env.DIRECTORY as unknown as { getByName(n: string): DirectoryApi }).getByName("directory");
@@ -592,7 +593,7 @@ export const TOOLS: Tool[] = [
     name: "artifact_link",
     title: "artifacts.boo: sign-in link",
     description:
-      "artifacts.boo: make a presigned link for the user this agent acts for that opens one artifact already signed in, with no login step: use it when handing the user a link. Other people get their own by email when you share with them (artifact_share). Valid 7 days by default (max 30). Anyone holding it acts as the user, so give it only to them.",
+      "artifacts.boo: make a presigned link for the user this agent acts for that opens one artifact already signed in, with no login step: use it when handing the user a link. Other people get their own by email when you share with them (artifact_share). Valid 7 days by default, and at most 7. Anyone holding it acts as the user, so give it only to them.",
     inputSchema: {
       type: "object",
       properties: {
@@ -899,8 +900,10 @@ export const TOOLS: Tool[] = [
     inputSchema: { type: "object", properties: { id }, required: ["id"], additionalProperties: false },
     annotations: { readOnlyHint: true },
     need: "view",
-    run: async (args, { hub }) => {
-      const errors = await hub.errors(String(args.id));
+    run: async (args, { hub, person }) => {
+      // Who hit each error is for the owner; others see the errors only.
+      const owner = (await hub.roleFor(String(args.id), person)) === "owner";
+      const errors = (await hub.errors(String(args.id))).map((e) => (owner ? e : { ...e, viewer: null }));
       return {
         text: errors.length ? errors.map((e) => `${e.at} v${e.version}: ${e.message}`).join("\n") : "No runtime errors reported.",
         structured: { errors },

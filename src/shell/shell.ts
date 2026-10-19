@@ -449,16 +449,20 @@ function openLink(raw: string) {
     return;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return;
-  // A link to this workspace's own pages navigates the tab, as on any page.
-  if (url.origin === location.origin) {
+  // Another artifact or the list in this workspace just opens, as on any page. Anything else here (sign-in,
+  // switching account, consent) could act on the viewer, so it asks like an outside link.
+  if (url.origin === location.origin && /^\/(a\/[a-z0-9]+\/?)?$/.test(url.pathname)) {
     location.assign(url.href);
     return;
   }
-  // Anywhere else, other workspaces included, asks first.
-  if (!allowedHosts.has(url.host)) {
-    const shown = url.href.length > 160 ? `${url.href.slice(0, 160)}…` : url.href;
+  // Anywhere else asks first. A host can be trusted for the page view, but only for links that carry nothing
+  // (no query or fragment): anything the page read could be hidden there, so those always ask, in full.
+  const carries = url.search.length > 1 || url.hash.length > 1;
+  if (carries || !allowedHosts.has(url.host)) {
+    const shown = url.href.length > 1000 ? `${url.href.slice(0, 1000)}… (${url.href.length} characters in all)` : url.href;
     if (!confirm(`This page wants to open a link on ${url.host}:\n\n${shown}\n\nOpen it?`)) return;
-    allowedHosts.add(url.host);
+    if (!carries) allowedHosts.add(url.host);
   }
-  window.open(url.href, "_blank", "noopener,noreferrer");
+  if (url.origin === location.origin) location.assign(url.href);
+  else window.open(url.href, "_blank", "noopener,noreferrer");
 }

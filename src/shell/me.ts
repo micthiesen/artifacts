@@ -47,8 +47,10 @@ async function api<T>(path: string, init?: { method?: string; body?: unknown }):
     body: init?.body ? JSON.stringify(init.body) : undefined,
   });
   if (res.status === 401) throw new SessionEnded("Your session ended.");
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; reauth?: boolean };
+  // Some changes need a recent sign-in: say so, with a way to sign in again.
+  if (data.reauth) throw new SessionEnded(data.error ?? "Sign in again to do that.");
+  if (!res.ok) throw new Error(data.error ?? "That didn't work. Try again in a moment.");
   return data;
 }
 
@@ -85,11 +87,11 @@ function btn(label: string, onClick: () => void | Promise<void>, cls = "button s
 }
 
 const failed = (err: unknown): Notice =>
-  err instanceof SessionEnded ? { tone: "error", text: "Your session ended.", signIn: true } : { tone: "error", text: (err as Error).message };
+  err instanceof SessionEnded ? { tone: "error", text: err.message, signIn: true } : { tone: "error", text: (err as Error).message };
 
 function noticeNode(n: Notice) {
   const el = h("div", { class: `notice ${n.tone}`, role: "status" }, n.text);
-  if (n.signIn) el.append(" ", h("a", { href: `/login?return=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in again"));
+  if (n.signIn) el.append(" ", h("a", { href: `/login?fresh=1&return=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in again"));
   if (n.reveal) {
     const reveal = n.reveal;
     const copy = btn("Copy", async () => {
@@ -233,7 +235,32 @@ function renderAccount(sections: HTMLElement[]) {
         : h("p", { class: "muted" }, "None yet. When someone shares an artifact with you, its workspace shows up here."),
     ),
   );
+  sections.push(signOutEverywhereSection());
   sections.push(deleteAccountSection());
+}
+
+/** Ends every session this person has: every browser and device, every workspace, this one included. */
+function signOutEverywhereSection(): HTMLElement {
+  return h(
+    "section",
+    { class: "card-section" },
+    h("h2", {}, "Sign out everywhere"),
+    h("p", { class: "muted" }, "Signs you out on every browser and device, in every workspace, this one included. Use it if you signed in somewhere you shouldn't have stayed signed in."),
+    h(
+      "div",
+      { class: "row" },
+      btn(
+        "Sign out everywhere",
+        () =>
+          showing(async () => {
+            const r = await api<{ location: string }>("/api/me/sign-out-everywhere", { body: {} });
+            location.href = r.location;
+            await new Promise(() => {});
+          }),
+        "button small secondary",
+      ),
+    ),
+  );
 }
 
 function passkeySection(passkeys: NonNullable<Profile["passkeys"]>): HTMLElement {

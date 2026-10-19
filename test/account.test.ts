@@ -157,9 +157,12 @@ test("a report is kept in the ops log even when its email can't be sent; alerts 
   expect(h.directory.opsEvents({ kind: "report" })).toHaveLength(2);
 });
 
-test("removing the person who made the workspace from settings hands it to a remaining admin", async () => {
+test("another admin can't remove the person who made the workspace; they leave (handing it over) themselves", async () => {
+  await h.hub.setMember(MEMBER, "admin", ADMIN);
   h.directory.ctx.storage.sql.exec(`UPDATE workspaces SET created_by = ? WHERE slug = 'acme'`, MEMBER);
-  expect((await post("/api/settings/members", ADMIN, { email: MEMBER, role: null })).status).toBe(200);
+  expect((await post("/api/settings/members", ADMIN, { email: MEMBER, role: null })).status).toBe(409);
+  expect((await post("/api/settings/members", ADMIN, { email: MEMBER, role: "member" })).status).toBe(409);
+  expect((await post("/api/me/leave", MEMBER, {})).status).toBe(200);
   expect(h.directory.workspace("acme")?.createdBy).toBe(ADMIN);
 });
 
@@ -198,4 +201,33 @@ test("a deleted account stops seeing what was shared with its address, as a gues
   expect(((await done.json()) as { location: string }).location).toBe(`${APEX}/?deleted=account`);
   expect(h.hub.list(GUEST)).toEqual([]);
   expect(await (await send("/?deleted=account", { host: APEX })).text()).toContain("Your account is deleted.");
+});
+
+test("signing out everywhere ends every session; deleting an account needs a recent sign-in", async () => {
+  const { signToken, SESSION_COOKIE } = await import("../src/worker/session.ts");
+  const cookieFor = async (claims: Record<string, unknown>) => `${SESSION_COOKIE}=${await signToken(String(env.SESSION_SECRET), "session", 3600, claims)}`;
+  const now = Math.floor(Date.now() / 1000);
+  // Someone no earlier test signed out (sign-outs are remembered for the isolate).
+  const ZED = "zed@corp.com";
+  await h.hub.setMember(ZED, "member", ADMIN);
+  // An old session (signed in an hour ago) can't delete the account.
+  const old = await cookieFor({ e: ZED, h: "artifacts.test", iat: now - 3600 });
+  const refused = await worker.fetch(new Request(`${APEX}/api/me/delete`, { method: "POST", headers: { Cookie: old, Origin: APEX, "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "delete" }) }), env as never, ctx);
+  expect(refused.status).toBe(403);
+  expect(((await refused.json()) as { reauth: boolean }).reauth).toBe(true);
+  // Sign out everywhere from one session: the other (on a workspace too) stops working.
+  const workspaceCookie = await cookieFor({ e: ZED, h: "acme.artifacts.test", iat: now - 60 });
+  const done = await worker.fetch(new Request(`${APEX}/api/me/sign-out-everywhere`, { method: "POST", headers: { Cookie: old, Origin: APEX } }), env as never, ctx);
+  expect(done.status).toBe(200);
+  expect((await worker.fetch(new Request(`${ACME}/api/settings`, { headers: { Cookie: workspaceCookie } }), env as never, ctx)).status).toBe(401);
+});
+
+test("a render check's frame link works once", async () => {
+  const r = await h.hub.create({ title: "Page", files, owner: ADMIN });
+  if (!r.ok) throw new Error("create");
+  const { signToken } = await import("../src/worker/session.ts");
+  const t = await signToken(String(env.SESSION_SECRET), "frame", 120, { id: r.id, w: "acme", c: true, j: "one-time" });
+  const open = () => worker.fetch(new Request(`${ACME}/frame/${r.id}?v=1&check=1&t=${encodeURIComponent(t)}`), env as never, ctx);
+  expect((await open()).status).toBe(200);
+  expect((await open()).status).toBe(403);
 });

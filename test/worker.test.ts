@@ -329,3 +329,14 @@ test("policy pages are on the apex; workspaces point there", async () => {
   expect((await fetchAs(`${ACME}/privacy`)).headers.get("Location")).toBe(`${APEX}/privacy`);
   expect(await (await fetchAs(`${APEX}/`)).text()).toContain('href="/privacy"');
 });
+
+test("return paths can't become another host; grep patterns that could stall are searched as text", async () => {
+  const { safeNext } = await import("../src/worker/index.ts");
+  expect(safeNext("/.//evil.com")).toBe("/");
+  expect(safeNext("/a/x")).toBe("/a/x");
+  const { grepFiles } = await import("../src/worker/edit.ts");
+  const started = Date.now();
+  expect(grepFiles({ "a.md": `${"a".repeat(40)}!` }, "(a+)+$")).toEqual([]);
+  expect(Date.now() - started).toBeLessThan(100);
+  expect(grepFiles({ "a.md": "hello world" }, "wor.d")).toHaveLength(1);
+});

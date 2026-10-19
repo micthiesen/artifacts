@@ -130,11 +130,17 @@ function removeAt(root: unknown, tokens: string[], where: string): unknown {
 export type GrepMatch = { path: string; line: number; text: string };
 
 export function grepFiles(files: Record<string, string>, pattern: string, onlyPath?: string, limit = 50): GrepMatch[] {
+  const literal = () => new RegExp(pattern.slice(0, 500).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   let re: RegExp;
-  try {
-    re = new RegExp(pattern, "i");
-  } catch {
-    re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  // A pattern that could backtrack for ages (a repeated group that itself repeats, a back-reference) would stall
+  // the whole workspace while it runs, so it's searched for as plain text instead.
+  if (pattern.length > 200 || /\([^)]*[+*}][^)]*\)\s*[+*{]/.test(pattern) || /\\[1-9]/.test(pattern)) re = literal();
+  else {
+    try {
+      re = new RegExp(pattern, "i");
+    } catch {
+      re = literal();
+    }
   }
   const out: GrepMatch[] = [];
   for (const [path, content] of Object.entries(files)) {

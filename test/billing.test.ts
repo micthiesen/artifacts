@@ -330,9 +330,9 @@ test("only the person who paid opens the billing portal; settings says who that 
   const settings = (await (await send("/api/settings", { as: ADMIN })).json()) as { billing: { subscription: { payer: string } } };
   expect(settings.billing.subscription.payer).toBe("payer@example.com");
   expect((await send("/api/settings/billing/portal", { as: "payer@example.com", method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })).status).toBe(200);
-  // Once the payer isn't an admin here, any admin can manage it (they may have paid under another address).
+  // Removing the payer doesn't hand their billing to whoever removed them.
   await h.hub.setMember("payer@example.com", null, ADMIN);
-  expect((await send("/api/settings/billing/portal", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })).status).toBe(200);
+  expect((await send("/api/settings/billing/portal", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })).status).toBe(403);
 });
 
 test("whoever made a self-serve workspace can delete it, once nothing is billed, and then make another", async () => {

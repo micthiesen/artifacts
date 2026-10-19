@@ -28,6 +28,7 @@ import {
   pricingPage,
   helpPage,
   inboxPage,
+  switchPage,
   supportPage,
   REPORT_REASONS,
   reportPage,
@@ -126,7 +127,7 @@ export const PASSKEY_LATER_COOKIE = "art_passkey_later";
  * `only` is set for a session from a presigned link: it opens that one
  * artifact and nothing else (no list, settings, owner actions or OAuth).
  */
-type Viewer = { email: string | null; only?: string; exp?: number };
+type Viewer = { email: string | null; only?: string; exp?: number; /** When they signed in (seconds), for actions that need a recent sign-in. */ iat?: number };
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -388,7 +389,8 @@ function forgetWorkspaces() {
 
 // ---- workspace hosts: OAuth around the app --------------------------------------------
 
-type McpProps = { email: string; slug: string };
+/** `gen`: when the workspace was made, so a grant can't outlive it into a new workspace of the same name. */
+type McpProps = { email: string; slug: string; gen?: string };
 
 const providers = new Map<string, { provider: OAuthProvider<Env>; options: OAuthProviderOptions<Env> }>();
 
@@ -424,6 +426,7 @@ function oauthFor(origin: string) {
       const slug = slugOf(new URL(request.url).hostname, env);
       if (!slug || !token.startsWith("art_")) return null;
       const who = await workspaceHub(env, slug).verifyAgentToken(token);
+      // Agent tokens live in the workspace itself, so they can't outlive it: no generation needed.
       return who ? { props: { email: who.email, slug } satisfies McpProps, audience: `${origin}/mcp` } : null;
     },
   };
@@ -448,6 +451,8 @@ async function mcpApi(request: Request, env: Env, props: McpProps): Promise<Resp
   if (access.offline) return mcpRefusal(503, `${record.name} is being restored; try again in a few minutes`);
   // Leaving the workspace ends an agent's access, whatever token it holds.
   if (!access.member) return mcpRefusal(403, `${props.email} is no longer a member of ${record.name}; ask a workspace admin to add you back`);
+  // A grant from a deleted workspace that had this name doesn't work here.
+  if (props.gen && access.createdAt && props.gen !== access.createdAt) return mcpRefusal(401, "This connection was for an earlier workspace at this address; connect again.");
   return handleMcp(request, { hub, origin: url.origin, env, slug, workspace: record.name, admin: access.member === "admin", person: props.email, actor: "agent" });
 }
 
@@ -539,8 +544,13 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (path === "/api/settings" || path.startsWith("/api/settings/")) return settingsApi(request, url, env, hub, viewer, slug);
   if (path === "/authorize") return authorize(request, url, env, hub, viewer, record, brand);
   // "Sign in with a different email": end this workspace's session and the apex's, then sign in again.
+  // Signing out to sign in as someone else changes things, so it's a POST from a page that asks; a link
+  // (or an artifact navigating the tab) only shows that page.
+  if (path === "/switch" && request.method !== "POST") return switchPage(safeNext(url.searchParams.get("return")), brand);
   if (path === "/switch") {
-    const next = safeNext(url.searchParams.get("return"));
+    if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
+    const form = await request.formData().catch(() => new FormData());
+    const next = safeNext(String(form.get("return") ?? url.searchParams.get("return") ?? "/"));
     const nonce = b64url(crypto.getRandomValues(new Uint8Array(18)));
     const target = new URL(`${apexOrigin(env)}/login`);
     target.searchParams.set("to", url.origin);
@@ -555,8 +565,12 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
 
   const frame = /^\/frame\/([a-z0-9]+)$/.exec(path);
   if (frame) {
-    const claims = await verifyToken<{ id: string; w: string; c?: boolean }>(env.SESSION_SECRET, "frame", url.searchParams.get("t"));
+    const claims = await verifyToken<{ id: string; w: string; c?: boolean; j?: string }>(env.SESSION_SECRET, "frame", url.searchParams.get("t"));
     if (!claims || claims.id !== frame[1] || claims.w !== slug) return new Response("frame link expired; reload the page", { status: 403 });
+    // A render check's frame runs without the sandbox, so its link works once (and only with its one-time id).
+    if (claims.c && (!claims.j || !(await hub.spendToken(`check:${claims.j}`, claims.exp * 1000)))) {
+      return new Response("this check link was already used", { status: 403 });
+    }
     const result = await hub.build(frame[1]);
     if (!result) return new Response("not found", { status: 404 });
     // Asset URLs reuse this frame's token; it also authorizes /asset/ reads.
@@ -617,8 +631,10 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
     }
     if (sub === "/errors") {
       if (request.method !== "POST" || !sameOrigin(request, url)) return new Response("bad request", { status: 400 });
+      // Only signed-in viewers report errors (anyone could post to a public artifact's log), a few an hour each.
+      if (!here.email) return new Response(null, { status: 204 });
       const body = (await request.json().catch(() => null)) as { message?: string; stack?: string } | null;
-      if (body?.message) await hub.recordError(id, here.email, String(body.message), body.stack ? String(body.stack) : undefined);
+      if (body?.message) await hub.recordError(id, here.email, String(body.message).slice(0, 2000), body.stack ? String(body.stack).slice(0, 4000) : undefined);
       return new Response(null, { status: 204 });
     }
     const { meta, visit, member, backlinks, linkTitles } = opened as Extract<typeof opened, { meta: unknown }>;
@@ -974,11 +990,10 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
   const ret = field("return") ? safeNext(field("return")) : to ? "/" : "/workspaces";
   const state = { to, n: nonce, return: ret };
   if (!form) {
-    if (url.searchParams.get("switch") === "1") {
-      // Signing in as someone else: the apex session goes too.
-      const res = loginPage({ ...state, step: "email" }, brand);
-      res.headers.append("Set-Cookie", clearSessionCookie());
-      return res;
+    if (url.searchParams.get("switch") === "1" || url.searchParams.get("fresh") === "1") {
+      // Signing in as someone else: ask for the email. The apex session is replaced when they sign in, not cleared
+      // here, so a link to this page can't sign anyone out.
+      return loginPage({ ...state, step: "email" }, brand);
     }
     if (viewer.email) return finishLogin(viewer.email, to, nonce, ret, env, false);
     return loginPage({ ...state, step: "email" }, brand);
@@ -995,7 +1010,7 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
     const res = readCookie(request, PASSKEY_LATER_COOKIE) || (await directory(env).passkeys(email)).length
       ? await finishLogin(email, to, nonce, ret, env, true)
       : passkeyOfferPage(to ? `/login?${new URLSearchParams({ to, n: nonce, return: ret })}` : ret, brand);
-    const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST });
+    const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST, iat: nowSeconds() });
     res.headers.append("Set-Cookie", sessionCookie(session));
     return res;
   }
@@ -1072,7 +1087,7 @@ async function passkeyLogin(request: Request, url: URL, env: Env): Promise<Respo
     throw err;
   }
   const location = (await handoff(email, to, String(body.n ?? ""), ret, env)) ?? ret;
-  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST });
+  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST, iat: nowSeconds() });
   return Response.json({ location }, { headers: { "Set-Cookie": sessionCookie(session) } });
 }
 
@@ -1083,7 +1098,7 @@ async function authCallback(request: Request, url: URL, env: Env): Promise<Respo
     return messagePage("Sign-in failed", "That sign-in link expired. Try again.", 400, { href: "/login", label: "Sign in" });
   }
   const email = claims.e.toLowerCase();
-  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: url.hostname });
+  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: url.hostname, iat: nowSeconds() });
   const slug = slugOf(url.hostname, env);
   if (slug) await noteSignIn(env, slug, email);
   const headers = new Headers({ Location: safeNext(url.searchParams.get("next")) });
@@ -1114,7 +1129,7 @@ async function presignedSignIn(request: Request, code: string, url: URL, env: En
   if (request.method === "POST" && !sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
   // The session opens this artifact only, and lasts no longer than the link; signing in with email gives the rest.
   const ttl = Math.max(60, Math.min(SESSION_TTL, Math.floor(claims.exp - Date.now() / 1000)));
-  const cookie = await signToken(env.SESSION_SECRET, "session", ttl, { e: email, h: url.hostname, a: claims.a });
+  const cookie = await signToken(env.SESSION_SECRET, "session", ttl, { e: email, h: url.hostname, a: claims.a, iat: nowSeconds() });
   await noteSignIn(env, slug, email, false);
   return new Response(null, {
     status: 303,
@@ -1126,10 +1141,39 @@ async function presignedSignIn(request: Request, code: string, url: URL, env: En
 
 /** Session cookies are per host, and each names its host so one can't be replayed on another. */
 async function currentViewer(request: Request, env: Env): Promise<Viewer> {
-  const claims = await verifyToken<{ e: string; h: string; a?: string }>(env.SESSION_SECRET, "session", readCookie(request, SESSION_COOKIE));
+  const claims = await verifyToken<{ e: string; h: string; a?: string; iat?: number }>(env.SESSION_SECRET, "session", readCookie(request, SESSION_COOKIE));
   if (!claims || claims.h !== new URL(request.url).hostname) return { email: null };
-  return claims.a ? { email: claims.e, only: claims.a, exp: claims.exp } : { email: claims.e };
+  // Signed in before they signed out everywhere (or deleted the account): that session is over.
+  const iat = claims.iat ?? claims.exp - SESSION_TTL;
+  if (iat < (await signedOutAt(env, claims.e))) return { email: null };
+  return claims.a ? { email: claims.e, only: claims.a, exp: claims.exp, iat } : { email: claims.e, iat };
 }
+
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+const SIGNED_OUT_PREFIX = "signed-out:";
+const signedOutCache = new Map<string, { at: number; value: number }>();
+
+/** When this person last signed out everywhere (seconds; 0 if never). One KV read a minute per isolate at most. */
+async function signedOutAt(env: Env, email: string): Promise<number> {
+  const hit = signedOutCache.get(email);
+  if (hit && Date.now() - hit.at < 60_000) return hit.value;
+  const raw = env.OAUTH_KV ? await env.OAUTH_KV.get(`${SIGNED_OUT_PREFIX}${email}`, { cacheTtl: 60 }).catch(() => null) : null;
+  const value = Number(raw ?? 0) || 0;
+  if (signedOutCache.size > 5000) signedOutCache.clear();
+  signedOutCache.set(email, { at: Date.now(), value });
+  return value;
+}
+
+/** Ends every session this person has, everywhere (within about a minute, as KV spreads). */
+async function signOutEverywhere(env: Env, email: string) {
+  const now = nowSeconds();
+  await env.OAUTH_KV.put(`${SIGNED_OUT_PREFIX}${email}`, String(now), { expirationTtl: SESSION_TTL + 86_400 });
+  signedOutCache.set(email, { at: Date.now(), value: now });
+}
+
+/** Actions that take over or end an account need a sign-in in the last half hour (a stolen cookie isn't enough). */
+const RECENT_SIGN_IN_S = 30 * 60;
+const recentlySignedIn = (viewer: Viewer) => typeof viewer.iat === "number" && nowSeconds() - viewer.iat < RECENT_SIGN_IN_S;
 
 /**
  * Sliding sessions: a visit more than a day after the cookie was issued gets a
@@ -1137,10 +1181,12 @@ async function currentViewer(request: Request, env: Env): Promise<Viewer> {
  */
 async function renewSession(request: Request, env: Env, response: Response) {
   if (response.status === 101 || response.headers.has("Set-Cookie")) return;
-  const claims = await verifyToken<{ e: string; h: string; a?: string }>(env.SESSION_SECRET, "session", readCookie(request, SESSION_COOKIE));
-  // Link sessions end when their link would have; only real sign-ins slide.
+  const claims = await verifyToken<{ e: string; h: string; a?: string; iat?: number }>(env.SESSION_SECRET, "session", readCookie(request, SESSION_COOKIE));
+  // Link sessions end when their link would have; only real sign-ins slide (keeping when they signed in).
   if (!claims || claims.a || claims.h !== new URL(request.url).hostname || claims.exp - Date.now() / 1000 > SESSION_TTL - 86400) return;
-  const fresh = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: claims.e, h: claims.h });
+  const iat = claims.iat ?? claims.exp - SESSION_TTL;
+  if (iat < (await signedOutAt(env, claims.e))) return;
+  const fresh = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: claims.e, h: claims.h, iat });
   try {
     response.headers.append("Set-Cookie", sessionCookie(fresh));
   } catch {
@@ -1163,7 +1209,9 @@ export function safeNext(next: string | null): string {
   const base = "https://same.invalid";
   try {
     const u = new URL(next, base);
-    return u.origin === base ? u.pathname + u.search + u.hash : "/";
+    // "/.//evil.com" normalizes to the path "//evil.com", which a browser reads as another host.
+    if (u.origin !== base || u.pathname.startsWith("//")) return "/";
+    return u.pathname + u.search + u.hash;
   } catch {
     return "/";
   }
@@ -1203,7 +1251,8 @@ async function authorize(request: Request, url: URL, env: Env, hub: HubApi, view
   const local = (message: string, status = 400) => messagePage("Can't connect", message, status, undefined, brand);
   try {
     if (!viewer.email) return Response.redirect(`${url.origin}/login?return=${encodeURIComponent(url.pathname + url.search)}`, 302);
-    const member = (await hub.access(viewer.email)).member;
+    const access = await hub.access(viewer.email);
+    const member = access.member;
     if (!member) return local(`${viewer.email} isn't a member of ${record.name}, so it can't connect an agent here. Ask a workspace admin to add you.`, 403);
     const userId = grantUser(record.slug, viewer.email);
     const remember = { secret: env.CONSENT_SECRET, subject: userId };
@@ -1215,7 +1264,7 @@ async function authorize(request: Request, url: URL, env: Env, hub: HubApi, view
         userId,
         metadata: { client: name, at: new Date().toISOString() },
         scope: authRequest.scope,
-        props: { email: viewer.email!, slug: record.slug } satisfies McpProps,
+        props: { email: viewer.email!, slug: record.slug, ...(access.createdAt ? { gen: access.createdAt } : {}) } satisfies McpProps,
       });
       // The code is "<user>:<grant>:<secret>"; keep the grant so settings can show and revoke it.
       const grantId = new URL(redirectTo).searchParams.get("code")?.split(":")[1];
@@ -1368,10 +1417,10 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       const record = await directory(env).billing(slug);
       if (!record?.customerId) return Response.json({ error: "This workspace has no subscription to manage." }, { status: 400 });
       // The portal shows the payer's card and everything they pay for, so it's theirs alone.
-      // If the payer isn't an admin here (they paid under another address), any admin may.
-      const payerAdmin = record.payerEmail && (await hub.members()).some((m) => m.email === record.payerEmail && m.role === "admin");
-      if (payerAdmin && record.payerEmail !== email) {
-        return Response.json({ error: `Billing is managed by ${record.payerEmail}, who paid for it. Ask them, or email us to move it.` }, { status: 403 });
+      // Whoever paid, and only them (removing them doesn't hand it to anyone else). With no payer on record,
+      // any admin; for anything else, we move it by hand.
+      if (record.payerEmail && record.payerEmail !== email) {
+        return Response.json({ error: `Billing is managed by ${record.payerEmail}, who paid for it. Ask them, or email ${contactEmail(env)} to move it.` }, { status: 403 });
       }
       try {
         return Response.json({ url: await portalLink(env, record.customerId) });
@@ -1414,6 +1463,11 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       const role = body.role === null ? null : (String(body.role) as WorkspaceRole);
       const target = String(body.email ?? "").trim().toLowerCase();
       const existed = (await hub.members()).some((m) => m.email === target);
+      // Whoever made the workspace owns it: another admin can't remove or demote them into owning it themselves.
+      const made = (await directory(env).workspace(slug))?.createdBy;
+      if (made && made === personKey(target) && role !== "admin" && target !== email) {
+        return Response.json({ error: `${target} made this workspace. They can hand it over (or leave) themselves; email ${contactEmail(env)} if that's not possible.` }, { status: 409 });
+      }
       const members = await hub.setMember(target, role, email);
       if (role === null) await revokeGrants(env, url.origin, slug, target, hub);
       // Whoever made a self-serve workspace owns it; if they're removed (or remove themselves), an admin does.
@@ -1591,6 +1645,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
       const plan = await accountDeletion(env, email);
       if (request.method === "GET") return Response.json(plan);
       if (request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
+      if (!recentlySignedIn(viewer)) return Response.json({ error: "Sign in again to delete your account.", reauth: true }, { status: 403 });
       if (body.confirm !== "delete") return Response.json({ error: "Type delete to confirm." }, { status: 400 });
       if (plan.blockers.length) return Response.json({ error: plan.blockers[0], ...plan }, { status: 409 });
       for (const w of plan.deletes) {
@@ -1614,6 +1669,8 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
       }
       await dir.forgetPerson(email);
       forgetWorkspaces();
+      // Every session they have, on every workspace, ends too.
+      await signOutEverywhere(env, email);
       return Response.json({ deleted: true, location: `${apexOrigin(env)}/?deleted=account` }, { headers: { "Set-Cookie": clearSessionCookie() } });
     }
     if (url.pathname === "/api/me/channels" && request.method === "POST") {
@@ -1624,6 +1681,14 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
       return Response.json({ id, label: prepared.label, reveal: prepared.reveal ?? null });
     }
     if (url.pathname === "/api/me/passkeys/options" && request.method === "POST") return Response.json(await registrationOptions(env, dir, email));
+    // Signing out everywhere: every session, on every workspace and device (this one too).
+    if (url.pathname === "/api/me/sign-out-everywhere" && request.method === "POST") {
+      await signOutEverywhere(env, email);
+      return Response.json({ location: `${apexOrigin(env)}/login` }, { headers: { "Set-Cookie": clearSessionCookie() } });
+    }
+    if ((url.pathname === "/api/me/passkeys/options" || url.pathname === "/api/me/passkeys") && request.method === "POST" && !recentlySignedIn(viewer)) {
+      return Response.json({ error: "Sign in again to save a passkey.", reauth: true }, { status: 403 });
+    }
     if (url.pathname === "/api/me/passkeys" && request.method === "POST") {
       const passkeys = await verifyRegistration(env, dir, email, String(body.token ?? ""), body.response as never, request.headers.get("User-Agent") ?? "");
       return Response.json({ passkeys });
@@ -1690,7 +1755,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       const host = String(body.host ?? "");
       if (!isTestAddress(email)) return Response.json({ error: "only test addresses" }, { status: 400 });
       if (host !== env.APEX_HOST && !slugOf(host, env)) return Response.json({ error: "unknown host" }, { status: 400 });
-      return Response.json({ cookie: `${SESSION_COOKIE}=${await signToken(env.SESSION_SECRET, "session", 3600, { e: email, h: host })}` });
+      return Response.json({ cookie: `${SESSION_COOKIE}=${await signToken(env.SESSION_SECRET, "session", 3600, { e: email, h: host, iat: nowSeconds() })}` });
     }
     // End-to-end checks sign in through the real forms: a code for a test address (whose mail is never sent).
     if (path === "/api/admin/test-code" && request.method === "POST") {

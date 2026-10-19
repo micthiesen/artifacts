@@ -42,7 +42,8 @@ export async function renderCheck(
   view?: CheckView,
 ): Promise<CheckOutcome | { rateLimited: true }> {
   if (!env.BROWSER) return { check: { status: "skipped", reason: "no browser binding" } };
-  const token = await signToken(env.SESSION_SECRET, "frame", 120, { id, w: workspace, c: true });
+  // Single use: the frame spends it when it loads, so a copy that leaks (say, printed by the page) is already dead.
+  const token = await signToken(env.SESSION_SECRET, "frame", 120, { id, w: workspace, c: true, j: crypto.randomUUID() });
   // A query parameter, not a #fragment: Browser Run doesn't keep fragments.
   const section = view?.section ? `&section=${encodeURIComponent(view.section)}` : "";
   const url = `${origin}/frame/${id}?v=${version}&check=1&t=${encodeURIComponent(token)}${section}`;
@@ -102,7 +103,8 @@ export async function renderCheck(
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 300);
-    return { check: { status: "skipped", reason: `no render result; the page showed: ${shown || "(nothing)"}` }, screenshot };
+    // No result means the page isn't (or is no longer) the artifact, say it navigated away: no screenshot of it.
+    return { check: { status: "skipped", reason: `no render result; the page showed: ${shown || "(nothing)"}` } };
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors.map(String) : [];
   if (parsed.status === "error" || errors.length) {

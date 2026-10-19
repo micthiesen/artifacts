@@ -790,6 +790,14 @@ export function linkSwitchPage(url: URL, current: string, linked: string, brand:
   );
 }
 
+/** Asks before signing out here to sign in with a different email. */
+export function switchPage(next: string, brand: Brand): Response {
+  return page(
+    `Sign in with a different email · ${brand.name}`,
+    `${topBar(brand)}<main class="content"><section class="empty"><h1>Sign in with a different email?</h1><p class="muted">This signs you out here, then asks for the email to use instead.</p><form method="post" action="/switch"><input type="hidden" name="return" value="${escapeHtml(next)}"><button class="button" type="submit">Sign out and continue</button></form><p><a href="/">Cancel</a></p></section></main>`,
+  );
+}
+
 export function messagePage(title: string, message: string, status: number, action?: { href: string; label: string }, brand?: Brand): Response {
   const b = brand ?? { name: PRODUCT, home: "/", apex: "" };
   const act = action ?? { href: "/", label: brand && brand.name !== PRODUCT ? "All artifacts" : "Home" };

@@ -164,6 +164,7 @@ const LIVE_CODES = 3;
 // sign in from theirs. With 8-digit codes that bounds brute force far below one in a thousand a week.
 const FAILS_PER_EMAIL_PER_IP_PER_HOUR = 10;
 const FAILS_PER_EMAIL_PER_HOUR = 30;
+const FAILS_PER_EMAIL_CEILING = 100;
 const CODE_DIGITS = 8;
 const CHANNEL_TESTS_PER_HOUR = 20;
 const PASSKEYS_MAX = 20;
@@ -1150,6 +1151,12 @@ export class Directory extends DurableObject {
     const fails = (where: string, ...args: SqlStorageValue[]) => this.sql.exec(`SELECT COUNT(*) AS n FROM login_fails WHERE email = ? AND ${where}`, email, ...args).one().n as number;
     const mine = fails("ip IS ?", ip);
     if (mine >= FAILS_PER_EMAIL_PER_IP_PER_HOUR || (mine > 0 && fails("1") >= FAILS_PER_EMAIL_PER_HOUR)) return false;
+    // Guessing from ever-new networks: past a ceiling for the address, its live codes are void, so the owner
+    // asks for a new one (passkeys still work) and the guesses so far are wasted.
+    if (fails("1") >= FAILS_PER_EMAIL_CEILING) {
+      this.sql.exec(`DELETE FROM login_codes WHERE email = ?`, email);
+      return false;
+    }
     const hash = await this.codeHash(email, code.replace(/\D/g, ""));
     const hit = this.sql.exec(`DELETE FROM login_codes WHERE email = ? AND code_hash = ? AND expires_at >= ? RETURNING id`, email, hash, now).toArray();
     if (!hit.length) {

@@ -103,7 +103,14 @@ export type ShareEntry = { email: string; role: Exclude<Role, "owner"> };
 
 export type Member = { email: string; role: WorkspaceRole; addedAt: string; addedBy: string | null; lastSeenAt: string | null };
 
-export type Access = { slug: string; name: string; member: WorkspaceRole | null; offline: boolean };
+export type Access = {
+  slug: string;
+  name: string;
+  member: WorkspaceRole | null;
+  offline: boolean;
+  /** When this workspace was made: a grant names it, so one from a deleted workspace of the same name doesn't carry over. */
+  createdAt?: string | null;
+};
 
 export type AgentToken = { id: string; email: string; label: string; createdAt: string; lastUsedAt: string | null };
 
@@ -138,7 +145,7 @@ export type HubApi = AsyncMethods<
   Pick<
     Workspace,
     | "provision" | "access" | "info" | "rename" | "stats" | "destroy" | "members" | "setMember" | "createToken" | "tokens"
-    | "revokeToken" | "verifyAgentToken" | "signedIn" | "closeSockets" | "allowMail" | "indexData" | "listPage" | "exists" | "forgetPerson" | "openArtifact" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
+    | "revokeToken" | "verifyAgentToken" | "signedIn" | "closeSockets" | "allowMail" | "indexData" | "listPage" | "exists" | "forgetPerson" | "spendToken" | "openArtifact" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
@@ -302,6 +309,8 @@ const MIGRATIONS: Migration[] = [
       INSERT INTO settings (key, value) SELECT 'links_backfill', '' WHERE EXISTS (SELECT 1 FROM artifacts)
         ON CONFLICT (key) DO UPDATE SET value = '';
     `),
+  // Tokens that work once (a render check's frame), remembered until they'd have expired anyway.
+  (sql) => sql.exec(`CREATE TABLE used_tokens (id TEXT PRIMARY KEY, until INTEGER NOT NULL)`),
 ];
 
 /** Links to other artifacts in this workspace, from file contents: /a/<id> (absolute or relative). */
@@ -439,6 +448,13 @@ export class Workspace extends DurableObject {
     for (const ws of this.ctx.getWebSockets()) if ((ws.deserializeAttachment() as SocketTag).email === clean) ws.close(4003, "access changed");
   }
 
+  /** Spend a single-use token: true the first time only. Spent ones are forgotten once they'd have expired. */
+  spendToken(id: string, untilMs: number): boolean {
+    if (!this.ready) return false;
+    this.sql.exec(`DELETE FROM used_tokens WHERE until < ?`, Date.now());
+    return this.sql.exec(`INSERT INTO used_tokens (id, until) VALUES (?, ?) ON CONFLICT (id) DO NOTHING RETURNING id`, id, untilMs).toArray().length > 0;
+  }
+
   /** Whether this workspace still has its data (false once destroyed, or never provisioned). */
   exists(): boolean {
     return this.ready && !this.setting("destroyed");
@@ -464,14 +480,14 @@ export class Workspace extends DurableObject {
    * other request stays synchronous.
    */
   access(email: string | null, origin?: string): Access | Promise<Access> {
-    const { slug, name } = this.info();
+    const { slug, name, createdAt } = this.info();
     if (!this.ready) return { slug, name, member: null, offline: false };
     // Remembered for notifications queued by work that had no request (the alarm, imports).
     if (origin && slug && this.setting("origin") !== origin) this.setSetting("origin", origin);
     const offline = this.offline();
     const member = email ? this.memberRole(email) : null;
-    if (email && !member && this.joinsByDomain(email)) return this.autoJoin(email).then((joined) => ({ slug, name, member: joined, offline }));
-    return { slug, name, member, offline };
+    if (email && !member && this.joinsByDomain(email)) return this.autoJoin(email).then((joined) => ({ slug, name, member: joined, offline, createdAt }));
+    return { slug, name, member, offline, createdAt };
   }
 
   stats(): WorkspaceStats {
@@ -1271,6 +1287,11 @@ export class Workspace extends DurableObject {
   recordError(id: string, viewer: string | null, message: string, stack?: string) {
     const row = this.sql.exec(`SELECT version FROM artifacts WHERE id = ?`, id).toArray()[0];
     if (!row) return;
+    // A few per viewer an hour: one person can't push everyone else's reports out of the log.
+    const recent = this.sql
+      .exec(`SELECT COUNT(*) AS n FROM errors WHERE artifact_id = ? AND viewer IS ? AND at > ?`, id, viewer, new Date(Date.now() - 3_600_000).toISOString())
+      .one().n as number;
+    if (recent >= 10) return;
     this.sql.exec(
       `INSERT INTO errors (artifact_id, at, version, viewer, message, stack) VALUES (?, ?, ?, ?, ?, ?)`,
       id,
@@ -3157,12 +3178,21 @@ export class Workspace extends DurableObject {
 
   private broadcastPresence(id: string, closing?: WebSocket) {
     const viewers = new Set<string>();
-    for (const ws of this.ctx.getWebSockets(id)) {
-      if (ws === closing) continue;
+    const sockets = this.ctx.getWebSockets(id).filter((ws) => ws !== closing);
+    for (const ws of sockets) {
       const tag = ws.deserializeAttachment() as SocketTag;
       if (tag.email) viewers.add(tag.email);
     }
-    this.broadcast(id, { t: "presence", viewers: [...viewers].sort() });
+    // Who's here is for people signed in to it; an anonymous visitor on a public link sees nobody.
+    const list = [...viewers].sort();
+    for (const ws of sockets) {
+      const tag = ws.deserializeAttachment() as SocketTag;
+      try {
+        send(ws, { t: "presence", viewers: tag.email ? list : [] });
+      } catch {
+        // closing
+      }
+    }
   }
 }
 
