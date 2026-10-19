@@ -60,7 +60,7 @@ For a monthly spend alert, give the token **Account → Notifications: Edit**
 and run `bun scripts/spend-alert.ts 20`, or add a Billing Budget Alert in
 the dashboard (Notifications → Add).
 
-- **Backups:** each workspace backs itself up to R2 at 10:00 UTC on days it changed, keeping 30 runs, as a resumable job. The operator console starts a backup, or a restore (which backs up first and takes the workspace offline until it's loaded), and shows each job's progress.
+- **Backups:** each workspace backs itself up to R2 at 10:00 UTC on days it changed, keeping 30 runs (7 on Free), as a resumable job. The operator console starts a backup, or a restore (which backs up first and takes the workspace offline until it's loaded), and shows each job's progress.
 - **Off-Cloudflare copy:** `bun scripts/export.ts <slug|directory>` writes `exports/<slug>-<time>.json`; `bun scripts/import.ts <slug|directory> <file>` replaces that data with it (the workspace is offline while it loads).
 - **Plans:** workspaces are on Team (no artifact or member limits; 5 GB of content and 5,000 saves a day, sized to one Durable Object's 10 GB) unless the operator console moves them to Free; self-serve workspaces start on Free. Limits live in `src/worker/plans.ts`. Nothing is charged yet.
 - **Fixing a workspace:** from `/admin`, add or replace its admins (say, a mistyped first admin) without a role inside it.

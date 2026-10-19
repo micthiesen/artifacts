@@ -176,9 +176,14 @@ const SENDS_PER_ALARM = 200;
 // Browser Run quick actions are rate-limited per account; space checks a little
 // and fall back to the alarm queue when Browser Run answers 429.
 const CHECK_SPACING_MS = 1_000;
+/** Comments aren't counted in storage, so each artifact holds at most this many. */
+const COMMENTS_PER_ARTIFACT_MAX = 5000;
+const CHECKS_USED_UP = "this workspace has used today's render checks; they come back tomorrow (the page itself is saved)";
 const CHECK_INLINE_WAIT_MS = 8_000;
 const ERRORS_KEEP = 30;
 const BACKUPS_KEEP = 30;
+/** Free workspaces keep a week of runs: storage for backups is the one cost that grows with free use. */
+const BACKUPS_KEEP_FREE = 7;
 /** How long one alarm spends on a backup or restore before yielding. */
 const JOB_STEP_MS = 10_000;
 const TOKEN_TOUCH_MS = 3600_000;
@@ -561,6 +566,20 @@ export class Workspace extends DurableObject {
     );
   }
 
+  private storedSample: { at: number; n: number } | null = null;
+
+  /** Shared state is written often (every checkbox), so its storage check reuses a reading up to 30 seconds old. */
+  private withinPlanForState() {
+    this.withinCapacity();
+    const max = PLANS[this.planId()].limits.bytes;
+    if (max === null) return;
+    if (!this.storedSample || Date.now() - this.storedSample.at > 30_000) this.storedSample = { at: Date.now(), n: this.storedBytes() };
+    if (this.storedSample.n >= max) {
+      this.storedSample = null;
+      this.withinPlan("bytes");
+    }
+  }
+
   /** Refuses a write that would go past the plan. Deleting is always allowed, so a full workspace can make room. */
   private withinPlan(kind: "artifacts" | "bytes" | "members" | "changesPerDay") {
     if (kind === "bytes") this.withinCapacity();
@@ -572,7 +591,7 @@ export class Workspace extends DurableObject {
       artifacts: () => count(`SELECT COUNT(*) AS n FROM artifacts`),
       members: () => count(`SELECT COUNT(*) AS n FROM members`),
       bytes: () => this.storedBytes(),
-      changesPerDay: () => count(`SELECT COUNT(*) AS n FROM events WHERE at > ? AND type = 'version'`, new Date(Date.now() - DAY_MS).toISOString()),
+      changesPerDay: () => this.savesToday(),
     }[kind]();
     if (used < max) return;
     const size = max >= 1024 ** 3 ? `${max / 1024 ** 3} GB` : `${Math.round(max / 1024 / 1024)} MB`;
@@ -688,6 +707,35 @@ export class Workspace extends DurableObject {
    * invitations, so a busy day of notifications can't stop someone being
    * invited.
    */
+  /**
+   * Saves in the last 24 hours, counted as they happen (by the hour) rather than from the activity log, so deleting
+   * what was saved doesn't make room for more.
+   */
+  private savesToday(): number {
+    const hours = JSON.parse(this.setting("saves_by_hour") ?? "{}") as Record<string, number>;
+    const since = Math.floor((Date.now() - DAY_MS) / HOUR_MS);
+    return Object.entries(hours).reduce((n, [h, c]) => (Number(h) > since ? n + c : n), 0);
+  }
+
+  private countSave() {
+    const hours = JSON.parse(this.setting("saves_by_hour") ?? "{}") as Record<string, number>;
+    const now = Math.floor(Date.now() / HOUR_MS);
+    const kept: Record<string, number> = {};
+    for (const [h, c] of Object.entries(hours)) if (Number(h) > now - 24) kept[h] = c;
+    kept[now] = (kept[now] ?? 0) + 1;
+    this.setSetting("saves_by_hour", JSON.stringify(kept));
+  }
+
+  /** Room for one more render check today on this plan; counts it. */
+  private allowCheck(): boolean {
+    const day = new Date().toISOString().slice(0, 10);
+    const used = JSON.parse(this.setting("checks_day") ?? "{}") as { day?: string; n?: number };
+    const n = used.day === day ? (used.n ?? 0) : 0;
+    if (n >= PLANS[this.planId()].limits.checksPerDay) return false;
+    this.setSetting("checks_day", JSON.stringify({ day, n: n + 1 }));
+    return true;
+  }
+
   /** A Free workspace less than a day old: held back from what a throwaway one could abuse. */
   private newFree(): boolean {
     const created = this.info().createdAt;
@@ -1212,6 +1260,8 @@ export class Workspace extends DurableObject {
     opts: { role?: Role; origin?: string; agent?: boolean } = {},
   ): number {
     const version = this.requireArtifact(id).version as number;
+    // Removing state always works, so a full workspace can make room.
+    if (Object.values(changes).some((v) => v !== null)) this.withinPlanForState();
     let seq = 0;
     const applied: { key: string; value: JsonValue | null; seq: number; created: boolean }[] = [];
     this.ctx.storage.transactionSync(() => {
@@ -1329,6 +1379,7 @@ export class Workspace extends DurableObject {
       const now = Date.now();
       const slot = Math.max(now, this.nextCheckAt);
       if (slot - now > CHECK_INLINE_WAIT_MS) return { check: { status: "skipped", reason: "the headless browser is busy; try again in a few seconds" }, version };
+      if (!this.allowCheck()) return { check: { status: "skipped", reason: CHECKS_USED_UP }, version };
       this.nextCheckAt = slot + CHECK_SPACING_MS;
       if (slot > now) await new Promise((r) => setTimeout(r, slot - now));
       const result = await renderCheck(this.hubEnv, origin, id, version, this.info().slug, view);
@@ -1447,6 +1498,7 @@ export class Workspace extends DurableObject {
 
   /** Runs one check and stores it. Returns null when Browser Run rate-limited us. */
   private async runCheck(id: string, version: number, origin: string): Promise<CheckOutcome | null> {
+    if (!this.allowCheck()) return { check: { status: "skipped", reason: CHECKS_USED_UP } };
     const result = await renderCheck(this.hubEnv, origin, id, version, this.info().slug);
     if ("rateLimited" in result) {
       this.nextCheckAt = Date.now() + 10_000;
@@ -1649,6 +1701,7 @@ export class Workspace extends DurableObject {
     if (current?.hash === hash) return;
     const version = this.requireArtifact(id).version as number;
     const files = this.files(id);
+    if (content.length > (files[path]?.length ?? 0)) this.withinPlan("bytes");
     files[path] = content;
     const { build, errors } = await buildArtifact(files);
     if (!build) throw new Error(errors.map((e) => e.message).join("; "));
@@ -1934,7 +1987,7 @@ export class Workspace extends DurableObject {
         this.setJob(null);
         // Tidying up afterwards can't undo a finished backup.
         const pending = JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[];
-        await pruneBackups(bucket, slug, BACKUPS_KEEP, pending.flatMap((q) => (q.kind === "restore" ? [q.run] : []))).catch((err) => console.error(JSON.stringify({ ops: "prune_failed", slug, message: (err as Error).message })));
+        await pruneBackups(bucket, slug, this.planId() === "free" ? BACKUPS_KEEP_FREE : BACKUPS_KEEP, pending.flatMap((q) => (q.kind === "restore" ? [q.run] : []))).catch((err) => console.error(JSON.stringify({ ops: "prune_failed", slug, message: (err as Error).message })));
         await this.reportJob();
         return true;
       }
@@ -2197,6 +2250,9 @@ export class Workspace extends DurableObject {
     const text = String(input.text ?? "").trim();
     if (!text) throw new HubError("comment text is empty");
     if (text.length > COMMENT_MAX_CHARS) throw new HubError(`comments are limited to ${COMMENT_MAX_CHARS} characters`);
+    this.withinCapacity();
+    const comments = this.sql.exec(`SELECT COUNT(*) AS n FROM comments WHERE artifact_id = ?`, id).one().n as number;
+    if (comments >= COMMENTS_PER_ARTIFACT_MAX) throw new HubError(`this artifact has ${COMMENTS_PER_ARTIFACT_MAX} comments, the most it can hold; delete old comments to add more`);
     const now = new Date().toISOString();
     let threadId = input.thread;
     const reply = Boolean(threadId);
@@ -3113,6 +3169,7 @@ export class Workspace extends DurableObject {
     this.sql.exec(`DELETE FROM history WHERE artifact_id = ? AND version <= ?`, id, version - HISTORY_KEEP);
     this.collectBlobs(id);
     setLinks(this.sql, id, files);
+    this.countSave();
   }
 
   /** One batch of the links backfill (after the migration, or a restore); true while there's more. */

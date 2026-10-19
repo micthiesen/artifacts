@@ -40,7 +40,7 @@ import { ops } from "./ops.ts";
 import { approveAnnouncement, browserOf, caseUrl, openCase, placeOf, recordProductError, supportHub, SupportError, type CaseKind } from "./support.ts";
 import { publicMessage } from "./errors.ts";
 import { isPlan } from "./plans.ts";
-import { BillingError, billingOn, billingReady, planFor, portalLink, readEvent, startCheckout, subscriptionLive, TEAM_PRICE, verifyWebhook } from "./billing.ts";
+import { BillingError, billingOn, billingReady, planFor, portalLink, readEvent, startCheckout, subscriptionLive, subscriptionMayCharge, TEAM_PRICE, verifyWebhook } from "./billing.ts";
 import { checkLayout } from "./layout.ts";
 import { exportRun, latestManifest } from "./snapshot.ts";
 import { DATA_TABLES } from "./tables.ts";
@@ -819,7 +819,7 @@ async function accountDeletion(env: Env, email: string) {
     const others = members.filter((m) => m.email !== email);
     const otherAdmins = others.filter((m) => m.role === "admin");
     const record = await dir.billing(w.slug);
-    const billed = record && subscriptionLive(record.status, record.periodEnd);
+    const billed = record && subscriptionMayCharge(record.status);
     if (!others.length) {
       if (billed) blockers.push(`${w.name} still has a subscription: cancel it in its settings (Manage billing) first.`);
       else deletes.push({ slug: w.slug, name: w.name });
@@ -870,9 +870,22 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
   }
   const update = readEvent(payload);
   if (!update) {
-    // Events we don't act on (refunds, disputes) are expected; one about a subscription we couldn't read isn't.
-    const e = payload as { id?: string; eventType?: string; object?: { object?: string; subscription?: unknown } };
-    const aboutSubscription = e?.object?.object === "subscription" || Boolean(e?.object?.subscription) || String(e?.eventType ?? "").startsWith("subscription.");
+    // Events we don't act on are expected; one about a subscription we couldn't read isn't.
+    const e = payload as { id?: string; eventType?: string; object?: { object?: string; subscription?: unknown; metadata?: { workspace?: unknown } } };
+    const type = String(e?.eventType ?? "");
+    // Refunds and disputes don't change the plan by themselves: the operator decides (End billing in the console).
+    if (type.startsWith("refund.") || type.startsWith("dispute.")) {
+      const slug = typeof e?.object?.metadata?.workspace === "string" ? e.object.metadata.workspace : undefined;
+      await ops(env, {
+        kind: "billing_refund_or_dispute",
+        slug,
+        message: `Creem sent ${type}${slug ? ` for ${slug}` : ""}. The plan hasn't changed: if Team should end now, use End billing in the operator console.`,
+        detail: { eventId: e?.id, eventType: type },
+        alert: true,
+      });
+      return Response.json({ ignored: true });
+    }
+    const aboutSubscription = e?.object?.object === "subscription" || Boolean(e?.object?.subscription) || type.startsWith("subscription.");
     await ops(env, {
       kind: aboutSubscription ? "billing_event_unread" : "billing_event_ignored",
       message: aboutSubscription ? "A subscription webhook couldn't be read: has Creem changed its payload? The workspace's plan didn't change." : `Ignored billing event ${e?.eventType ?? "?"}.`,
@@ -905,12 +918,21 @@ async function applyBillingEvent(env: Env, update: NonNullable<ReturnType<typeof
       await ops(env, {
         kind: "billing_unknown_workspace",
         slug: update.workspace,
-        message: `A subscription paid for ${update.workspace}, which doesn't exist (deleted during checkout?). Refund and cancel it in Creem.`,
+        message: `A subscription paid for ${update.workspace}, which doesn't exist (deleted during checkout, or since made again by someone else). Refund and cancel it in Creem.`,
         detail: { eventId: update.eventId, subscriptionId: update.subscriptionId },
         alert: true,
       });
     }
     return Response.json({ ok: true, ignored: true });
+  }
+  if (applied.replaced) {
+    await ops(env, {
+      kind: "billing_replaced",
+      slug: applied.slug,
+      message: `${applied.slug} has a new subscription (${update.subscriptionId}) replacing ${applied.replaced}. Check the old one is canceled in Creem, or they pay twice.`,
+      detail: { eventId: update.eventId, subscriptionId: update.subscriptionId, replaced: applied.replaced },
+      alert: true,
+    }).catch(() => {});
   }
   // Two webhooks at once can finish in either order, so settle on what the record says now.
   let plan = applied.plan;
@@ -1382,7 +1404,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       const body = await jsonBody(request);
       if (body.confirm !== slug) return Response.json({ error: `Type ${slug} to confirm.` }, { status: 400 });
       const record = await directory(env).billing(slug);
-      if (record && subscriptionLive(record.status, record.periodEnd)) {
+      if (record && subscriptionMayCharge(record.status)) {
         return Response.json({ error: "Cancel the subscription in Manage billing first, so it stops charging." }, { status: 409 });
       }
       for (const m of await hub.members()) {
@@ -1406,7 +1428,8 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         return Response.json({ error: existing.status === "paused" ? "This workspace's subscription is paused: resume it from Manage billing." : "This workspace already has a subscription; reload to see it." }, { status: 409 });
       }
       try {
-        return Response.json({ url: await startCheckout(env, { workspace: slug, email, successUrl: `${url.origin}/settings?billing=done` }) });
+        const created = (await directory(env).workspace(slug))?.createdAt ?? null;
+        return Response.json({ url: await startCheckout(env, { workspace: slug, created, email, successUrl: `${url.origin}/settings?billing=done` }) });
       } catch (err) {
         if (err instanceof BillingError) return Response.json({ error: err.message }, { status: 503 });
         throw err;
@@ -1735,6 +1758,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
  * - GET    /api/admin/signins?email=                     recent code sends and failures, for support
  * - POST   /api/admin/workspaces/<slug>/restore {run}    back up, then replace everything with that run
  * - the same export, import, backups, backup and restore under /api/admin/directory/ for the directory
+ * - POST   /api/admin/workspaces/<slug>/end-billing      end its paid time now (refund, dispute), so it's Free
  * - POST   /api/admin/workspaces/<slug>/hosts {host, allowed}   approve or revoke a live-data host, as its admins can
  * - POST   /api/admin/workspaces/<slug>/tokens {email}   an agent token for a member
  * - POST   /api/admin/session {email, host}              a session cookie value for the apex or a workspace host
@@ -1821,7 +1845,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       if (d[1] === "restore" || (d[1] === "import" && body.step === "end")) forgetWorkspaces();
       return done ?? Response.json({ error: "not found" }, { status: 404 });
     }
-    const m = /^\/api\/admin\/workspaces\/([a-z0-9-]+)(?:\/([a-z]+))?$/.exec(path);
+    const m = /^\/api\/admin\/workspaces\/([a-z0-9-]+)(?:\/([a-z-]+))?$/.exec(path);
     if (!m) return Response.json({ error: "not found" }, { status: 404 });
     const [, slug, action] = m;
     const hub = workspaceHub(env, slug);
@@ -1830,8 +1854,9 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
     if (!action && request.method === "DELETE") {
       if (!validSlug(slug)) return Response.json({ error: `no workspace ${slug}` }, { status: 404 });
       // A paying workspace would keep being charged: cancel its subscription first (or force).
-      if ((await dir.billingPlan(slug))?.plan === "team" && url.searchParams.get("force") !== "1") {
-        return Response.json({ error: `${slug} has a live subscription; cancel it in Creem first, or delete with ?force=1` }, { status: 409 });
+      const rec = await dir.billing(slug);
+      if (rec && subscriptionMayCharge(rec.status) && url.searchParams.get("force") !== "1") {
+        return Response.json({ error: `${slug} has a subscription that can still charge (${rec.status}); cancel it in Creem first, or delete with ?force=1` }, { status: 409 });
       }
       for (const m of await hub.members().catch(() => [])) {
         await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email, hub).catch((err) => console.error("revoking grants failed", err));
@@ -1870,8 +1895,20 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       await hub.setPlan(rec.plan, rec.until);
       return Response.json({ plan: rec.plan, until: rec.until });
     }
+    // After a refund or dispute: Team ends now, whatever the subscription said (cancel it in Creem too).
+    if (action === "end-billing" && request.method === "POST") {
+      const rec = await dir.endBilling(slug);
+      if (!rec) return Response.json({ error: `${slug} has no subscription record` }, { status: 400 });
+      await hub.setPlan(rec.plan, rec.until);
+      await ops(env, { kind: "billing", slug, message: `An operator ended ${slug}'s paid time; it's on Free now.`, alert: false });
+      return Response.json({ plan: rec.plan, until: rec.until });
+    }
     if (action === "plan" && request.method === "POST") {
       if (!isPlan(body.plan)) return Response.json({ error: "plan must be free or team" }, { status: 400 });
+      // A paying workspace's plan follows its subscription: the next webhook or resync would undo a hand-set one.
+      if (body.force !== true && (await dir.billing(slug))) {
+        return Response.json({ error: `${slug} has a subscription record, so its plan follows it. Use Resync plan or End billing, or send force: true.` }, { status: 409 });
+      }
       return Response.json({ plan: await hub.setPlan(body.plan) });
     }
     // Like fixing admins: put back a data host an admin removed by mistake.

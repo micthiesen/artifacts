@@ -63,7 +63,7 @@ function creemUrl(u: string | undefined, what: string): string {
 }
 
 /** A Creem checkout for Team for this workspace; returns the URL to send the admin to. */
-export async function startCheckout(env: BillingEnv, input: { workspace: string; email: string; successUrl: string }): Promise<string> {
+export async function startCheckout(env: BillingEnv, input: { workspace: string; created?: string | null; email: string; successUrl: string }): Promise<string> {
   if (!billingReady(env)) throw new BillingError("Billing isn't set up yet.");
   const r = await creem<{ checkout_url?: string }>(env, "/v1/checkouts", {
     product_id: env.CREEM_PRODUCT_ID,
@@ -71,7 +71,9 @@ export async function startCheckout(env: BillingEnv, input: { workspace: string;
     request_id: `${input.workspace}-${Math.floor(Date.now() / 60_000)}`,
     customer: { email: input.email },
     success_url: input.successUrl,
-    metadata: { workspace: input.workspace },
+    // When the workspace was made: if it's deleted and its address reused before the payment lands, the
+    // new one isn't mistaken for the payer.
+    metadata: { workspace: input.workspace, ...(input.created ? { created: input.created } : {}) },
   });
   return creemUrl(r.checkout_url, "checkout");
 }
@@ -124,11 +126,21 @@ export function subscriptionLive(status: string, periodEnd: string | null, now =
   return status !== "canceled" && planFor(status, periodEnd, now).plan === "team";
 }
 
+/**
+ * Whether deleting the workspace (or its payer's account) would leave a subscription that can still charge:
+ * anything but canceled, expired or set to cancel. Paused and unpaid ones count, as they can resume.
+ */
+export function subscriptionMayCharge(status: string): boolean {
+  return !["canceled", "expired", "scheduled_cancel"].includes(status);
+}
+
 /** A provider event as it affects one workspace. */
 export type BillingUpdate = {
   eventId: string;
   /** The paying customer's email, when the event carries it. */
   payerEmail: string | null;
+  /** When the workspace that started the checkout was made (metadata), to tell it from a later one at the same address. */
+  workspaceCreated: string | null;
   /** When the provider says it happened (ms), so an older event arriving late can't undo a newer one. */
   at: number;
   workspace: string | null;
@@ -174,6 +186,7 @@ export function readEvent(payload: unknown): BillingUpdate | null {
     payerEmail,
     at: e.created_at,
     workspace: typeof meta.workspace === "string" ? meta.workspace : null,
+    workspaceCreated: typeof meta.created === "string" ? meta.created : null,
     customerId: customer,
     subscriptionId: sub.id ?? null,
     status: e.eventType === "subscription.canceled" ? "canceled" : status,

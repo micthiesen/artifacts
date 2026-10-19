@@ -254,3 +254,31 @@ test("a Free workspace's first day: no public links and only a handful of invita
   expect(() => h.hub.share(r.id, { public: false })).not.toThrow();
   expect(() => h.hub.share(r.id, { public: true })).not.toThrow();
 });
+
+test("deleting what was saved doesn't make room for more saves today; render checks have their own daily allowance", async () => {
+  await h.hub.setPlan("free");
+  settle();
+  const limits = PLANS.free.limits as { changesPerDay: number | null; checksPerDay: number };
+  const real = { saves: limits.changesPerDay, checks: limits.checksPerDay };
+  limits.changesPerDay = 3;
+  limits.checksPerDay = 1;
+  try {
+    for (let i = 0; i < 3; i++) {
+      const r = await h.hub.create({ title: `T${i}`, files, owner: ADMIN });
+      if (!r.ok) throw new Error("create");
+      h.hub.delete(r.id);
+    }
+    await expect(h.hub.create({ title: "fourth", files, owner: ADMIN })).rejects.toThrow("3 saved changes a day");
+  } finally {
+    limits.changesPerDay = real.saves;
+  }
+  try {
+    const r = await h.hub.create({ title: "Checked", files, owner: ADMIN });
+    if (!r.ok) throw new Error("create");
+    await h.hub.runRenderCheck(r.id, "https://acme.artifacts.test", true);
+    const second = await h.hub.runRenderCheck(r.id, "https://acme.artifacts.test", true, { phone: true });
+    expect(second.check).toMatchObject({ status: "skipped", reason: expect.stringContaining("used today's render checks") });
+  } finally {
+    limits.checksPerDay = real.checks;
+  }
+});

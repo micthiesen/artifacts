@@ -400,3 +400,53 @@ test("webhook trouble lands in the ops log, and Resync plan puts a drifted plan 
   expect(await resync.json()).toEqual({ plan: "team", until: null });
   expect(h.hub.plan().id).toBe("team");
 });
+
+test("a second subscription, a refund or a dispute alerts the operator; End billing puts the workspace on Free at once", async () => {
+  Object.assign(env, KEYS);
+  await webhook(checkoutCompleted());
+  await webhook(event("subscription.paid", { ...sub("active"), id: "sub_2", customer: { id: "cust_1" } }));
+  expect(h.directory.opsEvents({ kind: "billing_replaced" })[0]?.detail).toMatchObject({ subscriptionId: "sub_2", replaced: "sub_1" });
+  expect(await (await webhook(event("refund.created", { id: "ref_1", object: "refund", metadata: { workspace: "acme" } }))).json()).toEqual({ ignored: true });
+  await webhook(event("dispute.created", { id: "dis_1", object: "dispute" }));
+  expect(h.directory.opsEvents({ kind: "billing_refund_or_dispute" })).toHaveLength(2);
+  expect(h.hub.plan().id).toBe("team");
+  const admin = (action: string, body: unknown = {}) =>
+    worker.fetch(new Request(`${APEX}/api/admin/workspaces/acme/${action}`, { method: "POST", headers: { Authorization: "Bearer op-token", "Content-Type": "application/json" }, body: JSON.stringify(body) }), env as never, ctx);
+  // A paying workspace's plan follows its subscription, so setting it by hand needs force.
+  expect((await admin("plan", { plan: "free" })).status).toBe(409);
+  expect(h.hub.plan().id).toBe("team");
+  expect(await (await admin("end-billing")).json()).toMatchObject({ plan: "free" });
+  expect(h.hub.plan().id).toBe("free");
+  // An event from before doesn't bring Team back.
+  await webhook(event("subscription.active", { ...sub("active"), id: "sub_2" }, 1_000));
+  expect(h.hub.plan().id).toBe("free");
+  // Ended (canceled), it can be deleted.
+  const del = await worker.fetch(new Request(`${APEX}/api/admin/workspaces/acme`, { method: "DELETE", headers: { Authorization: "Bearer op-token" } }), env as never, ctx);
+  expect(del.status).not.toBe(409);
+});
+
+test("checkout carries when the workspace was made, so one made later at the same address doesn't get the payment", async () => {
+  Object.assign(env, KEYS);
+  creemAnswer = () => Response.json({ id: "ch_1", checkout_url: "https://checkout.creem.io/ch_1" });
+  await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  const created = h.directory.workspace("acme")!.createdAt;
+  expect(calls[0].body.metadata).toEqual({ workspace: "acme", created });
+  const paid = (when: string) => {
+    const e = checkoutCompleted();
+    const meta = { workspace: "acme", created: when };
+    return { ...e, object: { ...e.object, metadata: meta, subscription: { ...e.object.subscription, metadata: meta } } };
+  };
+  expect(await (await webhook(paid("2020-01-01T00:00:00.000Z"))).json()).toEqual({ ok: true, ignored: true });
+  expect(h.hub.plan().id).toBe("free");
+  expect(h.directory.opsEvents({ kind: "billing_unknown_workspace" })).toHaveLength(1);
+  await webhook(paid(created));
+  expect(h.hub.plan().id).toBe("team");
+});
+
+test("a paused or unpaid subscription still blocks deleting the workspace", async () => {
+  Object.assign(env, KEYS);
+  await webhook(checkoutCompleted());
+  await webhook(event("subscription.paused", sub("paused")));
+  const del = await worker.fetch(new Request(`${APEX}/api/admin/workspaces/acme`, { method: "DELETE", headers: { Authorization: "Bearer op-token" } }), env as never, ctx);
+  expect(del.status).toBe(409);
+});

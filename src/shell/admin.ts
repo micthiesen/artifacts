@@ -269,11 +269,19 @@ function render() {
         "div",
         { class: "channel-actions" },
         btn("Refresh stats", () => act(() => api(`/api/admin/workspaces/${w.slug}/stats`, { body: {} }))),
-        ...(w.billing ? [btn("Resync plan", () => act(() => api(`/api/admin/workspaces/${w.slug}/resync`, { body: {} }), `${w.slug}'s plan matches its subscription again.`))] : []),
-        btn(s?.plan === "free" ? "Move to Team" : "Move to Free", () => {
+        ...(w.billing
+          ? [
+              btn("Resync plan", () => act(() => api(`/api/admin/workspaces/${w.slug}/resync`, { body: {} }), `${w.slug}'s plan matches its subscription again.`)),
+              btn("End billing", () => {
+                if (!confirm(`End ${w.slug}'s paid time now, so it's on Free? Cancel or refund the subscription in Creem as well.`)) return;
+                return act(() => api(`/api/admin/workspaces/${w.slug}/end-billing`, { body: {} }), `${w.slug} is on Free now.`);
+              }),
+            ]
+          : []),
+        ...(w.billing ? [] : [btn(s?.plan === "free" ? "Move to Team" : "Move to Free", () => {
           const plan = s?.plan === "free" ? "team" : "free";
           return act(() => api(`/api/admin/workspaces/${w.slug}/plan`, { body: { plan } }), `${w.slug} is now on the ${plan === "free" ? "Free" : "Team"} plan.`);
-        }),
+        })]),
         backup,
         btn("Backups…", () =>
           act(async () => {

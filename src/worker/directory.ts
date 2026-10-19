@@ -60,6 +60,9 @@ export type StoredPasskey = { id: string; email: string; publicKey: string; coun
 
 export type ChannelRow = { id: string; type: ChannelType; config: Record<string, unknown> };
 
+/** Reports (or another allowReport scope) accepted an hour from everyone together. */
+const REPORTS_PER_HOUR_MAX = 200;
+
 export class DirectoryError extends Error {}
 
 export type SupportCase = {
@@ -111,7 +114,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -409,11 +412,15 @@ export class Directory extends DurableObject {
    * before), and events arriving out of order or from an old, replaced
    * subscription can't leave the workspace on the wrong plan.
    */
-  applyBilling(u: BillingUpdate, provider: string): { slug: string; plan: PlanId; until: string | null } | null {
+  applyBilling(u: BillingUpdate, provider: string): { slug: string; plan: PlanId; until: string | null; replaced?: string } | null {
     const bySub = u.subscriptionId ? (this.sql.exec(`SELECT slug FROM billing WHERE subscription_id = ?`, u.subscriptionId).toArray()[0]?.slug as string | undefined) : undefined;
-    const slug = bySub ?? (u.workspace && this.workspace(u.workspace) ? u.workspace : null);
+    // By name, only the workspace that started the checkout: not a later one at the same address.
+    const named = u.workspace ? this.workspace(u.workspace) : null;
+    const sameWorkspace = named && (!u.workspaceCreated || named.createdAt === u.workspaceCreated);
+    const slug = bySub ?? (sameWorkspace ? u.workspace : null);
     if (!slug) return null;
     const row = this.sql.exec(`SELECT * FROM billing WHERE slug = ?`, slug).toArray()[0];
+    let replaced: string | undefined;
     const seen = this.sql.exec(`SELECT 1 FROM billing_events WHERE id = ?`, u.eventId).toArray().length > 0;
     if (!seen) {
       this.sql.exec(`INSERT INTO billing_events (id, at) VALUES (?, ?)`, u.eventId, Date.now());
@@ -425,7 +432,7 @@ export class Directory extends DurableObject {
       // A workspace with no subscription yet only gets one by paying (an operator-set plan isn't touched otherwise).
       const starts = row || u.plan === "team";
       if (newer && takesOver && starts) {
-        if (other) console.error(`billing: ${slug} moved from subscription ${row!.subscription_id} to ${u.subscriptionId}; check the old one is canceled`);
+        if (other) replaced = String(row!.subscription_id);
         this.sql.exec(
           `INSERT INTO billing (slug, provider, customer_id, subscription_id, status, period_end, event_at, updated_at, payer_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (slug) DO UPDATE SET provider = excluded.provider, customer_id = COALESCE(excluded.customer_id, customer_id),
@@ -447,7 +454,26 @@ export class Directory extends DurableObject {
       }
     }
     const current = this.sql.exec(`SELECT status, period_end FROM billing WHERE slug = ?`, slug).toArray()[0];
-    return current ? { slug, ...planFor(current.status as string, (current.period_end as string | null) ?? null) } : null;
+    return current ? { slug, ...planFor(current.status as string, (current.period_end as string | null) ?? null), ...(replaced ? { replaced } : {}) } : null;
+  }
+
+  /**
+   * End a workspace's paid time now (after a refund or a dispute): its record reads canceled with no time
+   * left, so it's Free. Events from before this don't bring Team back; a later payment still does.
+   */
+  endBilling(slug: string): { plan: PlanId; until: string | null } | null {
+    const row = this.sql.exec(`SELECT event_at FROM billing WHERE slug = ?`, slug).toArray()[0];
+    if (!row) return null;
+    const now = new Date().toISOString();
+    this.sql.exec(
+      `UPDATE billing SET status = 'canceled', period_end = ?, event_at = MAX(event_at, ?), updated_at = ? WHERE slug = ?`,
+      now,
+      Date.now(),
+      now,
+      slug,
+    );
+    this.markDirty();
+    return this.billingPlan(slug);
   }
 
   /** The plan a workspace's stored subscription pays for, or null when it has none (the operator sets its plan). */
@@ -792,6 +818,8 @@ export class Directory extends DurableObject {
     const network = `${scope}|${ip.includes(":") ? ip.split(":").slice(0, 4).join(":") : ip}`;
     this.sql.exec(`DELETE FROM reports WHERE at < ?`, Date.now() - 3_600_000);
     if ((this.sql.exec(`SELECT COUNT(*) AS n FROM reports WHERE ip = ?`, network).one().n as number) >= 5) return false;
+    // However many networks send them, at most this many an hour (each can email the operator).
+    if ((this.sql.exec(`SELECT COUNT(*) AS n FROM reports WHERE substr(ip, 1, ?) = ?`, scope.length + 1, `${scope}|`).one().n as number) >= REPORTS_PER_HOUR_MAX) return false;
     this.sql.exec(`INSERT INTO reports (ip, at) VALUES (?, ?)`, network, Date.now());
     return true;
   }
