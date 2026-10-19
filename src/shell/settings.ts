@@ -365,18 +365,18 @@ if (new URLSearchParams(location.search).get("billing") === "done") {
       checkout = "idle";
       data = fresh;
       notice = { tone: "ok", text: "Payment confirmed: this workspace is on Team." };
-      render();
+      render({ keepTyped: true });
     } else if (tries < 20) {
       if (fresh && data && (fresh.plan.id !== data.plan.id || fresh.plan.until !== data.plan.until)) {
         data = fresh;
-        render();
+        render({ keepTyped: true });
       }
       setTimeout(check, 3000);
     } else {
       checkout = "stuck";
       if (fresh) data = fresh;
       notice = { tone: "warn", text: "The payment hasn't been confirmed yet." };
-      if (data) render();
+      if (data) render({ keepTyped: true });
     }
   };
   setTimeout(check, 3000);
@@ -453,7 +453,8 @@ function clientSetup() {
   return h("div", {}, tabs, steps);
 }
 
-function render() {
+/** `keepTyped`: a refresh nobody asked for (a payment confirmed), so fields keep what's typed in them. */
+function render(opts: { keepTyped?: boolean } = {}) {
   const admin = data.you.role === "admin";
   const sections: HTMLElement[] = [h("h1", { class: "page-title" }, data.workspace.name)];
   // Only plans with limits say anything: there's nothing to buy yet.
@@ -666,7 +667,22 @@ function render() {
     sections.push(exportSection());
     if (data.canDelete) sections.push(...deleteSection());
   }
+  // A re-render (say, a payment confirmed while you type) keeps what's typed in each field, and where you were.
+  const fieldKey = (el: HTMLInputElement | HTMLTextAreaElement) => el.name || el.getAttribute("aria-label") || el.placeholder;
+  const typed = new Map<string, string>();
+  let focused: string | null = null;
+  for (const el of opts.keepTyped ? main.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea") : []) {
+    if (el.type === "hidden" || el.type === "checkbox" || el.type === "radio" || !fieldKey(el)) continue;
+    if (el.value) typed.set(fieldKey(el), el.value);
+    if (el === document.activeElement) focused = fieldKey(el);
+  }
   main.replaceChildren(...sections);
+  for (const el of opts.keepTyped ? main.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea") : []) {
+    const key = fieldKey(el);
+    if (!key) continue;
+    if (!el.value && typed.has(key)) el.value = typed.get(key)!;
+    if (key === focused) el.focus();
+  }
   if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   notice = null;
 }
