@@ -1,6 +1,6 @@
 // Builds the frame kit into dist/kit/, laid out so the directory maps 1:1 onto
 // URLs when used as a Workers static-assets directory:
-//   dist/kit/_headers            CORS + immutable caching for /kit/v1/*
+//   dist/kit/_headers            CORS + immutable caching for /kit/v1/*, a day's caching for /static/*
 //   dist/kit/kit/v1/*.js         ESM entries (import-map targets)
 //   dist/kit/kit/v1/chunks/*.js  shared code-split chunks (one React instance)
 //   dist/kit/kit/v1/kit.css      Tailwind v4 (preflight, theme, kit classes) + @font-face
@@ -108,7 +108,18 @@ async function buildCss(fontCss: string) {
 async function writeHeaders() {
   await writeFile(
     join(OUT_ROOT, "_headers"),
-    ["/kit/v1/*", "  Access-Control-Allow-Origin: *", "  Cache-Control: public, max-age=31536000, immutable", "  X-Content-Type-Options: nosniff", ""].join("\n"),
+    [
+      "/kit/v1/*",
+      "  Access-Control-Allow-Origin: *",
+      "  Cache-Control: public, max-age=31536000, immutable",
+      "  X-Content-Type-Options: nosniff",
+      // The shell's own scripts and styles: pages link them with ?v=<build>, so a day's caching never serves an
+      // old one after a deploy (icons, linked without it, can be a day stale).
+      "/static/*",
+      "  Cache-Control: public, max-age=86400",
+      "  X-Content-Type-Options: nosniff",
+      "",
+    ].join("\n"),
   );
   await copyFile(join(ROOT, "THIRD_PARTY_NOTICES.md"), join(OUT, "THIRD_PARTY_NOTICES.md"));
 }

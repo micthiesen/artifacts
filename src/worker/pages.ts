@@ -415,7 +415,9 @@ export type LoginState = { step: "email" | "code"; email?: string; error?: strin
 /** Email sign-in: the address form, then the code form. `to`/`return` ride along as hidden fields. */
 export function loginPage(state: LoginState, brand: Brand, status = 200): Response {
   const hidden = `<input type="hidden" name="to" value="${escapeHtml(state.to)}"><input type="hidden" name="n" value="${escapeHtml(state.n)}"><input type="hidden" name="return" value="${escapeHtml(state.return)}">`;
-  const error = state.error ? `<p class="notice error" role="alert">${escapeHtml(state.error)}</p>` : "";
+  const error = state.error ? `<p class="notice error" role="alert" id="login-error">${escapeHtml(state.error)}</p>` : "";
+  // The one field on each step is what the error is about.
+  const invalid = state.error ? ` aria-invalid="true" aria-describedby="login-error"` : "";
   let where = "";
   try {
     if (state.to) where = ` to continue to <strong>${escapeHtml(new URL(state.to).hostname)}</strong>`;
@@ -427,13 +429,13 @@ export function loginPage(state: LoginState, brand: Brand, status = 200): Respon
       ? `<h1>Sign in</h1><p class="muted">We'll email you a sign-in code${where}.</p>${error}
 <form class="key-form" method="post" action="/login">${hidden}
 <label for="email">Email</label>
-<div class="row"><input class="input" id="email" name="email" type="email" autocomplete="email webauthn" required autofocus value="${escapeHtml(state.email ?? "")}"><button class="button" type="submit">Send code</button></div>
+<div class="row"><input class="input" id="email" name="email" type="email" autocomplete="email webauthn" required autofocus${invalid} value="${escapeHtml(state.email ?? "")}"><button class="button" type="submit">Send code</button></div>
 </form>
 <p class="passkey-alt" id="passkey-alt" hidden><button class="link" type="button" id="passkey-button">Sign in with a passkey</button></p>`
       : `<h1>Check your email</h1><p class="muted">We sent a code to <strong>${escapeHtml(state.email ?? "")}</strong>. It works for 10 minutes.</p>${error}
 <form class="key-form" method="post" action="/login">${hidden}<input type="hidden" name="email" value="${escapeHtml(state.email ?? "")}">
 <label for="code">Code</label>
-<div class="row"><input class="input code-input" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{8,9}" maxlength="9" required autofocus><button class="button" type="submit">Sign in</button></div>
+<div class="row"><input class="input code-input" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{8,9}" maxlength="9" required autofocus${invalid}><button class="button" type="submit">Sign in</button></div>
 </form>
 <form method="post" action="/login" class="resend">${hidden}<input type="hidden" name="email" value="${escapeHtml(state.email ?? "")}"><button class="link" type="submit">Send a new code</button> <a href="/login?to=${encodeURIComponent(state.to)}&n=${encodeURIComponent(state.n)}&return=${encodeURIComponent(state.return)}">Use a different email</a></form>`;
   // login.js offers saved passkeys in the email field's autofill (or, where a browser can't, the button above).
@@ -492,14 +494,16 @@ function createForm(c: { error?: string; name?: string; slug?: string; suffix: s
   if (c.full) {
     return `<section class="card-section create-workspace"><h2>Create a workspace</h2><p class="muted">We've opened as many new workspaces as we can today. Come back tomorrow, or ask someone with a workspace to add you.</p></section>`;
   }
+  // The error can be about any field, so each one points to it.
+  const desc = c.error ? ` aria-describedby="create-error"` : "";
   return `<section class="card-section create-workspace">
 <h2>Create a workspace</h2>
 <p class="muted">A workspace is where your agent publishes artifacts for you and your team. It's free for up to ${free.artifacts} artifacts (archived ones included), ${free.members} members and ${Math.round((free.bytes ?? 0) / 1024 / 1024)} MB; people you share artifacts with never need an account or a plan.</p>
-${c.error ? `<p class="notice error" role="alert">${escapeHtml(c.error)}</p>` : ""}
+${c.error ? `<p class="notice error" role="alert" id="create-error">${escapeHtml(c.error)}</p>` : ""}
 <form method="post" action="/workspaces" class="create-form">
-<label class="field"><span>Name</span><input class="input" name="name" required maxlength="80" autocomplete="organization" value="${escapeHtml(c.name ?? "")}" placeholder="Acme"></label>
-<label class="field"><span>Address</span><span class="slug-row"><input class="input" name="slug" required pattern="[a-z][a-z0-9\\-]{1,30}[a-z0-9]" maxlength="32" autocapitalize="none" spellcheck="false" value="${escapeHtml(c.slug ?? "")}" placeholder="acme"><span class="muted slug-suffix">${escapeHtml(c.suffix)}</span></span></label>
-<label class="check"><input type="checkbox" name="terms" required> <span>I agree to the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.</span></label>
+<label class="field"><span>Name</span><input class="input" name="name"${desc} required maxlength="80" autocomplete="organization" value="${escapeHtml(c.name ?? "")}" placeholder="Acme"></label>
+<label class="field"><span>Address</span><span class="slug-row"><input class="input" name="slug"${desc} required pattern="[a-z][a-z0-9\\-]{1,30}[a-z0-9]" maxlength="32" autocapitalize="none" spellcheck="false" value="${escapeHtml(c.slug ?? "")}" placeholder="acme"><span class="muted slug-suffix">${escapeHtml(c.suffix)}</span></span></label>
+<label class="check"><input type="checkbox" name="terms"${desc} required> <span>I agree to the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.</span></label>
 <button class="button" type="submit">Create workspace</button>
 </form>
 </section>`;
@@ -606,13 +610,13 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
 ${plan("Free", `$0 <span class="muted">/ workspace</span>`, "For trying it out, or a small personal workspace.", [
   `${free.artifacts} artifacts (archived ones count; delete to make room) and ${free.members} members`,
   `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves and ${free.emailsPerDay} emails a day`,
-  "Unlimited guests, approvals, forms, comments and MCP events",
+  "Guests, approvals, forms, comments and MCP events, with no limit",
 ], selfServe ? `<a class="button secondary" href="/workspaces">Start free</a>` : `<p class="muted small">New workspaces are by invitation for now.</p>`)}
 ${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_PRICE.period}</span>`, "For a team that publishes and decides with its agents every day.", [
-  "Unlimited artifacts and members",
-  `${gb(team.bytes!)} of storage, ${team.changesPerDay!.toLocaleString("en-US")} saves a day`,
-  "Everything in Free",
-], `<a class="button" href="/workspaces">Upgrade in settings</a>`)}
+  "No artifact or member limit",
+  `${gb(team.bytes!)} of storage, ${team.changesPerDay!.toLocaleString("en-US")} saves and ${team.emailsPerDay.toLocaleString("en-US")} emails a day`,
+  "Guests, approvals, forms, comments and MCP events, with no limit",
+], `<a class="button" href="/workspaces">Choose a workspace to upgrade</a>`)}
 </section>
 <section class="pricing-notes muted">
 <p><strong>No lock-in.</strong> Admins can download everything at any time, and the <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
@@ -642,11 +646,12 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <li><strong>What people do on an artifact</strong>: comments, votes, approvals, form responses, checklists, notes and other shared state; which version you last saw and which comments you've read; an activity log (the latest 5,000 events per artifact).</li>
 <li><strong>Billing</strong>, for a workspace on a paid plan: the payment provider's customer and subscription ids, the subscription's status and when the paid period ends. Card details go to the provider, never to us.</li>
 <li><strong>Workspace membership</strong>: who belongs to which workspace and in what role, and when members last signed in; for a workspace someone made themselves, who made it and which version of the terms they agreed to.</li>
+<li><strong>Guest visits</strong>: which workspaces you've opened a shared artifact in as a guest, and when you last did, so they show up in your workspaces list.</li>
 <li><strong>Agent access</strong>: OAuth grants and personal agent tokens, stored only as hashes, with when each was last used.</li>
 <li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
 <li><strong>Render checks</strong>: after each change a headless browser renders the artifact; we keep the result, a screenshot and any errors. Viewers' browsers also report runtime errors (the latest 30 per artifact).</li>
 <li><strong>Sign-in records</strong>: when codes were sent and checked, with your IP address or network, to limit abuse. Kept for an hour.</li>
-<li><strong>Your inbox</strong>: a copy of each notification for you (what happened, on which artifact, and the start of any comment), your latest 200, until you delete your account.</li>
+<li><strong>Your inbox</strong>: a copy of each notification for you (what happened, on which artifact, and the start of any comment), your latest 200, until you delete your account or the artifact or workspace it's about is deleted.</li>
 <li><strong>Support requests</strong>: what you send us from Help &amp; feedback (or your agent sends for you), and what you chose to include with it (the page you came from, your browser and an error code), kept as a page in our support workspace that only you and we can open, with our replies. We never include what's in your artifacts. You can ask us to delete a request.</li>
 <li><strong>Errors</strong>: when something fails on our side or in our own pages, we keep where (with ids removed), a message with addresses and links taken out, the version and your browser family, counted together with the same errors. Errors inside artifacts go to their owners, not to us.</li>
 <li><strong>Reports</strong>: if you report an artifact, what you wrote and, if you give it, your email go to us by email and into our operations log; your network address is kept for an hour to limit repeat reports. The workspace isn't told who reported it.</li>
@@ -659,6 +664,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <li>An artifact is visible to its owner, the admins of its workspace, and the people, domains or workspace it's shared with; a public artifact to anyone with its link.</li>
 <li>Workspace admins can see and manage every artifact in their workspace and its member list.</li>
 <li>An artifact's owner, its workspace's admins and their agents can see who has opened it while signed in, which version each person last saw and when. Visits through a public link without signing in aren't recorded.</li>
+<li>People signed in to an artifact see who else is viewing it at the same time, by name or email address. Someone on a public link without signing in sees nobody, and isn't shown.</li>
 <li>Everyone who can open an artifact sees its comments, votes, approvals and form responses, with who made them.</li>
 <li>We, as operator, can access stored data to run the service: backups, restores and support. We don't sell it, use it for advertising, or train models on it.</li>
 </ul>
@@ -672,9 +678,12 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <ul>
 <li>As long as the artifact or workspace exists. Deleting an artifact removes it from the live database at once.</li>
 <li>Each workspace is backed up nightly when it changed; the newest 30 backups are kept, so deleted data leaves backups within about a month.</li>
-<li>Deleting a workspace deletes its data and its backups, and ends its agents' access.</li>
+<li>Deleting a workspace deletes its data and its backups, the notifications about it in people's inboxes, and ends its agents' access.</li>
+<li>Accounts are backed up the same way: your email, name, passkeys, notification channels (with their keys and secrets), memberships, guest visits, inbox and billing records. The newest 30 backups are kept, so after you delete your account these leave backups within about a month.</li>
 <li>A workspace's billing record (its subscription's status, and the payer's email) is kept while the workspace exists.</li>
 <li>After you delete your account, your address stays in two places, to limit abuse: our record of who made which self-serve workspaces (so the free plan can't be farmed), and in the list of people removed from each workspace you left (so joining by email domain doesn't add you back).</li>
+<li>What you did in a workspace stays there under your address after you delete your account, until an admin removes it or the workspace is deleted: your comments, votes, approvals and form responses, and the artifact's activity log.</li>
+<li>Support requests you sent stay in our support workspace, with your address, until you ask us to delete them.</li>
 <li>Our operations log (sign-ups, billing changes, reports and failures, with workspace names and sometimes an email address) keeps its latest 500 entries.</li>
 </ul>
 <h2>Your choices</h2>
@@ -821,18 +830,19 @@ export function supportPage(
   const mail = s.contact ? `<a href="mailto:${escapeHtml(s.contact)}">${escapeHtml(s.contact)}</a>` : "us";
   const label: Record<string, string> = {
     new: "Received", triaged: "Looking into it", investigating: "Looking into it", needs_info: "Waiting for you", fix_proposed: "Fix in progress",
-    fix_deployed: "Fix released", resolved: "Resolved", wont_fix: "Closed", duplicate: "With another report",
+    fix_deployed: "Fix released", resolved: "Resolved", wont_fix: "Closed", duplicate: "Being handled with another report",
   };
   const kinds: [string, string][] = [["bug", "Something's wrong"], ["feature", "An idea"], ["question", "A question"]];
   const right = viewer ? `${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}` : `<a class="button small secondary" href="/login?return=/support">Sign in</a>`;
+  const desc = s.problem ? ` aria-describedby="support-error"` : "";
   const form = viewer
     ? `<section class="card-section create-workspace"><h2>Tell us</h2>
 <p class="muted">About artifacts.boo itself. For something in an artifact, comment on it instead, so its owner sees it.</p>
-${s.problem ? `<p class="notice error" role="alert">${escapeHtml(s.problem)}</p>` : ""}
+${s.problem ? `<p class="notice error" role="alert" id="support-error">${escapeHtml(s.problem)}</p>` : ""}
 <form method="post" action="/support" class="create-form">
 <fieldset class="kind-row"><legend>What is it?</legend>${kinds.map(([k, l]) => `<label class="check"><input type="radio" name="kind" value="${k}"${(s.kind ?? "bug") === k ? " checked" : ""}> <span>${l}</span></label>`).join("")}</fieldset>
-<label class="field"><span>Title</span><input class="input" name="title" required maxlength="120" value="${escapeHtml(s.title ?? "")}" placeholder="One line"></label>
-<label class="field"><span>Details</span><textarea class="input" name="details" required rows="6" maxlength="5000" placeholder="What happened, and what you expected (or what you'd like)">${escapeHtml(s.details ?? "")}</textarea></label>
+<label class="field"><span>Title</span><input class="input" name="title"${desc} required maxlength="120" value="${escapeHtml(s.title ?? "")}" placeholder="One line"></label>
+<label class="field"><span>Details</span><textarea class="input" name="details"${desc} required rows="6" maxlength="5000" placeholder="What happened, and what you expected (or what you'd like)">${escapeHtml(s.details ?? "")}</textarea></label>
 ${s.page ? `<label class="check"><input type="checkbox" name="page" value="${escapeHtml(s.page)}" checked> <span>Include the page I came from (${escapeHtml(s.page)}) and my browser</span></label>` : `<label class="check"><input type="checkbox" name="browser" value="1" checked> <span>Include my browser</span></label>`}
 ${s.error ? `<input type="hidden" name="error" value="${escapeHtml(s.error)}"><p class="muted small">The error code ${escapeHtml(s.error)} goes with it.</p>` : ""}
 <p class="muted small">We never include what's in your artifacts. Replies come to the request's own page, and we'll let you know.</p>

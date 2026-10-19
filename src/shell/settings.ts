@@ -4,6 +4,8 @@
 // Everything goes through /api/settings. A failed action only shows its notice,
 // so what you typed stays put; a successful one reloads and re-renders.
 
+import { PLANS } from "../worker/plans.ts";
+
 type Settings = {
   workspace: { slug: string; name: string; url: string };
   you: { email: string; role: "admin" | "member" };
@@ -93,7 +95,8 @@ const failed = (err: unknown): Notice =>
   err instanceof SessionEnded ? { tone: "error", text: "Your session ended.", signIn: true } : { tone: "error", text: (err as Error).message };
 
 function noticeNode(n: Notice) {
-  const el = h("div", { class: `notice ${n.tone}`, role: "status" }, n.text);
+  // Errors interrupt: a failed action or an ended session is announced at once.
+  const el = h("div", { class: `notice ${n.tone}`, role: n.tone === "error" ? "alert" : "status" }, n.text);
   if (n.signIn) el.append(" ", h("a", { href: `/login?return=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in again"));
   if (n.reveal) {
     el.append(copyRow(n.reveal));
@@ -130,6 +133,10 @@ async function act(fn: () => Promise<unknown>, ok?: string | (() => string)) {
   }
 }
 
+const FREE = PLANS.free.limits;
+/** What moving back to Free means, said where the customer decides. */
+const AFTER_FREE = `After that, this workspace keeps everything but can't add anything while it's over ${FREE.artifacts} artifacts or ${FREE.members} members.`;
+
 /** Admins, while billing is on: upgrade to Team, or manage the subscription with the payment provider. */
 function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement {
   const sub = billing.subscription;
@@ -143,15 +150,15 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
   const day = (v: string) => new Date(v).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   const plainUntil = data.plan.until ? day(data.plan.until) : null;
   const state = !team
-    ? `This workspace is on Free. Team is $${billing.price.amount} a ${billing.price.period} for the whole workspace: unlimited artifacts and members, and more storage. Guests are always free.`
+    ? `This workspace is on Free. Team is $${billing.price.amount} a ${billing.price.period} for the whole workspace: no artifact or member limit, and more storage. Guests are always free.`
     : sub && ["active", "trialing", "paid"].includes(sub.status)
       ? `Team, paid${until ? ` through ${until}` : ""}.`
       : sub && ["past_due", "unpaid", "expired"].includes(sub.status)
         ? `Team, but the last payment didn't go through. Update the card in Manage billing${plainUntil ? ` by ${plainUntil}` : ""} to keep it.`
         : sub?.status === "paused"
-          ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is paused. Resume it from Manage billing to keep Team.`
+          ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is paused. Resume it from Manage billing to keep Team. ${AFTER_FREE}`
           : data.plan.until || sub?.status === "scheduled_cancel"
-            ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is canceled. Subscribe again to keep Team.`
+            ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is canceled. Subscribe again to keep Team. ${AFTER_FREE}`
             : "Team, arranged with us directly.";
   // Matches the server: a subscription that's canceled or lapsed to Free can be replaced by a new one.
   const live = sub && sub.status !== "canceled" && team;
@@ -167,11 +174,18 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
     if (!billing.ready || checkoutPending) {
       b.setAttribute("disabled", "");
       b.setAttribute("aria-describedby", "billing-not-ready");
-      notes.push(h("p", { class: "muted small", id: "billing-not-ready" }, checkoutPending ? "Waiting for the payment to be confirmed…" : "Payments aren't set up yet."));
+      notes.push(
+        checkoutPending
+          ? h("p", { class: "muted small", id: "billing-not-ready" }, "Waiting for the payment to be confirmed…")
+          : h("p", { class: "muted small", id: "billing-not-ready" }, "Upgrades are unavailable for now. ", h("a", { href: "/support" }, "Ask us"), " and we'll move this workspace to Team."),
+      );
     }
     actions.append(b);
   }
-  if (sub?.manageable && mine) actions.append(btn("Manage billing", () => go("/api/settings/billing/portal"), "button small secondary"));
+  if (sub?.manageable && mine) {
+    actions.append(btn("Manage billing", () => go("/api/settings/billing/portal"), "button small secondary"));
+    notes.push(h("p", { class: "muted small" }, "Receipts and invoices are in Manage billing."));
+  }
   if (payer) notes.push(h("p", { class: "muted small" }, payer === data.you.email.toLowerCase() ? `Billed to you (${payer}).` : mine ? `Billed to ${payer}.` : `Billed to ${payer}: they can change the card or cancel.`));
   return h(
     "section",
@@ -185,7 +199,7 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
 }
 
 /** Whoever made the workspace: delete it for good, after typing its address. */
-function deleteSection(): HTMLElement {
+function deleteSection(): HTMLElement[] {
   const slug = data.workspace.slug;
   const confirm = h("input", { class: "input", type: "text", autocomplete: "off", spellcheck: "false", "aria-label": `Type ${slug} to confirm`, placeholder: slug });
   const go = btn(
@@ -204,19 +218,34 @@ function deleteSection(): HTMLElement {
     const pick = h("select", { class: "input", "aria-label": "Admin to hand the workspace to" }) as HTMLSelectElement;
     for (const m of others) pick.append(h("option", { value: m.email }, m.email));
     handOver.push(
-      h("h3", {}, "Hand it over"),
-      h("p", { class: "muted" }, "Make another admin its owner: they can then delete it, and you could make a workspace of your own."),
-      h("div", { class: "row" }, pick, btn("Hand over", () => act(() => api("/api/settings/owner", { body: { email: pick.value } }), () => `${pick.value} owns this workspace now.`), "button small secondary")),
+      h(
+        "section",
+        { class: "card-section" },
+        h("h2", {}, "Hand it over"),
+        h("p", { class: "muted" }, "Make another admin its owner: they can then delete it, and you could make a workspace of your own."),
+        h(
+          "div",
+          { class: "row" },
+          pick,
+          btn("Hand over", () => {
+            const to = pick.value;
+            if (!window.confirm(`Hand ${data.workspace.name} to ${to}? Only they can delete it afterwards.`)) return;
+            return act(() => api("/api/settings/owner", { body: { email: to } }), () => `${to} owns this workspace now.`);
+          }, "button small secondary"),
+        ),
+      ),
     );
   }
-  return h(
-    "section",
-    { class: "card-section" },
+  return [
     ...handOver,
-    h("h2", {}, "Delete workspace"),
-    h("p", { class: "muted" }, `Deletes every artifact, comment and member, and its backups. It can't be undone: download a copy above first. Type ${slug} to confirm.`),
-    h("div", { class: "row" }, confirm, go),
-  );
+    h(
+      "section",
+      { class: "card-section" },
+      h("h2", {}, "Delete workspace"),
+      h("p", { class: "muted" }, `Deletes every artifact, comment and member, and its backups. It can't be undone: download a copy above first. Type ${slug} to confirm.`),
+      h("div", { class: "row" }, confirm, go),
+    ),
+  ];
 }
 
 /** Admins: download everything as of the latest backup, or ask for a fresh one. Filled in once the status loads. */
@@ -226,7 +255,7 @@ function exportSection(): HTMLElement {
   const section = h(
     "section",
     { class: "card-section" },
-    h("h2", {}, "Export your data"),
+    h("h2", { id: "export" }, "Export your data"),
     h(
       "p",
       { class: "muted" },
@@ -404,6 +433,7 @@ function render() {
       limits.bytes !== null && usage.bytes >= limits.bytes * 0.8,
     ].some(Boolean);
     if (near && data.billing && data.plan.id === "free") usageLine.append(" ", h("a", { href: "#plan-and-billing" }, "Upgrade to Team for more room"));
+    else if (near && !admin) usageLine.append(" For more room, ask a workspace admin to upgrade, or delete artifacts you don't need.");
     sections.push(usageLine);
     // Over a limit (say, after moving to Free): say what still works and what doesn't.
     const over = [
@@ -412,12 +442,13 @@ function render() {
       limits.bytes !== null && usage.bytes > limits.bytes && "storage",
     ].filter((x): x is string => Boolean(x));
     if (over.length) {
-      sections.push(
-        noticeNode({
-          tone: "error",
-          text: `This workspace is over the ${data.plan.label} plan's limit for ${over.join(" and ")}. Everything here still opens and can be changed, but nothing that adds to it (new artifacts, members or stored content) until it's back under${data.billing ? ", or the workspace moves to Team" : ""}. Deleting artifacts makes room (archived ones still count).`,
-        }),
-      );
+      // Part of the page, not news: no alert role, or it would be announced on every re-render.
+      const overNotice = noticeNode({
+        tone: "error",
+        text: `This workspace is over the ${data.plan.label} plan's limit for ${over.join(" and ")}. Everything here still opens and can be changed, but nothing that adds to it (new artifacts, members or stored content) until it's back under${data.billing ? ", or the workspace moves to Team" : ""}. Archiving doesn't free room; deleting does.`,
+      });
+      overNotice.removeAttribute("role");
+      sections.push(overNotice);
     }
   }
   if (notice) {
@@ -440,7 +471,7 @@ function render() {
   const mine = data.tokens.filter((t) => t.email === data.you.email);
   const tokens = h("ul", { class: "channels" });
   for (const t of mine) tokens.append(tokenRow(t));
-  const label = h("input", { type: "text", placeholder: "Label, e.g. Codex on my laptop", maxlength: "60" }) as HTMLInputElement;
+  const label = h("input", { type: "text", placeholder: "Label, e.g. Codex on my laptop", maxlength: "60", "aria-label": "Token label" }) as HTMLInputElement;
   sections.push(
     h(
       "section",
@@ -515,7 +546,7 @@ function render() {
     members,
   );
   if (admin) {
-    const email = h("input", { type: "email", placeholder: "name@example.com", autocomplete: "off" }) as HTMLInputElement;
+    const email = h("input", { type: "email", placeholder: "name@example.com", autocomplete: "off", "aria-label": "Email address" }) as HTMLInputElement;
     const role = h("select", { "aria-label": "Role" }, h("option", { value: "member" }, "Member"), h("option", { value: "admin" }, "Admin")) as HTMLSelectElement;
     memberSection.append(h("div", { class: "row" }, email, role, btn("Add", () => setMember(email.value.trim(), role.value as "admin" | "member"))));
   }
@@ -573,7 +604,7 @@ function render() {
     data.hosts.length ? hosts : h("p", { class: "muted small" }, "None yet."),
   );
   if (admin) {
-    const host = h("input", { type: "text", placeholder: "api.example.com", autocomplete: "off", spellcheck: "false" }) as HTMLInputElement;
+    const host = h("input", { type: "text", placeholder: "api.example.com", autocomplete: "off", spellcheck: "false", "aria-label": "Host" }) as HTMLInputElement;
     hostSection.append(h("div", { class: "row" }, host, btn("Approve", () => act(() => api("/api/settings/hosts", { body: { host: host.value, allowed: true } }), `Approved ${host.value.trim()}.`))));
   }
   sections.push(hostSection);
@@ -591,7 +622,7 @@ function render() {
     );
     if (data.billing) sections.push(billingSection(data.billing));
     sections.push(exportSection());
-    if (data.canDelete) sections.push(deleteSection());
+    if (data.canDelete) sections.push(...deleteSection());
   }
   main.replaceChildren(...sections);
   if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -635,8 +666,11 @@ function tokenRow(t: Settings["tokens"][number], showOwner = false) {
   );
 }
 
-load().catch((err) => {
-  main.replaceChildren(h("h1", { class: "page-title" }, "Workspace settings"), noticeNode(failed(err)));
-});
+load()
+  // Rendered after the page loaded, so a link to a section (say, #export from Account) scrolls here.
+  .then(() => location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView())
+  .catch((err) => {
+    main.replaceChildren(h("h1", { class: "page-title" }, "Workspace settings"), noticeNode(failed(err)));
+  });
 
 export {};

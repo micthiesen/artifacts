@@ -1858,7 +1858,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       if (rec && subscriptionMayCharge(rec.status) && url.searchParams.get("force") !== "1") {
         return Response.json({ error: `${slug} has a subscription that can still charge (${rec.status}); cancel it in Creem first, or delete with ?force=1` }, { status: 409 });
       }
-      for (const m of await hub.members().catch(() => [])) {
+      for (const m of await Promise.resolve().then(() => hub.members()).catch(() => [])) {
         await revokeGrants(env, workspaceOrigin(env, slug), slug, m.email, hub).catch((err) => console.error("revoking grants failed", err));
       }
       await hub.destroy(slug);

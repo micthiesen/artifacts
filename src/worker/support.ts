@@ -162,13 +162,13 @@ export async function openCase(env: SupportEnv, input: NewCase): Promise<{ numbe
   const url = `${supportOrigin(env)}/a/${id}`;
   // The request exists now; telling people about it is best effort, so a retry can't make a second one.
   try {
-    await d.addInbox(reporter, { kind: "support", title: `We got your ${KIND_LABEL[input.kind]} (#${n})`, body: title, url, dedupe: `case:${n}:new` });
+    await d.addInbox(reporter, { kind: "support", title: `We got your ${KIND_LABEL[input.kind]} (#${n})`, body: title, url, dedupe: `case:${n}:new`, slug: SUPPORT_SLUG, artifact: id });
     await sendSupportUpdate(env, reporter, {
       subject: `We got your ${KIND_LABEL[input.kind]}: ${title}`,
       lines: [`Thanks. Your request #${n} is with us.`, "Replies, questions and fixes show up on its page, and we'll let you know when something changes."],
       url,
     });
-    await ops(env, { kind: "support_case", slug: SUPPORT_SLUG, message: `#${n} ${input.kind} from ${reporter}${input.viaAgent ? " (via agent)" : ""}: ${title}`, detail: { case: n, artifactId: id } });
+    await ops(env, { kind: "support_case", slug: SUPPORT_SLUG, message: `#${n} ${input.kind} from ${reporter}${input.viaAgent ? " (via agent)" : ""}: "${title}"`, detail: { case: n, artifactId: id } });
   } catch (err) {
     console.error("telling people about a new request failed", n, err);
   }

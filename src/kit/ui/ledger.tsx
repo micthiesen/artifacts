@@ -54,6 +54,11 @@ function LedgerInner({ id, fields, data, sort, total, title, description, addLab
     ...seed.map((r) => ({ ...r, _seed: true })),
     ...entries.map(([key, e]) => ({ ...e.values, _key: key, _by: e.by ?? null, _at: e.at ?? 0 })),
   ];
+  // Each row's buttons say which entry they act on, so a screen reader's button list tells them apart.
+  const named = (r: Row) => {
+    const v = r[fields[0]?.name ?? ""];
+    return typeof v === "string" || typeof v === "number" ? `${v}`.trim().slice(0, 60) : "";
+  };
   const canChange = (r: Row) => viewer.canWrite && !r._seed && (r._by === viewer.email || viewer.role === "owner");
 
   function start(key: string | null) {
@@ -96,10 +101,10 @@ function LedgerInner({ id, fields, data, sort, total, title, description, addLab
             format: (_v: unknown, r: Row) =>
               canChange(r) ? (
                 <span className="inline-flex gap-1">
-                  <Button type="button" size="icon-sm" variant="ghost" aria-label="Edit entry" onClick={() => start(r._key as string)}>
+                  <Button type="button" size="icon-sm" variant="ghost" aria-label={named(r) ? `Edit entry: ${named(r)}` : "Edit entry"} onClick={() => start(r._key as string)}>
                     <Pencil />
                   </Button>
-                  <Button type="button" size="icon-sm" variant="ghost" aria-label="Delete entry" onClick={() => confirm("Delete this entry?") && map.delete(r._key as string)}>
+                  <Button type="button" size="icon-sm" variant="ghost" aria-label={named(r) ? `Delete entry: ${named(r)}` : "Delete entry"} onClick={() => confirm("Delete this entry?") && map.delete(r._key as string)}>
                     <Trash2 />
                   </Button>
                 </span>

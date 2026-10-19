@@ -381,9 +381,12 @@ export async function deletePrefix(bucket: R2Bucket, prefix: string) {
 }
 
 /** The next nightly backup slot after `now`. */
-export function nextBackupAt(now = Date.now()): number {
+export function nextBackupAt(now = Date.now(), slug = ""): number {
+  // Spread over two hours by name, so every workspace doesn't write to the bucket in the same minute.
+  let spread = 0;
+  for (const ch of slug) spread = (spread * 31 + ch.charCodeAt(0)) % 120;
   const d = new Date(now);
-  const at = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), BACKUP_HOUR_UTC);
+  const at = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), BACKUP_HOUR_UTC) + spread * 60_000;
   return at > now ? at : at + 86400_000;
 }
 

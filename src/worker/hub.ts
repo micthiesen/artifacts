@@ -123,7 +123,8 @@ export class HubError extends Error {}
 type JobBase = { startedAt: string; gen: number; phase?: string; error?: string; retryAt?: string; tries?: number };
 type BackupJob = JobBase & { kind: "backup"; cursor: BackupCursor };
 type RestoreJob = JobBase & { kind: "restore"; run: string; cursor: RestoreCursor | null };
-type ImportJob = JobBase & { kind: "import" };
+/** `touchedAt`: the last rows loaded; an import nothing has fed for IMPORT_IDLE_MS is cancelled. */
+type ImportJob = JobBase & { kind: "import"; touchedAt?: string };
 export type Job = BackupJob | RestoreJob | ImportJob;
 type QueuedJob = { kind: "backup" } | { kind: "restore"; run: string };
 
@@ -176,6 +177,12 @@ const SENDS_PER_ALARM = 200;
 // Browser Run quick actions are rate-limited per account; space checks a little
 // and fall back to the alarm queue when Browser Run answers 429.
 const CHECK_SPACING_MS = 1_000;
+/** How long a person's display name is reused before asking the directory again. */
+const NAMES_TTL_MS = 5 * 60_000;
+/** An import that gets no rows for this long is cancelled, so a dead script can't keep a workspace offline. */
+const IMPORT_IDLE_MS = 60 * 60_000;
+/** Words of a search looked for in artifacts' files. */
+const CONTENT_WORDS_MAX = 3;
 /** Comments aren't counted in storage, so each artifact holds at most this many. */
 const COMMENTS_PER_ARTIFACT_MAX = 5000;
 const CHECKS_USED_UP = "this workspace has used today's render checks; they come back tomorrow (the page itself is saved)";
@@ -448,6 +455,11 @@ export class Workspace extends DurableObject {
       for (const table of ["shares", "seen", "pins", "watches", "watch_defaults", "outbox", "grants"]) this.sql.exec(`DELETE FROM ${table} WHERE email = ?`, clean);
       this.sql.exec(`DELETE FROM event_subs WHERE principal = ?`, clean);
       this.sql.exec(`DELETE FROM event_receivers WHERE principal = ?`, clean);
+      // Who saw an error, or added or removed someone: the record stays, without them.
+      this.sql.exec(`UPDATE errors SET viewer = NULL WHERE viewer = ?`, clean);
+      this.sql.exec(`UPDATE members SET added_by = NULL WHERE added_by = ?`, clean);
+      this.sql.exec(`UPDATE removed_members SET removed_by = NULL WHERE removed_by = ?`, clean);
+      this.sql.exec(`UPDATE join_domains SET added_by = NULL WHERE added_by = ?`, clean);
     });
     this.markDirty();
     for (const ws of this.ctx.getWebSockets()) if ((ws.deserializeAttachment() as SocketTag).email === clean) ws.close(4003, "access changed");
@@ -547,9 +559,12 @@ export class Workspace extends DurableObject {
       // Not every PRAGMA is allowed; without it, the file size is the measure.
     }
     if (this.sql.databaseSize - free >= DATABASE_CAPACITY_BYTES) {
-      throw new HubError("This workspace is almost out of space. Delete artifacts you no longer need, then try again.");
+      throw new HubError("This workspace is almost out of space. A workspace admin can delete artifacts nobody needs, then try again. (Agents: tell the person rather than deleting anything to make room.)");
     }
   }
+
+  /** octet_length reads each row's size from its header; length() on text would read (and decode) every file. */
+  private sizeFn: "octet_length" | "length" | null = null;
 
   /**
    * What a workspace stores for its plan's storage limit: file contents,
@@ -557,27 +572,22 @@ export class Workspace extends DurableObject {
    * falls as soon as something is deleted.
    */
   private storedBytes(): number {
+    if (!this.sizeFn) {
+      try {
+        this.sql.exec(`SELECT octet_length('x') AS n`).one();
+        this.sizeFn = "octet_length";
+      } catch {
+        this.sizeFn = "length";
+      }
+    }
+    const len = this.sizeFn;
     const sum = (q: string) => this.sql.exec(q).one().n as number;
     return (
-      sum(`SELECT COALESCE(SUM(length(content)), 0) AS n FROM blobs`) +
+      sum(`SELECT COALESCE(SUM(${len}(content)), 0) AS n FROM blobs`) +
       sum(`SELECT COALESCE(SUM(bytes), 0) AS n FROM assets`) +
-      sum(`SELECT COALESCE(SUM(length(value)), 0) AS n FROM state`) +
-      sum(`SELECT COALESCE(SUM(length(screenshot)), 0) AS n FROM checks`)
+      sum(`SELECT COALESCE(SUM(${len}(value)), 0) AS n FROM state`) +
+      sum(`SELECT COALESCE(SUM(${len}(screenshot)), 0) AS n FROM checks`)
     );
-  }
-
-  private storedSample: { at: number; n: number } | null = null;
-
-  /** Shared state is written often (every checkbox), so its storage check reuses a reading up to 30 seconds old. */
-  private withinPlanForState() {
-    this.withinCapacity();
-    const max = PLANS[this.planId()].limits.bytes;
-    if (max === null) return;
-    if (!this.storedSample || Date.now() - this.storedSample.at > 30_000) this.storedSample = { at: Date.now(), n: this.storedBytes() };
-    if (this.storedSample.n >= max) {
-      this.storedSample = null;
-      this.withinPlan("bytes");
-    }
   }
 
   /** Refuses a write that would go past the plan. Deleting is always allowed, so a full workspace can make room. */
@@ -692,7 +702,14 @@ export class Workspace extends DurableObject {
     this.markDirty();
     // Open pages reconnect and are re-checked against the new role.
     for (const ws of this.ctx.getWebSockets()) if ((ws.deserializeAttachment() as SocketTag).email === clean) ws.close(4003, "access changed");
-    await this.directory().setMembership(this.info().slug, clean, role);
+    try {
+      await this.directory().setMembership(this.info().slug, clean, role);
+    } catch (err) {
+      // The member is saved here; the directory's copy (their list of workspaces) catches up on the alarm.
+      this.setSetting("resync_due", "1");
+      await this.armAlarm();
+      throw err;
+    }
     return this.members();
   }
 
@@ -1232,6 +1249,11 @@ export class Workspace extends DurableObject {
     });
     this.markDirty();
     for (const ws of this.ctx.getWebSockets(id)) ws.close(4004, "artifact deleted");
+    // Its notifications leave people's inboxes too (they quote its comments).
+    const slug = this.info().slug;
+    void Promise.resolve()
+      .then(() => this.directory().forgetArtifact(slug, id))
+      .catch((err: unknown) => console.error(JSON.stringify({ ops: "inbox_forget_failed", slug, message: (err as Error).message })));
   }
 
   // ---- shared state ------------------------------------------------------
@@ -1261,7 +1283,7 @@ export class Workspace extends DurableObject {
   ): number {
     const version = this.requireArtifact(id).version as number;
     // Removing state always works, so a full workspace can make room.
-    if (Object.values(changes).some((v) => v !== null)) this.withinPlanForState();
+    if (Object.values(changes).some((v) => v !== null)) this.withinPlan("bytes");
     let seq = 0;
     const applied: { key: string; value: JsonValue | null; seq: number; created: boolean }[] = [];
     this.ctx.storage.transactionSync(() => {
@@ -1424,6 +1446,13 @@ export class Workspace extends DurableObject {
         console.error(JSON.stringify({ ops: "alarm_step_failed", slug: this.info().slug, step: name, message: (err as Error).message }));
       }
     };
+    const job = this.job();
+    if (job?.kind === "import" && Date.parse(job.touchedAt ?? job.startedAt) + IMPORT_IDLE_MS <= Date.now()) {
+      await step("stalled import", async () => {
+        console.error(JSON.stringify({ ops: "import_cancelled", slug: this.info().slug, message: "no rows for an hour; the import was cancelled and the workspace is back online" }));
+        await this.cancelJob();
+      });
+    }
     await step("jobs", () => this.stepJobs(Date.now() + JOB_STEP_MS));
     await step("storage", () => this.watchStorage());
     await step("links", async () => this.backfillLinks());
@@ -1467,7 +1496,11 @@ export class Workspace extends DurableObject {
     // Offline (restoring or importing): only the job's own schedule matters.
     if (this.offline()) {
       const job = this.job();
-      if (job && job.kind !== "import") {
+      if (job?.kind === "import") {
+        const at = Date.parse(job.touchedAt ?? job.startedAt) + IMPORT_IDLE_MS;
+        const existing = await this.ctx.storage.getAlarm();
+        if (existing === null || existing > at || existing < Date.now()) await this.ctx.storage.setAlarm(Math.max(at, Date.now() + 1000));
+      } else if (job) {
         const at = Math.max(job.retryAt ? Date.parse(job.retryAt) : Date.now(), Date.now() + 1000);
         const existing = await this.ctx.storage.getAlarm();
         if (existing === null || existing > at || existing < Date.now()) await this.ctx.storage.setAlarm(at);
@@ -1700,6 +1733,8 @@ export class Workspace extends DurableObject {
     // The data didn't change: nothing to do.
     if (current?.hash === hash) return;
     const version = this.requireArtifact(id).version as number;
+    const hashes = () => JSON.stringify(this.sql.exec(`SELECT path, hash FROM files WHERE artifact_id = ? ORDER BY path`, id).toArray());
+    const before = hashes();
     const files = this.files(id);
     if (content.length > (files[path]?.length ?? 0)) this.withinPlan("bytes");
     files[path] = content;
@@ -1709,9 +1744,8 @@ export class Workspace extends DurableObject {
     this.ctx.storage.transactionSync(() => {
       // An edit committed while this compiled: its build is newer, so this refresh waits for next time.
       const now = this.sql.exec(`SELECT version FROM artifacts WHERE id = ?`, id).toArray()[0];
-      const still = this.sql.exec(`SELECT hash FROM files WHERE artifact_id = ? AND path = ?`, id, path).toArray()[0];
-      // ...or an edit deleted the file this refreshes.
-      if (!now || now.version !== version || Boolean(still) !== Boolean(current)) {
+      // ...or another refresh changed a file (this build would undo it), or an edit deleted this one.
+      if (!now || now.version !== version || hashes() !== before) {
         raced = true;
         return;
       }
@@ -1744,7 +1778,11 @@ export class Workspace extends DurableObject {
    * when someone searches; what each person may see is still decided by list().
    */
   private contentSearch(q: unknown): InContent | undefined {
-    const words = queryWords(cleanQuery(q));
+    // Each word read is a scan of every file, so contents are searched for the first few words of three or more
+    // letters (shorter ones, and any after, still match titles and descriptions).
+    const words = queryWords(cleanQuery(q))
+      .filter((w) => w.length >= 3)
+      .slice(0, CONTENT_WORDS_MAX);
     if (!words.length) return undefined;
     const hits = new Map<string, Set<string>>();
     for (const w of words) {
@@ -1830,15 +1868,20 @@ export class Workspace extends DurableObject {
    * importRows. Rows load into shadow tables; nothing live changes until
    * importEnd swaps them in. The workspace is offline meanwhile.
    */
-  importBegin() {
+  async importBegin() {
     if (this.job()) throw new HubError(`a ${this.job()!.kind} is running; cancel it first`);
     createShadows(this.ctx.storage, DATA_TABLES);
     this.setJob({ kind: "import", startedAt: new Date().toISOString(), gen: this.nextGen() });
+    // The workspace is offline until importEnd: if the script feeding it stops, the alarm cancels it.
+    await this.armAlarm();
   }
 
   importRows(table: string, rows: Record<string, unknown>[]): number {
-    if (this.job()?.kind !== "import") throw new HubError("call importBegin first");
-    return loadShadow(this.ctx.storage, DATA_TABLES, table, rows);
+    const job = this.job();
+    if (job?.kind !== "import") throw new HubError("call importBegin first");
+    const n = loadShadow(this.ctx.storage, DATA_TABLES, table, rows);
+    this.setJob({ ...job, touchedAt: new Date().toISOString() });
+    return n;
   }
 
   async importEnd() {
@@ -1883,6 +1926,8 @@ export class Workspace extends DurableObject {
     const slug = this.info().slug;
     if (!bucket) throw new HubError("no backup bucket is bound");
     if (!(await bucket.head(`${slug}/${run}/manifest.json`))) throw new HubError(`no complete backup ${run}`);
+    // A restore loads a full copy beside the live data before swapping, so it needs room for both.
+    if (this.sql.databaseSize * 2 >= DATABASE_CAPACITY_BYTES) throw new HubError("this workspace is too large to restore in place (a restore needs room for two copies); ask for help");
     this.queueJobs([{ kind: "backup" }, { kind: "restore", run }], true);
     await this.armAlarm();
     return { queued: true };
@@ -2029,7 +2074,7 @@ export class Workspace extends DurableObject {
       if (job.kind === "backup") {
         // A restore queued behind this backup was relying on it; drop it. Try the backup again tomorrow.
         this.setSetting("jobs_next", null);
-        this.setSetting("backup_due_at", String(nextBackupAt()));
+        this.setSetting("backup_due_at", String(nextBackupAt(Date.now(), this.info().slug)));
       }
       await this.reportJob();
       return false;
@@ -2083,6 +2128,13 @@ export class Workspace extends DurableObject {
 
   /** After a restore or import: mirror the members and stats to the directory (retried by the alarm if it's down), and back up the new state tonight. */
   private async afterLoad() {
+    // A backup is read table by table, so a save during it can leave history (or shared state) ahead of its
+    // artifact's counters: move them up, or the next save would reuse a version that exists.
+    this.sql.exec(
+      `UPDATE artifacts SET
+         version = MAX(version, COALESCE((SELECT MAX(h.version) FROM history h WHERE h.artifact_id = artifacts.id), 0)),
+         state_seq = MAX(state_seq, COALESCE((SELECT MAX(s.seq) FROM state s WHERE s.artifact_id = artifacts.id), 0))`,
+    );
     // Subscriptions' cursors point into the log that was just replaced; clients resubscribe.
     this.sql.exec(`DELETE FROM event_subs`);
     this.sql.exec(`DELETE FROM links`);
@@ -2111,7 +2163,7 @@ export class Workspace extends DurableObject {
     if (this.dirty || !this.hubEnv.BACKUPS) return;
     this.dirty = true;
     if (this.setting("backup_due_at")) return;
-    this.setSetting("backup_due_at", String(nextBackupAt()));
+    this.setSetting("backup_due_at", String(nextBackupAt(Date.now(), this.info().slug)));
     void this.armAlarm();
   }
 
@@ -2332,6 +2384,12 @@ export class Workspace extends DurableObject {
       const left = this.sql.exec(`SELECT COUNT(*) AS n FROM comments WHERE thread_id = ?`, threadId).one().n as number;
       if (left === 0) this.sql.exec(`DELETE FROM threads WHERE id = ?`, threadId);
       this.logEvent(id, actor, "comment-delete", { thread: threadId, comment: commentId });
+      // The activity log quotes comments; a deleted one's words go from it too.
+      this.sql.exec(
+        `UPDATE events SET data = json_remove(data, '$.text') WHERE artifact_id = ? AND type IN ('thread', 'reply') AND json_extract(data, '$.comment') = ?`,
+        id,
+        commentId,
+      );
     });
     const thread = this.thread(threadId);
     // A deleted thread is sent as an empty one so viewers drop it.
@@ -2355,8 +2413,29 @@ export class Workspace extends DurableObject {
       for (const r of this.sql.exec(`SELECT email FROM shares WHERE artifact_id = ? AND email LIKE '%_@%'`, id)) emails.add(r.email as string);
     }
     for (const r of this.sql.exec(`SELECT DISTINCT by FROM comments WHERE artifact_id = ? AND by LIKE '%@%'`, id)) emails.add(r.by as string);
-    const names = await this.directory().names([...emails]);
+    const names = await this.namesOf([...emails]);
     return [...emails].sort().map((email) => ({ email, name: names[email] ?? null }));
+  }
+
+  private nameCache = new Map<string, { name: string | null; at: number }>();
+
+  /**
+   * Display names, kept a few minutes: every artifact opened would otherwise ask the directory. If it can't
+   * answer, people show by email rather than the page failing to connect.
+   */
+  private async namesOf(emails: string[]): Promise<Record<string, string | null>> {
+    const now = Date.now();
+    const missing = emails.filter((e) => (this.nameCache.get(e)?.at ?? 0) < now - NAMES_TTL_MS);
+    if (missing.length) {
+      try {
+        const fetched = await this.directory().names(missing);
+        if (this.nameCache.size > 2000) this.nameCache.clear();
+        for (const e of missing) this.nameCache.set(e, { name: fetched[e] ?? null, at: now });
+      } catch (err) {
+        console.error("names lookup failed", err);
+      }
+    }
+    return Object.fromEntries(emails.map((e) => [e, this.nameCache.get(e)?.name ?? null]));
   }
 
   // ---- activity log ------------------------------------------------------------
@@ -2744,12 +2823,21 @@ export class Workspace extends DurableObject {
     }
     const directory = this.directory();
     const recipients = [...new Set(due.map((r) => r.email as string))];
-    const channels = await directory.channelsFor(recipients);
-    const actors = due.map((r) => (JSON.parse(r.data as string) as { by?: string }).by).filter((b): b is string => Boolean(b?.includes("@")));
-    const names = await directory.names(actors);
+    let channels: Awaited<ReturnType<typeof directory.channelsFor>>;
+    let names: Record<string, string | null>;
+    try {
+      channels = await directory.channelsFor(recipients);
+      const actors = due.map((r) => (JSON.parse(r.data as string) as { by?: string }).by).filter((b): b is string => Boolean(b?.includes("@")));
+      names = await this.namesOf([...new Set(actors)]);
+    } catch (err) {
+      // The directory is unreachable: try again in a minute rather than on every alarm.
+      console.error(JSON.stringify({ ops: "notify_deferred", slug: this.info().slug, message: (err as Error).message }));
+      this.sql.exec(`UPDATE outbox SET due_at = ? WHERE due_at <= ?`, now + 60_000, now);
+      return 0;
+    }
     let sends = 0;
     const results: { id: string; result: { ok: boolean; error?: string; gone?: boolean } }[] = [];
-    const inbox: { email: string; kind: string; title: string; body: string; url: string }[] = [];
+    const inbox: { email: string; kind: string; title: string; body: string; url: string; slug: string; artifact: string }[] = [];
     for (const group of groups.values()) {
       const email = group[0].email as string;
       const id = group[0].artifact_id as string;
@@ -2757,17 +2845,27 @@ export class Workspace extends DurableObject {
       if (sends + mine.length > SENDS_PER_ALARM && sends > 0) break;
       // Claim the rows as they are now: an update coalesced into one of them
       // during the awaits above (pushing it later) stays queued.
-      const rows = this.sql
-        .exec(`DELETE FROM outbox WHERE id IN (${group.map(() => "?").join(", ")}) AND due_at <= ? RETURNING *`, ...group.map((r) => r.id), now)
-        .toArray();
+      // (In chunks: SQLite takes at most 100 bound values, and a busy thread can queue more rows than that.)
+      const rows: Record<string, SqlStorageValue>[] = [];
+      for (let i = 0; i < group.length; i += 50) {
+        const chunk = group.slice(i, i + 50);
+        rows.push(...this.sql.exec(`DELETE FROM outbox WHERE id IN (${chunk.map(() => "?").join(", ")}) AND due_at <= ? RETURNING *`, ...chunk.map((r) => r.id), now).toArray());
+      }
       if (!rows.length) continue;
       const art = this.sql.exec(`SELECT title FROM artifacts WHERE id = ?`, id).toArray()[0];
       if (!art || this.isViewing(id, email) || !this.canOpen(id, email)) continue;
-      const items: OutboxItem[] = rows.map((r) => ({ kind: r.kind as OutboxItem["kind"], data: JSON.parse(r.data as string) }));
-      const origin = items.map((i) => i.data.origin).find((o): o is string => typeof o === "string" && o !== "") ?? this.setting("origin") ?? "";
-      const msg = composeMessage({ title: art.title as string, artifactId: id, origin, items, nameOf: (e) => names[e] ?? null });
+      let msg: ReturnType<typeof composeMessage>;
+      try {
+        const items: OutboxItem[] = rows.map((r) => ({ kind: r.kind as OutboxItem["kind"], data: JSON.parse(r.data as string) }));
+        const origin = items.map((i) => i.data.origin).find((o): o is string => typeof o === "string" && o !== "") ?? this.setting("origin") ?? "";
+        msg = composeMessage({ title: art.title as string, artifactId: id, origin, items, nameOf: (e) => names[e] ?? null });
+      } catch (err) {
+        // One bad group mustn't hold up everyone else's.
+        console.error(JSON.stringify({ ops: "notify_failed", slug: this.info().slug, message: (err as Error).message }));
+        continue;
+      }
       // Every notification also lands in the person's inbox, whatever channels they have (or none).
-      inbox.push({ email, kind: "notification", title: msg.title, body: msg.body, url: msg.url });
+      inbox.push({ email, kind: "notification", title: msg.title, body: msg.body, url: msg.url, slug: this.info().slug, artifact: id });
       if (!mine.length) continue;
       for (const c of mine) {
         // Notification emails share the workspace's daily email allowance.
@@ -2778,11 +2876,15 @@ export class Workspace extends DurableObject {
         results.push({ id: c.id, result });
       }
     }
-    if (results.length) await directory.recordChannelResults(results);
     if (inbox.length) {
       await Promise.resolve()
         .then(() => directory.addInboxMany(inbox))
         .catch((err: unknown) => console.error(JSON.stringify({ ops: "inbox_failed", slug: this.info().slug, message: (err as Error).message })));
+    }
+    if (results.length) {
+      await Promise.resolve()
+        .then(() => directory.recordChannelResults(results))
+        .catch((err: unknown) => console.error(JSON.stringify({ ops: "channel_results_failed", slug: this.info().slug, message: (err as Error).message })));
     }
     return sends;
   }

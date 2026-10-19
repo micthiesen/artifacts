@@ -16,10 +16,14 @@ import {
 const LATER_COOKIE = "art_passkey_later";
 const LATER_DAYS = 30;
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+/** Said when the server gives no reason, instead of a bare status code. */
+const SIGN_IN_FAILED = "That didn't work. Try again, or use the email code.";
+const SAVE_FAILED = "That didn't work. Try again, or skip it for now.";
+
+async function post<T>(path: string, body: unknown, failed: string): Promise<T> {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(data.error ?? failed);
   return data;
 }
 
@@ -43,7 +47,7 @@ function showError(text: string) {
 }
 
 async function signIn(section: HTMLElement, autofill: boolean) {
-  const { options, token } = await post<{ options: never; token: string }>("/login/passkey/options", {});
+  const { options, token } = await post<{ options: never; token: string }>("/login/passkey/options", {}, SIGN_IN_FAILED);
   const response = await startAuthentication({ optionsJSON: options, useBrowserAutofill: autofill });
   const { location: next } = await post<{ location: string }>("/login/passkey", {
     token,
@@ -51,7 +55,7 @@ async function signIn(section: HTMLElement, autofill: boolean) {
     to: section.dataset.to ?? "",
     n: section.dataset.n ?? "",
     return: section.dataset.return ?? "",
-  });
+  }, SIGN_IN_FAILED);
   location.assign(next);
 }
 
@@ -88,9 +92,9 @@ async function offerPage(section: HTMLElement) {
   save?.addEventListener("click", async () => {
     save.disabled = true;
     try {
-      const { options, token } = await post<{ options: never; token: string }>("/api/me/passkeys/options", {});
+      const { options, token } = await post<{ options: never; token: string }>("/api/me/passkeys/options", {}, SAVE_FAILED);
       const response = await startRegistration({ optionsJSON: options });
-      await post("/api/me/passkeys", { token, response });
+      await post("/api/me/passkeys", { token, response }, SAVE_FAILED);
       location.replace(next);
     } catch (err) {
       // This device already holds one of their passkeys: nothing to save.

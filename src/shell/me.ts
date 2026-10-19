@@ -90,7 +90,8 @@ const failed = (err: unknown): Notice =>
   err instanceof SessionEnded ? { tone: "error", text: err.message, signIn: true } : { tone: "error", text: (err as Error).message };
 
 function noticeNode(n: Notice) {
-  const el = h("div", { class: `notice ${n.tone}`, role: "status" }, n.text);
+  // Errors interrupt: a failed action or an ended session is announced at once.
+  const el = h("div", { class: `notice ${n.tone}`, role: n.tone === "error" ? "alert" : "status" }, n.text);
   if (n.signIn) el.append(" ", h("a", { href: `/login?fresh=1&return=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in again"));
   if (n.reveal) {
     const reveal = n.reveal;
@@ -155,6 +156,7 @@ function renderAccount(sections: HTMLElement[]) {
       { class: "card-section" },
       h("h2", {}, "You"),
       h("p", { class: "muted" }, `Signed in as ${profile.email}. Your name appears on your comments and in notifications.`),
+      h("p", { class: "muted small" }, "Your email can't be changed yet. ", h("a", { href: "/support" }, "Ask us"), " and we'll move your workspaces to a new one."),
       h("div", { class: "row" }, name, btn("Save", () => act(() => api("/api/me", { body: { name: name.value } }), "Name saved."))),
     ),
   );
@@ -228,7 +230,11 @@ function renderAccount(sections: HTMLElement[]) {
             ...workspaces.map((w) => {
               const li = h("li", {}, h("a", { class: "channel-label", href: `${w.url}/` }, w.name), roleChip(w.role));
               if (w.suspended) li.append(h("span", { class: "chip caution" }, "suspended"));
-              else li.append(h("span", { class: "channel-actions" }, h("a", { class: "button small ghost", href: `${w.url}/me` }, "Notifications")));
+              else {
+                const actions = h("span", { class: "channel-actions" }, h("a", { class: "button small ghost", href: `${w.url}/me` }, "Notifications"));
+                if (w.role === "admin") actions.append(h("a", { class: "button small ghost", href: `${w.url}/settings#export` }, "Export"));
+                li.append(actions);
+              }
               return li;
             }),
           )

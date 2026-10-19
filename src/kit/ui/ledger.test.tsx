@@ -79,3 +79,9 @@ test("a required field is required; others' entries can't be edited; viewers can
   await show("view");
   expect(button("Add entry")).toBeUndefined();
 });
+
+test("each row's edit and delete buttons name their entry", async () => {
+  await show("edit", { "ledger/pay/k1": { values: { date: "2026-10-01", amount: 5 }, by: ME, at: 1 } });
+  expect(button("Edit entry: 2026-10-01")).toBeDefined();
+  expect(button("Delete entry: 2026-10-01")).toBeDefined();
+});

@@ -114,7 +114,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetArtifact" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -283,6 +283,16 @@ const MIGRATIONS: Migration[] = [
       CREATE TABLE support_drafts (
         id TEXT PRIMARY KEY, n INTEGER NOT NULL, message TEXT NOT NULL, cases TEXT NOT NULL, created_at TEXT NOT NULL,
         approved_by TEXT, approved_at TEXT, sent_at TEXT);
+    `),
+  // Inbox rows know their workspace and artifact, so deleting either removes them; indexes for pruning reports and
+  // for counting cases per error group.
+  (sql) =>
+    sql.exec(`
+      ALTER TABLE inbox ADD COLUMN slug TEXT;
+      ALTER TABLE inbox ADD COLUMN artifact_id TEXT;
+      CREATE INDEX inbox_by_artifact ON inbox (slug, artifact_id);
+      CREATE INDEX reports_by_at ON reports (at);
+      CREATE INDEX support_by_error_group ON support_cases (error_group);
     `),
 ];
 
@@ -521,7 +531,12 @@ export class Directory extends DurableObject {
       e.message.slice(0, 2000),
       e.detail ? JSON.stringify(e.detail).slice(0, 4000) : null,
     );
-    this.sql.exec(`DELETE FROM ops_events WHERE id <= (SELECT MAX(id) FROM ops_events) - ?`, OPS_KEEP);
+    // Payments are kept apart (their own latest OPS_KEEP), so a flood of other events can't push them out.
+    if (e.kind.startsWith("billing")) {
+      this.sql.exec(`DELETE FROM ops_events WHERE kind LIKE 'billing%' AND id NOT IN (SELECT id FROM ops_events WHERE kind LIKE 'billing%' ORDER BY id DESC LIMIT ?)`, OPS_KEEP);
+    } else {
+      this.sql.exec(`DELETE FROM ops_events WHERE kind NOT LIKE 'billing%' AND id NOT IN (SELECT id FROM ops_events WHERE kind NOT LIKE 'billing%' ORDER BY id DESC LIMIT ?)`, OPS_KEEP);
+    }
     return { alert };
   }
 
@@ -727,10 +742,10 @@ export class Directory extends DurableObject {
   // ---- inbox (the Notification Centre) ----------------------------------------------
 
   /** Something that needs this person: kept (the latest INBOX_KEEP) until they've seen it; `dedupe` makes it once only. */
-  addInbox(email: string, item: { kind: string; title: string; body?: string; url?: string; dedupe?: string }): boolean {
+  addInbox(email: string, item: { kind: string; title: string; body?: string; url?: string; dedupe?: string; slug?: string; artifact?: string }): boolean {
     const added = this.sql
       .exec(
-        `INSERT INTO inbox (email, at, kind, title, body, url, dedupe) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, dedupe) DO NOTHING RETURNING id`,
+        `INSERT INTO inbox (email, at, kind, title, body, url, dedupe, slug, artifact_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, dedupe) DO NOTHING RETURNING id`,
         email,
         new Date().toISOString(),
         item.kind,
@@ -738,6 +753,8 @@ export class Directory extends DurableObject {
         item.body ? item.body.slice(0, 500) : null,
         item.url ?? null,
         item.dedupe ?? null,
+        item.slug ?? null,
+        item.artifact ?? null,
       )
       .toArray().length > 0;
     // This person's latest INBOX_KEEP (ids are shared by everyone, so count theirs).
@@ -746,8 +763,13 @@ export class Directory extends DurableObject {
   }
 
   /** Several at once (a workspace's notification run). */
-  addInboxMany(items: { email: string; kind: string; title: string; body?: string; url?: string; dedupe?: string }[]) {
+  addInboxMany(items: { email: string; kind: string; title: string; body?: string; url?: string; dedupe?: string; slug?: string; artifact?: string }[]) {
     for (const { email, ...item } of items.slice(0, 500)) this.addInbox(email, item);
+  }
+
+  /** A deleted artifact's notifications leave everyone's inbox (they quote its comments). */
+  forgetArtifact(slug: string, artifactId: string) {
+    this.sql.exec(`DELETE FROM inbox WHERE slug = ? AND artifact_id = ?`, slug, artifactId);
   }
 
   inbox(email: string, limit = 50): { items: InboxItem[]; unread: number } {
@@ -844,6 +866,11 @@ export class Directory extends DurableObject {
       // A workspace made later with the same address must not inherit this one's subscription.
       this.sql.exec(`DELETE FROM billing WHERE slug = ?`, slug);
       this.sql.exec(`DELETE FROM workspaces WHERE slug = ?`, slug);
+      // Its notifications (they quote its comments), including ones from before inbox rows named their workspace.
+      this.sql.exec(`DELETE FROM inbox WHERE slug = ? OR (slug IS NULL AND url LIKE 'https://' || ? || '.%')`, slug, slug);
+      this.sql.exec(`UPDATE support_cases SET workspace = NULL WHERE workspace = ?`, slug);
+      // The operator's log about it, except payments (kept as the record of what was charged).
+      this.sql.exec(`DELETE FROM ops_events WHERE slug = ? AND kind NOT LIKE 'billing%'`, slug);
     });
     this.markDirty();
     await this.publish();

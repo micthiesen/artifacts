@@ -117,7 +117,7 @@ test("export pages import into an empty workspace and reproduce it", async () =>
   expect(JSON.stringify(dump.assets[0].data)).toContain("$b64");
 
   const copy = await createHub();
-  copy.hub.importBegin();
+  await copy.hub.importBegin();
   // Offline while it loads.
   expect(copy.hub.access(ADMIN).offline).toBe(true);
   expect(() => copy.hub.importRows("artifacts", [{ nope: 1 }])).toThrow("no column nope");
@@ -138,7 +138,7 @@ test("a change schedules tonight's backup; the backup restores everything", asyn
   await h.hub.setMember(MEMBER, "member", ADMIN);
   const id = await make();
   const due = Number(h.ctx.sqlStorage.exec(`SELECT value FROM settings WHERE key = 'backup_due_at'`).toArray()[0].value);
-  expect(new Date(due).getUTCHours()).toBe(10);
+  expect([10, 11]).toContain(new Date(due).getUTCHours());
   expect(h.ctx.alarm).toBe(due);
 
   expect(await h.hub.backup()).toEqual({ queued: true });

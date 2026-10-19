@@ -221,6 +221,25 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
       button.focus();
     }
   });
+  // Menu keys: arrows move between items (wrapping), Home and End jump to the ends.
+  menu.addEventListener("keydown", (e) => {
+    const items = [...menu.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio]")];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const next =
+      e.key === "ArrowDown" ? (at + 1) % items.length
+      : e.key === "ArrowUp" ? (at - 1 + items.length) % items.length
+      : e.key === "Home" ? 0
+      : e.key === "End" ? items.length - 1
+      : null;
+    if (next === null || !items.length) return;
+    e.preventDefault();
+    items[next].focus();
+  });
+  // Tabbing out of the menu closes it, so it never stays open behind the focus.
+  menu.addEventListener("focusout", (e) => {
+    const to = e.relatedTarget as Node | null;
+    if (to && !menu.contains(to) && to !== button) setOpen(false);
+  });
   slot.append(button, menu);
   return button;
 }

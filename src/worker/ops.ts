@@ -33,10 +33,18 @@ const within = <T>(p: Promise<T>, fallback: T) => Promise.race([p, new Promise<T
 /** Free text people typed stays out of the logs (it's in the ops log and the email). */
 const UNLOGGED = new Set(["details", "from"]);
 
+/** The log line's copy of a message: addresses and quoted text (titles people typed) left out; the ops log keeps it whole. */
+function forLog(message: string): string {
+  return message
+    .replace(/[^\s@<>()"']+@[^\s@<>()"']+\.[a-z]{2,}/gi, "<email>")
+    .replace(/"[^"]*"|“[^”]*”/g, '"…"')
+    .slice(0, 300);
+}
+
 /** Records an event; never throws, so reporting a failure can't cause another. Returns whether it was stored. */
 export async function ops(env: OpsEnv, e: OpsEvent): Promise<boolean> {
   const logged = Object.fromEntries(Object.entries(e.detail ?? {}).filter(([k]) => !UNLOGGED.has(k)));
-  console.error(JSON.stringify({ ops: e.kind, slug: e.slug ?? undefined, message: e.message, ...logged }));
+  console.error(JSON.stringify({ ops: e.kind, slug: e.slug ?? undefined, message: forLog(e.message), ...logged }));
   let stored = false;
   let alert = false;
   try {

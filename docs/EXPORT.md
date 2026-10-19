@@ -5,7 +5,7 @@ Workspace admins can download everything in their workspace from
 the same data the service runs on, in plain JSON, and the
 [source](../README.md) can run it on your own Cloudflare account.
 
-The download is the latest nightly backup (made at 10:00 UTC on days
+The download is the latest nightly backup (made between 10:00 and 12:00 UTC on days
 something changed). **Back up now** makes a fresh one, at most once an hour.
 
 ## Format
