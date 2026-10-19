@@ -75,7 +75,11 @@ export async function setup() {
 
 export async function finish() {
   if (process.env.KEEP === "1") console.log(`kept ${origin}`);
-  else await operator(`/workspaces/${slug}`, undefined, "DELETE");
+  else {
+    await operator(`/workspaces/${slug}`, undefined, "DELETE");
+    // The test people this run signed in as go too.
+    await operator("/test-people", undefined, "DELETE").catch(() => {});
+  }
   console.log(failures ? `\n${failures} FAILED` : "\nall passed");
   process.exit(failures ? 1 : 0);
 }

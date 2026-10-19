@@ -113,3 +113,14 @@ test("a render check queued after the day's allowance is used up settles as skip
   await (h.hub as unknown as { runCheck(id: string, v: number, o: string): Promise<unknown> }).runCheck(id, 1, ORIGIN);
   expect(h.ctx.sqlStorage.exec(`SELECT status FROM checks WHERE artifact_id = ?`, id).one().status).toBe("done");
 });
+
+test("test addresses left by checks can be forgotten; real people and members are never touched", async () => {
+  h.directory.addInbox("left-behind@example.com", { kind: "notification", title: "x" });
+  h.directory.addInbox("real@corp.com", { kind: "notification", title: "x" });
+  await h.hub.setMember("still-here@example.com", "member", ADMIN);
+  h.directory.addInbox("still-here@example.com", { kind: "notification", title: "x" });
+  expect(h.directory.forgetTestPeople()).toEqual(["left-behind@example.com"]);
+  expect(h.directory.inbox("left-behind@example.com").items).toHaveLength(0);
+  expect(h.directory.inbox("real@corp.com").items).toHaveLength(1);
+  expect(h.directory.inbox("still-here@example.com").items).toHaveLength(1);
+});

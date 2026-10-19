@@ -2,6 +2,7 @@
 // who belongs to which, and per-person settings that follow someone across
 // workspaces (display name, notification channels), and it issues sign-in
 // codes. Ordinary page loads never touch it; workspaces keep their own data.
+import { isTestAddress } from "./mail.ts";
 import { DurableObject } from "cloudflare:workers";
 import { migrate, type Migration } from "./migrate.ts";
 import type { ChannelType } from "./notify.ts";
@@ -114,7 +115,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetInbox" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "slugForSubscription" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "forgetTestPeople" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetInbox" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "slugForSubscription" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -882,6 +883,21 @@ export class Directory extends DurableObject {
       }
     });
     this.markDirty();
+  }
+
+  /**
+   * Operator housekeeping: forget every test address (example.com, .test, ...) that's in no workspace, as
+   * end-to-end runs and checks leave them. Real people are never touched.
+   */
+  forgetTestPeople(): string[] {
+    const emails = new Set<string>();
+    for (const table of ["users", "visits", "login_sends", "login_fails", "login_codes", "channels", "passkeys", "inbox"]) {
+      for (const r of this.sql.exec(`SELECT DISTINCT email FROM ${table}`)) emails.add(r.email as string);
+    }
+    const members = new Set(this.sql.exec(`SELECT DISTINCT email FROM memberships`).toArray().map((r) => r.email as string));
+    const gone = [...emails].filter((e) => isTestAddress(e) && !members.has(e));
+    for (const e of gone) this.forgetPerson(e);
+    return gone;
   }
 
   async removeWorkspace(slug: string) {

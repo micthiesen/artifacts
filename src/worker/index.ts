@@ -1815,6 +1815,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
  * - POST   /api/admin/workspaces/<slug>/backup           queue a backup now
  * - DELETE /api/admin/workspaces/<slug>/job              cancel the running job (nothing live changes)
  * - POST   /api/admin/test-code {email}                  a sign-in code for a test address
+ * - DELETE /api/admin/test-people                        forget test addresses that are in no workspace (left by checks)
  * - GET    /api/admin/signins?email=                     recent code sends and failures, for support
  * - POST   /api/admin/workspaces/<slug>/restore {run}    back up, then replace everything with that run
  * - the same export, import, backups, backup and restore under /api/admin/directory/ for the directory
@@ -1843,6 +1844,12 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       return Response.json({ cookie: `${SESSION_COOKIE}=${await signToken(env.SESSION_SECRET, "session", 3600, { e: email, h: host, iat: nowSeconds() })}` });
     }
     // End-to-end checks sign in through the real forms: a code for a test address (whose mail is never sent).
+    // Housekeeping after checks: test addresses (never real people) that belong to no workspace.
+    if (path === "/api/admin/test-people" && request.method === "DELETE") {
+      const forgotten = await directory(env).forgetTestPeople();
+      for (const email of forgotten) await signOutEverywhere(env, email).catch(() => {});
+      return Response.json({ forgotten: forgotten.length });
+    }
     if (path === "/api/admin/test-code" && request.method === "POST") {
       const email = String((await jsonBody(request)).email ?? "").toLowerCase();
       if (!isTestAddress(email)) return Response.json({ error: "only test addresses" }, { status: 400 });
