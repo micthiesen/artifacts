@@ -471,11 +471,15 @@ export function workspacesPage(
   /** Self-serve signup, when it's on: the form's state and the workspace host suffix. */
   create: { error?: string; name?: string; slug?: string; suffix: string; full?: boolean } | null = null,
   notice?: string,
+  /** Billing is on: admins get a way to each workspace's plan, so the pricing page's upgrade leads somewhere. */
+  billing = false,
 ): Response {
   const rows = workspaces
     .map(
       (w) =>
-        `<li><a href="${escapeHtml(w.url)}/"><span class="title">${escapeHtml(w.name)}</span><span class="meta">${escapeHtml(new URL(w.url).hostname)} · ${w.role}${w.suspended ? " · suspended" : ""}</span></a></li>`,
+        `<li><a href="${escapeHtml(w.url)}/"><span class="title">${escapeHtml(w.name)}</span><span class="meta">${escapeHtml(new URL(w.url).hostname)} · ${w.role}${w.suspended ? " · suspended" : ""}</span></a>${
+          billing && w.role === "admin" ? `<a class="row-link" href="${escapeHtml(w.url)}/settings#plan-and-billing" aria-label="Plan and billing for ${escapeHtml(w.name)}">Plan and billing</a>` : ""
+        }</li>`,
     )
     .join("");
   const body = workspaces.length
@@ -597,7 +601,7 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
   const team = PLANS.team.limits;
   const gb = (b: number) => (b >= 1024 ** 3 ? `${b / 1024 ** 3} GB` : `${Math.round(b / 1024 / 1024)} MB`);
   const plan = (name: string, price: string, blurb: string, points: string[], cta: string) =>
-    `<div class="splash-card pricing-card"><h3>${name}</h3><p class="pricing-price">${price}</p><p class="muted">${blurb}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul>${cta}</div>`;
+    `<div class="splash-card pricing-card"><h2>${name}</h2><p class="pricing-price">${price}</p><p class="muted">${blurb}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul>${cta}</div>`;
   const account = viewer
     ? `<a class="button small secondary" href="/workspaces">Your workspaces</a>${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}`
     : `<a class="button small secondary" href="/login">Sign in</a>`;
@@ -609,18 +613,18 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
 <section class="splash-grid pricing-grid">
 ${plan("Free", `$0 <span class="muted">/ workspace</span>`, "For trying it out, or a small personal workspace.", [
   `${free.artifacts} artifacts (archived ones count; delete to make room) and ${free.members} members`,
-  `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves and ${free.emailsPerDay} emails a day`,
+  `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves, ${free.checksPerDay} render checks and ${free.emailsPerDay} emails a day (${free.inviteEmailsPerDay} kept for invitations and shares)`,
   "Guests, approvals, forms, comments and MCP events, with no limit",
 ], selfServe ? `<a class="button secondary" href="/workspaces">Start free</a>` : `<p class="muted small">New workspaces are by invitation for now.</p>`)}
 ${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_PRICE.period}</span>`, "For a team that publishes and decides with its agents every day.", [
   "No artifact or member limit",
-  `${gb(team.bytes!)} of storage, ${team.changesPerDay!.toLocaleString("en-US")} saves and ${team.emailsPerDay.toLocaleString("en-US")} emails a day`,
+  `${gb(team.bytes!)} of storage, ${team.changesPerDay!.toLocaleString("en-US")} saves, ${team.checksPerDay.toLocaleString("en-US")} render checks and ${team.emailsPerDay.toLocaleString("en-US")} emails a day`,
   "Guests, approvals, forms, comments and MCP events, with no limit",
 ], `<a class="button" href="/workspaces">Choose a workspace to upgrade</a>`)}
 </section>
 <section class="pricing-notes muted">
 <p><strong>No lock-in.</strong> Admins can download everything at any time, and the <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
-<p><strong>Cancel any time</strong> from your workspace's settings. Team stays until the end of the period you paid for, then the workspace moves to Free and keeps everything.</p>
+<p>The person who pays can <strong>cancel any time</strong> from the workspace's settings. Team stays until the end of the period you paid for, then the workspace moves to Free and keeps everything.</p>
 <p>Payments are handled by Creem, our merchant of record: they're the seller on your invoice and handle sales tax and VAT. Prices are in US dollars, plus tax where it applies. See the <a href="/terms">terms</a> for refunds.</p>
 <p>To keep throwaway workspaces from being used for spam, a new Free workspace's first day has no public links and only a few invitation and share emails. Sharing with people works from the start.</p>
 </section>
@@ -651,11 +655,11 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
 <li><strong>Render checks</strong>: after each change a headless browser renders the artifact; we keep the result, a screenshot and any errors. Viewers' browsers also report runtime errors (the latest 30 per artifact).</li>
 <li><strong>Sign-in records</strong>: when codes were sent and checked, with your IP address or network, to limit abuse. Kept for an hour.</li>
-<li><strong>Your inbox</strong>: a copy of each notification for you (what happened, on which artifact, and the start of any comment), your latest 200, until you delete your account or the artifact or workspace it's about is deleted.</li>
+<li><strong>Your inbox</strong>: a copy of each notification for you (what happened, on which artifact, and the start of any comment), your latest 200, for up to 90 days. A notification leaves your inbox when its artifact or workspace is deleted, when you're removed from the workspace or the artifact is unshared from you, or when you delete your account.</li>
 <li><strong>Support requests</strong>: what you send us from Help &amp; feedback (or your agent sends for you), and what you chose to include with it (the page you came from, your browser and an error code), kept as a page in our support workspace that only you and we can open, with our replies. We never include what's in your artifacts. You can ask us to delete a request.</li>
 <li><strong>Errors</strong>: when something fails on our side or in our own pages, we keep where (with ids removed), a message with addresses and links taken out, the version and your browser family, counted together with the same errors. Errors inside artifacts go to their owners, not to us.</li>
 <li><strong>Reports</strong>: if you report an artifact, what you wrote and, if you give it, your email go to us by email and into our operations log; your network address is kept for an hour to limit repeat reports. The workspace isn't told who reported it.</li>
-<li><strong>Request logs</strong>: Cloudflare keeps logs of requests to this service for debugging, for a limited period.</li>
+<li><strong>Request logs</strong>: Cloudflare keeps the Workers request and error logs for a few days (up to 7), for debugging. They can include workspace addresses and error text, never passwords or codes.</li>
 </ul>
 <h2>In your browser</h2>
 <p>A session cookie per site you sign in to (it lasts 30 days from your last visit), a short-lived cookie during sign-in, and cookies that remember OAuth approvals. Artifacts can keep per-person data in your browser's storage, separately for each artifact. No advertising or cross-site tracking. Pages load Cloudflare Web Analytics, which counts visits without cookies.</p>
@@ -677,10 +681,10 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <h2>How long we keep it</h2>
 <ul>
 <li>As long as the artifact or workspace exists. Deleting an artifact removes it from the live database at once.</li>
-<li>Each workspace is backed up nightly when it changed; the newest 30 backups are kept, so deleted data leaves backups within about a month.</li>
-<li>Deleting a workspace deletes its data and its backups, the notifications about it in people's inboxes, and ends its agents' access.</li>
+<li>Each workspace is backed up nightly when it changed; up to 30 backups are kept (7 on Free), so deleted data leaves backups within about a month.</li>
+<li>Deleting a workspace deletes its data and its backups, the notifications about it in people's inboxes, and ends its agents' access. Our directory's records about it (members, notifications and billing ids) leave our backups within about a month, and payment entries about it in our operations log stay until they roll off.</li>
 <li>Accounts are backed up the same way: your email, name, passkeys, notification channels (with their keys and secrets), memberships, guest visits, inbox and billing records. The newest 30 backups are kept, so after you delete your account these leave backups within about a month.</li>
-<li>A workspace's billing record (its subscription's status, and the payer's email) is kept while the workspace exists.</li>
+<li>A workspace's billing record (its subscription's status, and the payer's email) is kept while the workspace exists, and in payment log entries until they roll off.</li>
 <li>After you delete your account, your address stays in two places, to limit abuse: our record of who made which self-serve workspaces (so the free plan can't be farmed), and in the list of people removed from each workspace you left (so joining by email domain doesn't add you back).</li>
 <li>What you did in a workspace stays there under your address after you delete your account, until an admin removes it or the workspace is deleted: your comments, votes, approvals and form responses, and the artifact's activity log.</li>
 <li>Support requests you sent stay in our support workspace, with your address, until you ask us to delete them.</li>
@@ -716,7 +720,7 @@ ${
     : `<p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>`
 }
 <h2>Payments and refunds</h2>
-<p>${paid ? "Team is" : "When paid plans are offered, they're"} sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their terms cover the purchase itself. A paid plan renews each period until a workspace admin cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If a payment fails, the workspace keeps Team for up to 14 days after its period ends while the card is retried, then moves to Free. If you were charged by mistake, or ask within 14 days of your first payment, we'll refund it in full: email us.</p>
+<p>${paid ? "Team is" : "When paid plans are offered, they're"} sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their terms cover the purchase itself. A paid plan renews each period until the person who pays cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If a payment fails, the workspace keeps Team for up to 14 days after its period ends while the card is retried, then moves to Free. If you were charged by mistake, or ask within 14 days of your first payment, we'll refund it in full: email us.</p>
 <h2>The source code</h2>
 <p>The software behind ${PRODUCT} is published under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>, which covers the code itself. These terms cover the hosted service.</p>
 <h2>The service</h2>
@@ -745,7 +749,7 @@ ${
 <h2>Data</h2>
 <ul>
 <li>Everything is served over HTTPS with HSTS. Data is stored on Cloudflare (Durable Objects, R2, KV), encrypted at rest by Cloudflare.</li>
-<li>Nightly backups to R2, the newest 30 kept. A restore loads everything first and swaps it in at once, so it never leaves data half-replaced.</li>
+<li>Nightly backups to R2, up to 30 kept (7 on Free). A restore loads everything first and swaps it in at once, so it never leaves data half-replaced.</li>
 <li>Live data is only fetched from hosts a workspace admin approved, over HTTPS, without credentials.</li>
 <li>See <a href="/privacy">Privacy</a> for what's stored, who handles it and for how long.</li>
 </ul>

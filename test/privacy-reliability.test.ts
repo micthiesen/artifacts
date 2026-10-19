@@ -82,3 +82,34 @@ test("an import nobody feeds for an hour is cancelled, bringing the workspace ba
   await h.hub.alarm();
   expect(h.hub.job()).toBeNull();
 });
+
+test("losing access to an artifact or a workspace takes its notifications out of that person's inbox", async () => {
+  const id = await make();
+  await h.hub.setMember("bo@example.com", "member", ADMIN);
+  h.hub.share(id, { add: [{ email: "bo@example.com", role: "edit" }] });
+  h.hub.addComment(id, ADMIN, { text: `For @${ANA} and @bo@example.com` }, ORIGIN, undefined, "owner");
+  await h.hub.deliverDue(Date.now() + 3_600_000);
+  expect(h.directory.inbox(ANA).items).toHaveLength(1);
+  h.hub.share(id, { remove: [ANA] });
+  await tick();
+  expect(h.directory.inbox(ANA).items).toHaveLength(0);
+  expect(h.directory.inbox("bo@example.com").items).toHaveLength(1);
+  await h.hub.setMember("bo@example.com", null, ADMIN);
+  expect(h.directory.inbox("bo@example.com").items).toHaveLength(0);
+});
+
+test("a comment deleted before its notification goes out isn't sent", async () => {
+  const id = await make();
+  const t = h.hub.addComment(id, ANA, { text: "oops, wrong page" }, ORIGIN, undefined, "edit");
+  expect(h.ctx.sqlStorage.exec(`SELECT COUNT(*) AS n FROM outbox WHERE kind = 'comment'`).one().n).toBeGreaterThan(0);
+  h.hub.deleteComment(id, ANA, t.comments[0].id, "edit");
+  expect(h.ctx.sqlStorage.exec(`SELECT COUNT(*) AS n FROM outbox WHERE kind = 'comment'`).one().n).toBe(0);
+});
+
+test("a render check queued after the day's allowance is used up settles as skipped instead of waking the workspace", async () => {
+  const id = await make();
+  h.ctx.sqlStorage.exec(`INSERT INTO settings (key, value) VALUES ('checks_day', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, JSON.stringify({ day: new Date().toISOString().slice(0, 10), n: 10_000 }));
+  h.ctx.sqlStorage.exec(`INSERT INTO checks (artifact_id, version, origin, status, at) VALUES (?, 1, ?, 'queued', ?) ON CONFLICT (artifact_id) DO UPDATE SET status = 'queued'`, id, ORIGIN, Date.now());
+  await (h.hub as unknown as { runCheck(id: string, v: number, o: string): Promise<unknown> }).runCheck(id, 1, ORIGIN);
+  expect(h.ctx.sqlStorage.exec(`SELECT status FROM checks WHERE artifact_id = ?`, id).one().status).toBe("done");
+});

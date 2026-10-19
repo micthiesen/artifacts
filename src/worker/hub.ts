@@ -150,7 +150,7 @@ export type HubApi = AsyncMethods<
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
-    | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment"
+    | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment" | "endSessions"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
     | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault" | "visibleCount"
   >
@@ -571,7 +571,7 @@ export class Workspace extends DurableObject {
    * assets, shared state and screenshots. Unlike the database file's size, it
    * falls as soon as something is deleted.
    */
-  private storedBytes(): number {
+  private sizeOf(): "octet_length" | "length" {
     if (!this.sizeFn) {
       try {
         this.sql.exec(`SELECT octet_length('x') AS n`).one();
@@ -580,7 +580,11 @@ export class Workspace extends DurableObject {
         this.sizeFn = "length";
       }
     }
-    const len = this.sizeFn;
+    return this.sizeFn;
+  }
+
+  private storedBytes(): number {
+    const len = this.sizeOf();
     const sum = (q: string) => this.sql.exec(q).one().n as number;
     return (
       sum(`SELECT COALESCE(SUM(${len}(content)), 0) AS n FROM blobs`) +
@@ -588,6 +592,25 @@ export class Workspace extends DurableObject {
       sum(`SELECT COALESCE(SUM(${len}(value)), 0) AS n FROM state`) +
       sum(`SELECT COALESCE(SUM(${len}(screenshot)), 0) AS n FROM checks`)
     );
+  }
+
+  private storedSample: { at: number; n: number } | null = null;
+
+  /**
+   * Shared state is written often (every checkbox), so its storage check reuses a total up to a minute old,
+   * plus what's been written since; it counts afresh near the limit.
+   */
+  private withinPlanForState(changes: Record<string, JsonValue | null>) {
+    const max = PLANS[this.planId()].limits.bytes;
+    if (max === null) return this.withinCapacity();
+    const adding = Object.values(changes).reduce<number>((n, v) => n + (v === null ? 0 : JSON.stringify(v).length), 0);
+    const s = this.storedSample;
+    if (!s || Date.now() - s.at > 60_000 || s.n + adding >= max * 0.9) {
+      this.storedSample = null;
+      this.withinPlan("bytes");
+      this.storedSample = { at: Date.now(), n: this.storedBytes() };
+    }
+    this.storedSample!.n += adding;
   }
 
   /** Refuses a write that would go past the plan. Deleting is always allowed, so a full workspace can make room. */
@@ -891,6 +914,16 @@ export class Workspace extends DurableObject {
     }));
   }
 
+  /** Sign out everywhere, in this workspace: their agent tokens stop working and their open pages disconnect. */
+  endSessions(email: string): number {
+    if (!this.ready) return 0;
+    const clean = email.trim().toLowerCase();
+    const n = this.sql.exec(`DELETE FROM tokens WHERE email = ?`, clean).rowsWritten;
+    if (n) this.markDirty();
+    for (const ws of this.ctx.getWebSockets()) if ((ws.deserializeAttachment() as SocketTag).email === clean) ws.close(4003, "signed out");
+    return n;
+  }
+
   /** Revoke a token: your own, or anyone's if you are an admin. */
   revokeToken(id: string, by: string): boolean {
     const row = this.sql.exec(`SELECT email FROM tokens WHERE id = ?`, id).toArray()[0];
@@ -1008,7 +1041,7 @@ export class Workspace extends DurableObject {
       .toArray() as unknown as ShareEntry[];
     const files = this.sql
       .exec(
-        `SELECT f.path, length(CAST(b.content AS BLOB)) AS bytes FROM files f
+        `SELECT f.path, ${this.sizeOf()}(b.content) AS bytes FROM files f
          JOIN blobs b ON b.artifact_id = f.artifact_id AND b.hash = f.hash WHERE f.artifact_id = ? ORDER BY f.path`,
         id,
       )
@@ -1116,6 +1149,9 @@ export class Workspace extends DurableObject {
     const id = `a${randomId(12)}`;
     const now = new Date().toISOString();
     this.ctx.storage.transactionSync(() => {
+      // Again, now that nothing else can run: saves started together all passed the checks above.
+      this.withinPlan("artifacts");
+      this.withinPlan("changesPerDay");
       this.sql.exec(
         `INSERT INTO artifacts (id, title, description, owner, version, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
         id,
@@ -1237,6 +1273,9 @@ export class Workspace extends DurableObject {
       const now = tag.email ? this.roleFor(id, tag.email) : isPublic(this.sql.exec(`SELECT public, public_until FROM artifacts WHERE id = ?`, id).one()) ? "view" : null;
       if (now === null || now !== tag.role) ws.close(4003, "access changed");
     }
+    // Someone who can't open it any more loses what their inbox quoted from it.
+    const lost = (input.remove ?? []).map((e) => e.trim().toLowerCase()).filter((e) => e.includes("@") && !e.startsWith("@") && !this.canOpen(id, e));
+    if (lost.length) void this.forgetInbox(lost.map((email) => ({ artifactId: id, email })));
     return this.meta(id);
   }
 
@@ -1250,10 +1289,25 @@ export class Workspace extends DurableObject {
     this.markDirty();
     for (const ws of this.ctx.getWebSockets(id)) ws.close(4004, "artifact deleted");
     // Its notifications leave people's inboxes too (they quote its comments).
+    void this.forgetInbox([{ artifactId: id }]);
+  }
+
+  /**
+   * Take notifications out of inboxes (in the directory). One that fails is kept and retried on the alarm, so a
+   * deleted comment's words don't stay in someone's inbox because the directory was busy.
+   */
+  private async forgetInbox(items: { artifactId?: string; email?: string }[]) {
     const slug = this.info().slug;
-    void Promise.resolve()
-      .then(() => this.directory().forgetArtifact(slug, id))
-      .catch((err: unknown) => console.error(JSON.stringify({ ops: "inbox_forget_failed", slug, message: (err as Error).message })));
+    const pending = [...(JSON.parse(this.setting("inbox_forget_due") ?? "[]") as typeof items), ...items];
+    if (!pending.length) return;
+    this.setSetting("inbox_forget_due", JSON.stringify(pending.slice(-500)));
+    try {
+      for (const f of pending) await this.directory().forgetInbox({ slug, ...f });
+      this.setSetting("inbox_forget_due", null);
+    } catch (err) {
+      console.error(JSON.stringify({ ops: "inbox_forget_failed", slug, message: (err as Error).message }));
+      await this.armAlarm();
+    }
   }
 
   // ---- shared state ------------------------------------------------------
@@ -1283,7 +1337,7 @@ export class Workspace extends DurableObject {
   ): number {
     const version = this.requireArtifact(id).version as number;
     // Removing state always works, so a full workspace can make room.
-    if (Object.values(changes).some((v) => v !== null)) this.withinPlan("bytes");
+    if (Object.values(changes).some((v) => v !== null)) this.withinPlanForState(changes);
     let seq = 0;
     const applied: { key: string; value: JsonValue | null; seq: number; created: boolean }[] = [];
     this.ctx.storage.transactionSync(() => {
@@ -1459,6 +1513,7 @@ export class Workspace extends DurableObject {
     // Nothing else touches data while a restore or import replaces it.
     if (this.offline()) return;
     if (this.setting("resync_due")) await step("directory resync", () => this.resync());
+    if (this.setting("inbox_forget_due")) await step("inbox cleanup", () => this.forgetInbox([]));
     const backupAt = Number(this.setting("backup_due_at") ?? NaN);
     if (backupAt <= Date.now() && !this.job()) this.queueJobs([{ kind: "backup" }]);
     await step("render check", async () => {
@@ -1522,6 +1577,7 @@ export class Workspace extends DurableObject {
     if (job && job.kind !== "import") times.push(job.retryAt ? Date.parse(job.retryAt) : Date.now());
     else if (!job && this.setting("jobs_next")) times.push(Date.now());
     if (this.setting("resync_due")) times.push(Date.now() + 60_000);
+    if (this.setting("inbox_forget_due")) times.push(Date.now() + 60_000);
     if (this.setting("links_backfill") !== null) times.push(Date.now() + 1000);
     if (!times.length) return;
     const at = Math.max(Math.min(...times), Date.now() + 1000);
@@ -1531,7 +1587,12 @@ export class Workspace extends DurableObject {
 
   /** Runs one check and stores it. Returns null when Browser Run rate-limited us. */
   private async runCheck(id: string, version: number, origin: string): Promise<CheckOutcome | null> {
-    if (!this.allowCheck()) return { check: { status: "skipped", reason: CHECKS_USED_UP } };
+    if (!this.allowCheck()) {
+      // Settled as skipped, so a queued check doesn't keep waking the workspace until tomorrow.
+      const skipped = { status: "skipped" as const, reason: CHECKS_USED_UP };
+      this.sql.exec(`UPDATE checks SET status = 'done', result = ?, screenshot = NULL, at = ? WHERE artifact_id = ? AND version <= ?`, JSON.stringify(skipped), Date.now(), id, version);
+      return { check: skipped };
+    }
     const result = await renderCheck(this.hubEnv, origin, id, version, this.info().slug);
     if ("rateLimited" in result) {
       this.nextCheckAt = Date.now() + 10_000;
@@ -1784,16 +1845,13 @@ export class Workspace extends DurableObject {
       .filter((w) => w.length >= 3)
       .slice(0, CONTENT_WORDS_MAX);
     if (!words.length) return undefined;
-    const hits = new Map<string, Set<string>>();
-    for (const w of words) {
-      const ids = this.sql
-        .exec(
-          `SELECT DISTINCT f.artifact_id AS id FROM files f JOIN blobs b ON b.artifact_id = f.artifact_id AND b.hash = f.hash WHERE instr(lower(b.content), ?) > 0`,
-          w,
-        )
-        .toArray()
-        .map((r) => r.id as string);
-      hits.set(w, new Set(ids));
+    // One pass over the files, lowercasing each once, for all the words.
+    const cols = words.map((_, i) => `instr(lower(b.content), ?) > 0 AS w${i}`).join(", ");
+    const hits = new Map<string, Set<string>>(words.map((w) => [w, new Set<string>()]));
+    for (const r of this.sql.exec(`SELECT f.artifact_id AS id, ${cols} FROM files f JOIN blobs b ON b.artifact_id = f.artifact_id AND b.hash = f.hash`, ...words)) {
+      words.forEach((w, i) => {
+        if (r[`w${i}`]) hits.get(w)!.add(r.id as string);
+      });
     }
     return (id, w) => hits.get(w)?.has(id) ?? false;
   }
@@ -2384,6 +2442,14 @@ export class Workspace extends DurableObject {
       const left = this.sql.exec(`SELECT COUNT(*) AS n FROM comments WHERE thread_id = ?`, threadId).one().n as number;
       if (left === 0) this.sql.exec(`DELETE FROM threads WHERE id = ?`, threadId);
       this.logEvent(id, actor, "comment-delete", { thread: threadId, comment: commentId });
+      // A notification about it that hasn't gone out yet doesn't go.
+      this.sql.exec(
+        `DELETE FROM outbox WHERE artifact_id = ? AND kind = 'comment' AND json_extract(data, '$.thread') = ? AND json_extract(data, '$.by') = ? AND json_extract(data, '$.text') = ?`,
+        id,
+        threadId,
+        c.by as string,
+        String(c.text).slice(0, 300),
+      );
       // The activity log quotes comments; a deleted one's words go from it too.
       this.sql.exec(
         `UPDATE events SET data = json_remove(data, '$.text') WHERE artifact_id = ? AND type IN ('thread', 'reply') AND json_extract(data, '$.comment') = ?`,
@@ -2433,6 +2499,8 @@ export class Workspace extends DurableObject {
         for (const e of missing) this.nameCache.set(e, { name: fetched[e] ?? null, at: now });
       } catch (err) {
         console.error("names lookup failed", err);
+        // Shown by email for now; asked again in about half a minute, not on every open.
+        for (const e of missing) this.nameCache.set(e, { name: this.nameCache.get(e)?.name ?? null, at: now - NAMES_TTL_MS + 30_000 });
       }
     }
     return Object.fromEntries(emails.map((e) => [e, this.nameCache.get(e)?.name ?? null]));
@@ -2814,12 +2882,15 @@ export class Workspace extends DurableObject {
 
   /** Send due notifications, one message per person and artifact, skipping people who have the page open. */
   async deliverDue(now = Date.now()): Promise<number> {
-    const due = this.sql.exec(`SELECT * FROM outbox WHERE due_at <= ? ORDER BY due_at`, now).toArray();
+    // A bounded batch: whatever is left is due already, so the next alarm takes it.
+    const due = this.sql.exec(`SELECT * FROM outbox WHERE due_at <= ? ORDER BY due_at LIMIT 500`, now).toArray();
     if (!due.length) return 0;
     const groups = new Map<string, Record<string, SqlStorageValue>[]>();
     for (const row of due) {
       const k = `${row.email}\n${row.artifact_id}`;
-      groups.set(k, [...(groups.get(k) ?? []), row]);
+      const g = groups.get(k);
+      if (g) g.push(row);
+      else groups.set(k, [row]);
     }
     const directory = this.directory();
     const recipients = [...new Set(due.map((r) => r.email as string))];
@@ -2836,13 +2907,15 @@ export class Workspace extends DurableObject {
       return 0;
     }
     let sends = 0;
+    let planned = 0;
+    const outgoing: { mine: (typeof channels)[string]; msg: ReturnType<typeof composeMessage> }[] = [];
     const results: { id: string; result: { ok: boolean; error?: string; gone?: boolean } }[] = [];
     const inbox: { email: string; kind: string; title: string; body: string; url: string; slug: string; artifact: string }[] = [];
     for (const group of groups.values()) {
       const email = group[0].email as string;
       const id = group[0].artifact_id as string;
       const mine = channels[email] ?? [];
-      if (sends + mine.length > SENDS_PER_ALARM && sends > 0) break;
+      if (planned + mine.length > SENDS_PER_ALARM && planned > 0) break;
       // Claim the rows as they are now: an update coalesced into one of them
       // during the awaits above (pushing it later) stays queued.
       // (In chunks: SQLite takes at most 100 bound values, and a busy thread can queue more rows than that.)
@@ -2866,7 +2939,16 @@ export class Workspace extends DurableObject {
       }
       // Every notification also lands in the person's inbox, whatever channels they have (or none).
       inbox.push({ email, kind: "notification", title: msg.title, body: msg.body, url: msg.url, slug: this.info().slug, artifact: id });
-      if (!mine.length) continue;
+      if (mine.length) outgoing.push({ mine, msg });
+      planned += mine.length;
+    }
+    // The inbox first: the rows are claimed already, so if sending is cut short the inbox still has them.
+    if (inbox.length) {
+      await Promise.resolve()
+        .then(() => directory.addInboxMany(inbox))
+        .catch((err: unknown) => console.error(JSON.stringify({ ops: "inbox_failed", slug: this.info().slug, message: (err as Error).message })));
+    }
+    for (const { mine, msg } of outgoing) {
       for (const c of mine) {
         // Notification emails share the workspace's daily email allowance.
         // Over today's email allowance, other channels (push, webhooks) still carry it.
@@ -2875,11 +2957,6 @@ export class Workspace extends DurableObject {
         const result = await sendToChannel(c.type, c.config, msg, this.hubEnv).catch((err: Error) => ({ ok: false as const, error: err.message }));
         results.push({ id: c.id, result });
       }
-    }
-    if (inbox.length) {
-      await Promise.resolve()
-        .then(() => directory.addInboxMany(inbox))
-        .catch((err: unknown) => console.error(JSON.stringify({ ops: "inbox_failed", slug: this.info().slug, message: (err as Error).message })));
     }
     if (results.length) {
       await Promise.resolve()
@@ -3215,6 +3292,8 @@ export class Workspace extends DurableObject {
     const actor = opts.actor ?? "agent";
     let raced: number | null = null;
     this.ctx.storage.transactionSync(() => {
+      // Saves to other artifacts may have landed while this one compiled.
+      this.withinPlan("changesPerDay");
       // Another write may have landed while this one compiled.
       if (!this.sql.exec(`UPDATE artifacts SET version = ?, updated_at = ? WHERE id = ? AND version = ?`, next, now, id, current).rowsWritten) {
         raced = this.requireArtifact(id).version as number;
@@ -3459,8 +3538,22 @@ async function fetchSource(url: string, pick: string | null, allowed: Set<string
   }
   if (!res) throw new Error("too many redirects");
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  if (text.length > SOURCE_MAX_BYTES) throw new Error(`response is over ${SOURCE_MAX_BYTES / 1024} KB`);
+  // Read up to the cap and stop, so a host sending far more can't use up the workspace's memory first.
+  const tooBig = new Error(`response is over ${SOURCE_MAX_BYTES / 1024} KB`);
+  if (Number(res.headers.get("Content-Length") ?? 0) > SOURCE_MAX_BYTES) throw tooBig;
+  let text = "";
+  if (res.body) {
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += value;
+      if (text.length > SOURCE_MAX_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw tooBig;
+      }
+    }
+  }
   let value: JsonValue;
   try {
     value = JSON.parse(text);

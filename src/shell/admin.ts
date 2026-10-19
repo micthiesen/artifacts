@@ -65,6 +65,12 @@ function kept<T extends HTMLInputElement | HTMLSelectElement>(el: T, key: string
   return el;
 }
 
+/** Names a button for screen readers, where the same label repeats on every workspace. */
+function named<T extends HTMLElement>(el: T, label: string): T {
+  el.setAttribute("aria-label", label);
+  return el;
+}
+
 function btn(label: string, onClick: () => void | Promise<void>, cls = "button small ghost") {
   const b = h("button", { type: "button", class: cls }, label);
   b.addEventListener("click", async () => {
@@ -169,10 +175,10 @@ function jobLine(w: Workspace, job: Job) {
     h(
       "span",
       { class: "channel-actions" },
-      btn(job.error ? "Dismiss" : "Cancel job", () => {
+      named(btn(job.error ? "Dismiss" : "Cancel job", () => {
         if (!job.error && !confirm(`Cancel the ${job.kind} of ${w.slug}?`)) return;
         return act(() => api(`/api/admin/workspaces/${w.slug}/job`, { method: "DELETE" }), job.error ? undefined : `Cancelled the ${job.kind} of ${w.slug}.`);
-      }, "button small ghost danger"),
+      }, "button small ghost danger"), job.error ? `Dismiss the ${job.kind} error for ${w.slug}` : `Cancel the ${job.kind} of ${w.slug}`),
     ),
   );
   return line;
@@ -251,49 +257,49 @@ function render() {
         const select = kept(h("select", { "aria-label": `Backup to restore for ${w.slug}` }, ...runs.map((r) => h("option", { value: r }, r))) as HTMLSelectElement, `run-${w.slug}`);
         restore.append(
           select,
-          btn("Restore", () => {
+          named(btn("Restore", () => {
             const run = select.value;
             if (!confirm(`Replace everything in ${w.slug} with the ${run} backup? A fresh backup runs first, and the workspace is offline until the restore finishes.`)) return;
             return act(
               () => api(`/api/admin/workspaces/${w.slug}/restore`, { body: { run } }),
               "Restore queued (a fresh backup runs first). The workspace is offline until it finishes.",
             );
-          }, "button small ghost danger"),
+          }, "button small ghost danger"), `Restore ${w.slug}`),
         );
       }
     }
-    const backup = btn("Back up now", () => act(() => api(`/api/admin/workspaces/${w.slug}/backup`, { body: {} }), `Backup of ${w.slug} started.`));
+    const backup = named(btn("Back up now", () => act(() => api(`/api/admin/workspaces/${w.slug}/backup`, { body: {} }), `Backup of ${w.slug} started.`)), `Back up ${w.slug} now`);
     if (busy) backup.disabled = true;
     card.append(
       h(
         "div",
         { class: "channel-actions" },
-        btn("Refresh stats", () => act(() => api(`/api/admin/workspaces/${w.slug}/stats`, { body: {} }))),
+        named(btn("Refresh stats", () => act(() => api(`/api/admin/workspaces/${w.slug}/stats`, { body: {} }))), `Refresh stats for ${w.slug}`),
         ...(w.billing
           ? [
-              btn("Resync plan", () => act(() => api(`/api/admin/workspaces/${w.slug}/resync`, { body: {} }), `${w.slug}'s plan matches its subscription again.`)),
-              btn("End billing", () => {
+              named(btn("Resync plan", () => act(() => api(`/api/admin/workspaces/${w.slug}/resync`, { body: {} }), `${w.slug}'s plan is set from its subscription.`)), `Resync plan for ${w.slug}`),
+              named(btn("End billing", () => {
                 if (!confirm(`End ${w.slug}'s paid time now, so it's on Free? Cancel or refund the subscription in Creem as well.`)) return;
                 return act(() => api(`/api/admin/workspaces/${w.slug}/end-billing`, { body: {} }), `${w.slug} is on Free now.`);
-              }),
+              }), `End billing for ${w.slug}`),
             ]
           : []),
-        ...(w.billing ? [] : [btn(s?.plan === "free" ? "Move to Team" : "Move to Free", () => {
+        ...(w.billing ? [] : [named(btn(s?.plan === "free" ? "Move to Team" : "Move to Free", () => {
           const plan = s?.plan === "free" ? "team" : "free";
           return act(() => api(`/api/admin/workspaces/${w.slug}/plan`, { body: { plan } }), `${w.slug} is now on the ${plan === "free" ? "Free" : "Team"} plan.`);
-        })]),
+        }), `Move ${w.slug} to ${s?.plan === "free" ? "Team" : "Free"}`)]),
         backup,
-        btn("Backups…", () =>
+        named(btn("Backups…", () =>
           act(async () => {
             backups.set(w.slug, (await api<{ runs: string[] }>(`/api/admin/workspaces/${w.slug}/backups`)).runs);
           }),
-        ),
-        btn(w.suspended ? "Resume" : "Suspend", () => act(() => api(`/api/admin/workspaces/${w.slug}`, { body: { suspended: !w.suspended } }), `${w.suspended ? "Resumed" : "Suspended"} ${w.slug}.`)),
-        btn("Delete…", () => {
+        ), `Backups of ${w.slug}`),
+        named(btn(w.suspended ? "Resume" : "Suspend", () => act(() => api(`/api/admin/workspaces/${w.slug}`, { body: { suspended: !w.suspended } }), `${w.suspended ? "Resumed" : "Suspended"} ${w.slug}.`)), `${w.suspended ? "Resume" : "Suspend"} ${w.slug}`),
+        named(btn("Delete…", () => {
           const typed = prompt(`This deletes ${w.slug}, its data and its backups. Type ${w.slug} to confirm.`);
           if (typed !== w.slug) return;
           return act(() => api(`/api/admin/workspaces/${w.slug}`, { method: "DELETE" }), `Deleted ${w.slug}.`);
-        }, "button small ghost danger"),
+        }, "button small ghost danger"), `Delete ${w.slug}`),
         restore,
       ),
     );
@@ -308,10 +314,10 @@ function render() {
           "span",
           { class: "admin-chip" },
           a,
-          btn("Remove", () => {
+          named(btn("Remove", () => {
             if (!confirm(`Remove ${a} from ${w.slug}? Artifacts they own pass to another admin.`)) return;
             return act(() => api(`/api/admin/workspaces/${w.slug}/members`, { body: { email: a, role: null } }), `Removed ${a} from ${w.slug}.`);
-          }, "om-text-button danger"),
+          }, "om-text-button danger"), `Remove ${a} from ${w.slug}`),
         ),
       );
     }
@@ -322,10 +328,10 @@ function render() {
         "div",
         { class: "row" },
         email,
-        btn("Add or replace admin", () => {
+        named(btn("Add or replace admin", () => {
           const who = email.value.trim();
           return act(() => api(`/api/admin/workspaces/${w.slug}/members`, { body: { email: who, role: "admin" } }), `${who} is now an admin of ${w.slug}.`, [adminKey]);
-        }),
+        }), `Add or replace an admin of ${w.slug}`),
       ),
     );
     sections.push(card);

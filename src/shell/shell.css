@@ -489,6 +489,7 @@ div.thread-anchor { cursor: default; }
 .notice { padding: .7rem .9rem; border-radius: .6rem; border: 1px solid var(--border); background: var(--card); }
 .notice.ok { border-color: color-mix(in oklab, var(--positive) 45%, var(--border)); }
 .notice.error { border-color: color-mix(in oklab, var(--negative) 55%, var(--border)); color: var(--fg); }
+.notice.warn { border-color: color-mix(in oklab, var(--caution) 60%, var(--border)); background: color-mix(in oklab, var(--caution) 7%, var(--card)); }
 .notice p { margin: .35rem 0 0; }
 .reveal-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .5rem; }
 .reveal { padding: .3rem .5rem; border-radius: .4rem; background: var(--bg); color: var(--fg); font-size: 13px; overflow-wrap: anywhere; }
@@ -517,6 +518,19 @@ div.thread-anchor { cursor: default; }
 .list li.leaving { opacity: 0; transform: translateX(.75rem); }
 .list li:has(.row-action) a { padding-right: 3.25rem; }
 .list li:has(.row-action + .row-action) a { padding-right: 5.5rem; }
+/* A second, plain link beside a row (a workspace's plan and billing). */
+.list li > a.row-link {
+  position: absolute; top: 50%; right: 1rem; transform: translateY(-50%); display: inline; padding: .3rem .4rem;
+  border: 0; border-radius: calc(var(--radius) - 2px); background: none; box-shadow: none; overflow: visible;
+  font-size: 13px; color: var(--muted-fg); white-space: nowrap;
+}
+.list li > a.row-link::before { content: none; }
+.list li > a.row-link:hover, .list li > a.row-link:focus-visible { transform: translateY(-50%); color: var(--fg); text-decoration: underline; }
+.list li:has(> a.row-link) > a:first-child { padding-right: 9rem; }
+@media (max-width: 30rem) {
+  .list li > a.row-link, .list li > a.row-link:hover, .list li > a.row-link:focus-visible { position: static; transform: none; display: inline-block; margin: .3rem 0 0 .85rem; }
+  .list li:has(> a.row-link) > a:first-child { padding-right: 1.15rem; }
+}
 .row-actions { position: absolute; top: .7rem; right: .7rem; display: flex; gap: .2rem; }
 .row-action {
   display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0;
@@ -625,7 +639,7 @@ div.thread-anchor { cursor: default; }
   content: ""; position: absolute; left: 1.2rem; right: 1.2rem; top: 0; height: 1px;
   background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--signal-from) 70%, transparent), color-mix(in oklab, var(--signal-to) 60%, transparent), transparent);
 }
-.splash-card h3 { margin: 0 0 .35rem; font-size: 16px; letter-spacing: -.01em; }
+.splash-card h3, .pricing-card h2 { margin: 0 0 .35rem; font-size: 16px; letter-spacing: -.01em; }
 .splash-card > p { margin: 0 0 .9rem; font-size: 14px; line-height: 1.55; }
 .splash-self p { line-height: 1.6; margin: 0 0 1.1rem; }
 .splash-self p.splash-license { font-size: 13.5px; margin: 1.1rem 0 0; }

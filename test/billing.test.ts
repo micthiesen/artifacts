@@ -151,7 +151,11 @@ test("checkout: admins only; Creem gets the product, the admin's email and the w
   expect(calls[0].url).toBe("https://test-api.creem.io/v1/checkouts");
   expect(calls[0].headers["x-api-key"]).toBe("creem_test_abc");
   expect(calls[0].body).toMatchObject({ product_id: "prod_team", customer: { email: ADMIN }, success_url: `${ACME}/settings?billing=done`, metadata: { workspace: "acme" } });
+  // Clicking again soon after reopens the same checkout rather than starting a second.
+  expect(await (await post(ADMIN)).json()).toEqual({ url: "https://checkout.creem.io/ch_1" });
+  expect(calls).toHaveLength(1);
   // Live keys use the live API; a provider error is a clean 503.
+  env.OAUTH_KV = new FakeKV();
   env.CREEM_API_KEY = "creem_live_xyz";
   creemAnswer = () => new Response("down", { status: 500 });
   const failed = await post(ADMIN);

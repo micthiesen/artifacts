@@ -215,11 +215,17 @@ test("signing out everywhere ends every session; deleting an account needs a rec
   const refused = await worker.fetch(new Request(`${APEX}/api/me/delete`, { method: "POST", headers: { Cookie: old, Origin: APEX, "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "delete" }) }), env as never, ctx);
   expect(refused.status).toBe(403);
   expect(((await refused.json()) as { reauth: boolean }).reauth).toBe(true);
-  // Sign out everywhere from one session: the other (on a workspace too) stops working.
+  // Nor mint an agent token (it would outlive signing out).
+  const oldHere = await cookieFor({ e: ZED, h: "acme.artifacts.test", iat: now - 3600 });
+  const mint = await worker.fetch(new Request(`${ACME}/api/settings/tokens`, { method: "POST", headers: { Cookie: oldHere, Origin: ACME, "Content-Type": "application/json" }, body: JSON.stringify({ label: "x" }) }), env as never, ctx);
+  expect(mint.status).toBe(403);
+  await h.hub.createToken(ZED, "laptop agent");
+  // Sign out everywhere from one session: the other (on a workspace too) stops working, and so do their agents.
   const workspaceCookie = await cookieFor({ e: ZED, h: "acme.artifacts.test", iat: now - 60 });
   const done = await worker.fetch(new Request(`${APEX}/api/me/sign-out-everywhere`, { method: "POST", headers: { Cookie: old, Origin: APEX } }), env as never, ctx);
   expect(done.status).toBe(200);
   expect((await worker.fetch(new Request(`${ACME}/api/settings`, { headers: { Cookie: workspaceCookie } }), env as never, ctx)).status).toBe(401);
+  expect(h.hub.tokens(ZED)).toEqual([]);
 });
 
 test("a render check's frame link works once", async () => {

@@ -86,3 +86,27 @@ test("people asking past the last page get the last one; agents get an empty pag
   expect(agent.rows).toHaveLength(0);
   expect(listing(all, { archived: false, q: "item 11" }).total).toBe(11);
 });
+
+test("workspace admins get a way to plan and billing while billing is on; members don't", async () => {
+  const { workspacesPage } = await import("../src/worker/pages.ts");
+  const list = [
+    { slug: "mine", name: "Mine", role: "admin" as const, suspended: false, url: "https://mine.artifacts.test" },
+    { slug: "theirs", name: "Theirs", role: "member" as const, suspended: false, url: "https://theirs.artifacts.test" },
+  ];
+  const on = await workspacesPage("me@example.com", list, false, brand, null, undefined, true).text();
+  expect(on).toContain('href="https://mine.artifacts.test/settings#plan-and-billing"');
+  expect(on).not.toContain("theirs.artifacts.test/settings");
+  const off = await workspacesPage("me@example.com", list, false, brand).text();
+  expect(off).not.toContain("plan-and-billing");
+});
+
+test("pricing lists Free's render checks and invitations from the plan, under h2 plan names", async () => {
+  const { pricingPage } = await import("../src/worker/pages.ts");
+  const { PLANS } = await import("../src/worker/plans.ts");
+  const html = await pricingPage(brand, true).text();
+  expect(html).toContain(`${PLANS.free.limits.checksPerDay} render checks`);
+  expect(html).toContain(`${PLANS.free.limits.inviteEmailsPerDay} kept for invitations`);
+  expect(html).toContain("<h2>Free</h2>");
+  expect(html).not.toContain("<h3>");
+  expect(html).toContain("The person who pays can");
+});

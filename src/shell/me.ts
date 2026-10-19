@@ -251,7 +251,7 @@ function signOutEverywhereSection(): HTMLElement {
     "section",
     { class: "card-section" },
     h("h2", {}, "Sign out everywhere"),
-    h("p", { class: "muted" }, "Signs you out on every browser and device, in every workspace, this one included. Use it if you signed in somewhere you shouldn't have stayed signed in."),
+    h("p", { class: "muted" }, "Signs you out on every browser and device, in every workspace, this one included, and disconnects your agents: you'll need to reconnect them. Use it if you signed in somewhere you shouldn't have stayed signed in."),
     h(
       "div",
       { class: "row" },
@@ -423,7 +423,8 @@ async function showing(fn: () => Promise<void>) {
 
 /** Delete your account: first see what that means (and what's in the way), then type delete. */
 function deleteAccountSection(): HTMLElement {
-  const body = h("div", {});
+  // Polite: the steps that appear after the check are read out without interrupting.
+  const body = h("div", { "aria-live": "polite" });
   const section = h(
     "section",
     { class: "card-section" },
@@ -436,14 +437,16 @@ function deleteAccountSection(): HTMLElement {
     "Delete account…",
     () =>
       showing(async () => {
-        const plan = await api<{ blockers: string[]; deletes: { name: string }[]; leaves: { name: string }[]; guestOf: { name: string }[] }>("/api/me/delete");
+        const plan = await api<{ blockers: string[]; deletes: { name: string }[]; leaves: { name: string; heir: string | null }[]; guestOf: { name: string }[] }>("/api/me/delete");
         body.replaceChildren();
         if (plan.blockers.length) {
           body.append(h("p", {}, "First:"), h("ul", {}, ...plan.blockers.map((b) => h("li", {}, b))));
           return;
         }
         if (plan.deletes.length) body.append(h("p", {}, `These workspaces have no other members, so they're deleted too, and anyone you shared their artifacts with loses access: ${plan.deletes.map((w) => w.name).join(", ")}. Download anything you need from their settings first.`));
-        if (plan.leaves.length) body.append(h("p", { class: "muted" }, `You leave: ${plan.leaves.map((w) => w.name).join(", ")}.`));
+        const plain = plan.leaves.filter((w) => !w.heir);
+        if (plain.length) body.append(h("p", { class: "muted" }, `You leave ${plain.map((w) => w.name).join(", ")}.`));
+        for (const w of plan.leaves.filter((w) => w.heir)) body.append(h("p", { class: "muted" }, `You leave ${w.name}; ${w.heir} becomes its owner.`));
         if (plan.guestOf.length) body.append(h("p", { class: "muted" }, `Artifacts shared with you in ${plan.guestOf.map((w) => w.name).join(", ")} stop being shared with you.`));
         const confirm = h("input", { class: "input", type: "text", autocomplete: "off", "aria-label": "Type delete to confirm", placeholder: "delete" }) as HTMLInputElement;
         body.append(
@@ -464,6 +467,7 @@ function deleteAccountSection(): HTMLElement {
             ),
           ),
         );
+        confirm.focus();
       }),
     "button small secondary",
   );

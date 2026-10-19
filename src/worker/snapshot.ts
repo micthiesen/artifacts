@@ -312,7 +312,8 @@ export function shadowRows(sql: SqlStorage, table: string, where = "1", ...args:
 }
 
 /** A restore in progress: the run's page keys and how many are loaded. Persisted between steps. */
-export type RestoreCursor = { run: string; keys: string[]; index: number };
+/** `tables`: those the run has (an older run lacks tables added since; restoring leaves those as they are). */
+export type RestoreCursor = { run: string; keys: string[]; index: number; tables?: string[] };
 
 /** Check the run is complete and fits this schema, and list its pages. */
 export async function startRestore(bucket: R2Bucket, root: string, run: string, tables: string[], schema: number): Promise<RestoreCursor> {
@@ -332,7 +333,8 @@ export async function startRestore(bucket: R2Bucket, root: string, run: string, 
     if ((manifest.pages?.[table] ?? found.length) !== found.length) throw new Error(`backup ${run} is missing pages of ${table}`);
     keys.push(...found.sort());
   }
-  return { run, keys, index: 0 };
+  const present = manifest.tables ? tables.filter((t) => t in manifest.tables) : tables;
+  return { run, keys, index: 0, tables: present };
 }
 
 /** Load pages into the shadows until done or `deadline` (at least one per step). Returns the cursor, or null when all are loaded. */

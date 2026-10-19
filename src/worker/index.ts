@@ -510,6 +510,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
     target.searchParams.set("to", url.origin);
     target.searchParams.set("n", nonce);
     target.searchParams.set("return", safeNext(url.searchParams.get("return")));
+    // "Sign in again" from a workspace page has to reach the apex, or the old session would just carry on.
+    if (url.searchParams.get("fresh") === "1") target.searchParams.set("fresh", "1");
     return new Response(null, {
       status: 302,
       headers: { Location: target.href, "Set-Cookie": `${NONCE_COOKIE}=${nonce}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=900` },
@@ -740,14 +742,14 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
       const slug = String(form.get("slug") ?? "").trim().toLowerCase();
       const made = await createOwnWorkspace(env, viewer.email, { name, slug, terms: form.get("terms") === "on" });
       if ("location" in made) return continuePage(made.location);
-      const res = workspacesPage(viewer.email, await list(), operator, brand, await create({ error: made.error, name, slug }));
+      const res = workspacesPage(viewer.email, await list(), operator, brand, await create({ error: made.error, name, slug }), undefined, billingOn(env));
       return new Response(res.body, { status: 400, headers: res.headers });
     }
     const deleted = url.searchParams.get("deleted");
     const left = url.searchParams.get("left");
     const unread = await directory(env).unreadCount(viewer.email);
     const note = deleted ? `Deleted ${deleted.slice(0, 80)}.` : left ? `You left ${left.slice(0, 80)}.` : unread ? `${unread} new in your inbox.` : undefined;
-    return workspacesPage(viewer.email, await list(), operator, brand, await create(), note);
+    return workspacesPage(viewer.email, await list(), operator, brand, await create(), note, billingOn(env));
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
   if (path === "/login/passkey/options" && request.method === "POST") {
@@ -871,11 +873,11 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
   const update = readEvent(payload);
   if (!update) {
     // Events we don't act on are expected; one about a subscription we couldn't read isn't.
-    const e = payload as { id?: string; eventType?: string; object?: { object?: string; subscription?: unknown; metadata?: { workspace?: unknown } } };
+    const e = payload as { id?: string; eventType?: string; object?: Record<string, unknown> & { object?: string; subscription?: unknown } };
     const type = String(e?.eventType ?? "");
     // Refunds and disputes don't change the plan by themselves: the operator decides (End billing in the console).
     if (type.startsWith("refund.") || type.startsWith("dispute.")) {
-      const slug = typeof e?.object?.metadata?.workspace === "string" ? e.object.metadata.workspace : undefined;
+      const slug = await refundWorkspace(env, e?.object);
       await ops(env, {
         kind: "billing_refund_or_dispute",
         slug,
@@ -907,6 +909,24 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
     });
     throw err;
   }
+}
+
+/** KV: a workspace's checkout started in the last 15 minutes. */
+const CHECKOUT_PREFIX = "checkout:";
+
+/**
+ * Which workspace a refund or dispute is about: from metadata on it or on what it's nested with (its
+ * subscription, checkout or transaction), else by its subscription's id.
+ */
+async function refundWorkspace(env: Env, object: Record<string, unknown> | undefined): Promise<string | undefined> {
+  if (!object) return undefined;
+  const nested = ["subscription", "checkout", "transaction", "order"].map((k) => object[k]).filter((v): v is Record<string, unknown> => typeof v === "object" && v !== null);
+  for (const o of [object, ...nested]) {
+    const ws = (o.metadata as { workspace?: unknown } | undefined)?.workspace;
+    if (typeof ws === "string") return ws;
+  }
+  const subId = [object.subscription, ...nested.map((o) => o.subscription), ...nested.filter((o) => o.object === "subscription").map((o) => o.id)].find((v): v is string => typeof v === "string");
+  return subId ? ((await directory(env).slugForSubscription(subId)) ?? undefined) : undefined;
 }
 
 async function applyBillingEvent(env: Env, update: NonNullable<ReturnType<typeof readEvent>>): Promise<Response> {
@@ -1191,6 +1211,16 @@ async function signOutEverywhere(env: Env, email: string) {
   const now = nowSeconds();
   await env.OAUTH_KV.put(`${SIGNED_OUT_PREFIX}${email}`, String(now), { expirationTtl: SESSION_TTL + 86_400 });
   signedOutCache.set(email, { at: Date.now(), value: now });
+  // Agents too: a stolen session could have connected one. Their tokens and connections end, and open pages close.
+  for (const w of await directory(env).membershipsOf(email)) {
+    try {
+      const hub = workspaceHub(env, w.slug);
+      await hub.endSessions(email);
+      await revokeGrants(env, workspaceOrigin(env, w.slug), w.slug, email, hub);
+    } catch (err) {
+      console.error(JSON.stringify({ ops: "sign_out_everywhere_partial", slug: w.slug, message: (err as Error).message }));
+    }
+  }
 }
 
 /** Actions that take over or end an account need a sign-in in the last half hour (a stolen cookie isn't enough). */
@@ -1427,9 +1457,15 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         await hub.setPlan(fix.plan, fix.until);
         return Response.json({ error: existing.status === "paused" ? "This workspace's subscription is paused: resume it from Manage billing." : "This workspace already has a subscription; reload to see it." }, { status: 409 });
       }
+      // Clicking Upgrade again soon after (the payment's webhook can lag) reopens the same checkout, which Creem
+      // charges at most once, instead of starting a second one.
+      const recent = await env.OAUTH_KV.get(`${CHECKOUT_PREFIX}${slug}`).catch(() => null);
+      if (recent) return Response.json({ url: recent });
       try {
         const created = (await directory(env).workspace(slug))?.createdAt ?? null;
-        return Response.json({ url: await startCheckout(env, { workspace: slug, created, email, successUrl: `${url.origin}/settings?billing=done` }) });
+        const checkout = await startCheckout(env, { workspace: slug, created, email, successUrl: `${url.origin}/settings?billing=done` });
+        await env.OAUTH_KV.put(`${CHECKOUT_PREFIX}${slug}`, checkout, { expirationTtl: 15 * 60 }).catch(() => {});
+        return Response.json({ url: checkout });
       } catch (err) {
         if (err instanceof BillingError) return Response.json({ error: err.message }, { status: 503 });
         throw err;
@@ -1442,7 +1478,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       // The portal shows the payer's card and everything they pay for, so it's theirs alone.
       // Whoever paid, and only them (removing them doesn't hand it to anyone else). With no payer on record,
       // any admin; for anything else, we move it by hand.
-      if (record.payerEmail && record.payerEmail !== email) {
+      if (record.payerEmail && personKey(record.payerEmail) !== personKey(email)) {
         return Response.json({ error: `Billing is managed by ${record.payerEmail}, who paid for it. Ask them, or email ${contactEmail(env)} to move it.` }, { status: 403 });
       }
       try {
@@ -1502,6 +1538,8 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       return Response.json({ members, existed, emailed });
     }
     if (path === "/api/settings/tokens" && request.method === "POST") {
+      // A token outlives sessions, so a stolen cookie mustn't be enough to mint one.
+      if (!recentlySignedIn(viewer)) return Response.json({ error: "Sign in again to make a token.", reauth: true }, { status: 403 });
       return Response.json(await hub.createToken(email, String(body.label ?? "")));
     }
     const token = /^\/api\/settings\/tokens\/([a-z0-9]+)$/.exec(path);
@@ -1516,6 +1554,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
     }
     if (path === "/api/settings/hosts" && request.method === "POST") {
       if (!admin) return adminOnly();
+      if (body.allowed !== false && !recentlySignedIn(viewer)) return Response.json({ error: "Sign in again to approve a host.", reauth: true }, { status: 403 });
       return Response.json({ hosts: await hub.setHostAllowed(String(body.host ?? ""), body.allowed !== false) });
     }
     if (path === "/api/settings/join" && request.method === "POST") {
@@ -1699,19 +1738,21 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
     if (url.pathname === "/api/me/channels" && request.method === "POST") {
       const type = String(body.type) as ChannelType;
       if (!["pushover", "ntfy", "webhook", "webpush"].includes(type)) return Response.json({ error: "unknown channel type" }, { status: 400 });
+      // Everything you're notified about would go to it: a stolen cookie mustn't be enough (this device's push is fine).
+      if (type !== "webpush" && !recentlySignedIn(viewer)) return Response.json({ error: "Sign in again to add a channel.", reauth: true }, { status: 403 });
       const prepared = await prepareChannel(type, body, env);
       const id = await dir.addChannel(email, type, prepared.config, prepared.label);
       return Response.json({ id, label: prepared.label, reveal: prepared.reveal ?? null });
     }
-    if (url.pathname === "/api/me/passkeys/options" && request.method === "POST") return Response.json(await registrationOptions(env, dir, email));
     // Signing out everywhere: every session, on every workspace and device (this one too).
     if (url.pathname === "/api/me/sign-out-everywhere" && request.method === "POST") {
       await signOutEverywhere(env, email);
       return Response.json({ location: `${apexOrigin(env)}/login` }, { headers: { "Set-Cookie": clearSessionCookie() } });
     }
-    if ((url.pathname === "/api/me/passkeys/options" || url.pathname === "/api/me/passkeys") && request.method === "POST" && !recentlySignedIn(viewer)) {
-      return Response.json({ error: "Sign in again to save a passkey.", reauth: true }, { status: 403 });
+    if (url.pathname.startsWith("/api/me/passkeys") && (request.method === "POST" || request.method === "DELETE") && !recentlySignedIn(viewer)) {
+      return Response.json({ error: "Sign in again to change your passkeys.", reauth: true }, { status: 403 });
     }
+    if (url.pathname === "/api/me/passkeys/options" && request.method === "POST") return Response.json(await registrationOptions(env, dir, email));
     if (url.pathname === "/api/me/passkeys" && request.method === "POST") {
       const passkeys = await verifyRegistration(env, dir, email, String(body.token ?? ""), body.response as never, request.headers.get("User-Agent") ?? "");
       return Response.json({ passkeys });

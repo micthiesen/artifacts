@@ -129,12 +129,18 @@ function removeAt(root: unknown, tokens: string[], where: string): unknown {
 
 export type GrepMatch = { path: string; line: number; text: string };
 
+/** How much of each line a regex search tries (a minified or data line can be very long). */
+const LINE_TESTED = 1000;
+
 export function grepFiles(files: Record<string, string>, pattern: string, onlyPath?: string, limit = 50): GrepMatch[] {
   const literal = () => new RegExp(pattern.slice(0, 500).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   let re: RegExp;
-  // A pattern that could backtrack for ages (a repeated group that itself repeats, a back-reference) would stall
-  // the whole workspace while it runs, so it's searched for as plain text instead.
-  if (pattern.length > 200 || /\([^)]*[+*}][^)]*\)\s*[+*{]/.test(pattern) || /\\[1-9]/.test(pattern)) re = literal();
+  // A pattern that could backtrack for ages would stall the whole workspace while it runs, so it's searched for as
+  // plain text instead: any repeated group (`(a|aa)+`), a back-reference, or more than one open-ended repeat
+  // (`a*a*c` is cubic in a line). With one, a line costs at most its length squared, and only its first
+  // LINE_TESTED characters are tried.
+  const repeats = (pattern.match(/(?<!\\)[*+]|\{\d+,\d*\}/g) ?? []).length;
+  if (pattern.length > 200 || /\)\s*[+*?{]/.test(pattern) || /\\[1-9]|\\k</.test(pattern) || repeats > 1) re = literal();
   else {
     try {
       re = new RegExp(pattern, "i");
@@ -147,7 +153,7 @@ export function grepFiles(files: Record<string, string>, pattern: string, onlyPa
     if (onlyPath && path !== onlyPath) continue;
     const lines = content.split("\n");
     for (let i = 0; i < lines.length && out.length < limit; i++) {
-      if (re.test(lines[i])) out.push({ path, line: i + 1, text: lines[i].length > 300 ? `${lines[i].slice(0, 300)}…` : lines[i] });
+      if (re.test(lines[i].length > LINE_TESTED ? lines[i].slice(0, LINE_TESTED) : lines[i])) out.push({ path, line: i + 1, text: lines[i].length > 300 ? `${lines[i].slice(0, 300)}…` : lines[i] });
     }
   }
   return out;

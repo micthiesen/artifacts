@@ -114,7 +114,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetArtifact" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetInbox" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "slugForSubscription" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -146,6 +146,8 @@ const CASES_PER_PERSON_DAY = 5;
 const CASES_PER_DAY = 200;
 /** Inbox items kept per person. */
 const INBOX_KEEP = 200;
+/** ...and none older than this. */
+const INBOX_DAYS = 90;
 /** Error groups kept. */
 const ERROR_GROUPS_KEEP = 500;
 /** Ops events kept for the operator console. */
@@ -455,7 +457,9 @@ export class Directory extends DurableObject {
           u.customerId,
           u.subscriptionId,
           u.status,
-          u.periodEnd,
+          // A failed or expired subscription with no period end on record would otherwise keep Team for good:
+          // count its grace from now.
+          u.periodEnd ?? (["past_due", "unpaid", "expired"].includes(u.status) && !row?.period_end ? new Date().toISOString() : null),
           u.at,
           new Date().toISOString(),
           u.payerEmail,
@@ -484,6 +488,10 @@ export class Directory extends DurableObject {
     );
     this.markDirty();
     return this.billingPlan(slug);
+  }
+
+  slugForSubscription(subscriptionId: string): string | null {
+    return (this.sql.exec(`SELECT slug FROM billing WHERE subscription_id = ?`, subscriptionId).toArray()[0]?.slug as string | undefined) ?? null;
   }
 
   /** The plan a workspace's stored subscription pays for, or null when it has none (the operator sets its plan). */
@@ -758,7 +766,10 @@ export class Directory extends DurableObject {
       )
       .toArray().length > 0;
     // This person's latest INBOX_KEEP (ids are shared by everyone, so count theirs).
-    if (added) this.sql.exec(`DELETE FROM inbox WHERE email = ? AND id <= (SELECT id FROM inbox WHERE email = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, email, email, INBOX_KEEP);
+    if (added) {
+      this.sql.exec(`DELETE FROM inbox WHERE email = ? AND id <= (SELECT id FROM inbox WHERE email = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, email, email, INBOX_KEEP);
+      this.sql.exec(`DELETE FROM inbox WHERE email = ? AND at < ?`, email, new Date(Date.now() - INBOX_DAYS * 86_400_000).toISOString());
+    }
     return added;
   }
 
@@ -767,9 +778,22 @@ export class Directory extends DurableObject {
     for (const { email, ...item } of items.slice(0, 500)) this.addInbox(email, item);
   }
 
-  /** A deleted artifact's notifications leave everyone's inbox (they quote its comments). */
-  forgetArtifact(slug: string, artifactId: string) {
-    this.sql.exec(`DELETE FROM inbox WHERE slug = ? AND artifact_id = ?`, slug, artifactId);
+  /**
+   * Notifications leave inboxes when what they quote is gone or out of reach: an artifact's (deleted), or one
+   * person's for an artifact or a whole workspace (unshared, removed). Rows from before inbox entries named
+   * their workspace and artifact match by address.
+   */
+  forgetInbox(f: { slug: string; artifactId?: string; email?: string }) {
+    const host = `https://${f.slug}.%`;
+    const where = f.artifactId
+      ? `((slug = ? AND artifact_id = ?) OR (slug IS NULL AND url LIKE ? || '/a/' || ? || '%'))`
+      : `(slug = ? OR (slug IS NULL AND url LIKE ?))`;
+    const args: SqlStorageValue[] = f.artifactId ? [f.slug, f.artifactId, host, f.artifactId] : [f.slug, host];
+    if (f.email) {
+      this.sql.exec(`DELETE FROM inbox WHERE email = ? AND ${where}`, f.email, ...args);
+    } else {
+      this.sql.exec(`DELETE FROM inbox WHERE ${where}`, ...args);
+    }
   }
 
   inbox(email: string, limit = 50): { items: InboxItem[]; unread: number } {
@@ -898,7 +922,11 @@ export class Directory extends DurableObject {
     // A late call from a deleted workspace mustn't leave rows a recreated one would inherit.
     if (role !== null && !this.workspace(slug)) return;
     this.markDirty();
-    if (role === null) this.sql.exec(`DELETE FROM memberships WHERE email = ? AND slug = ?`, email, slug);
+    if (role === null) {
+      this.sql.exec(`DELETE FROM memberships WHERE email = ? AND slug = ?`, email, slug);
+      // What they were told about it goes with their access (they can sign back in as a guest to what's shared).
+      this.forgetInbox({ slug, email });
+    }
     else {
       this.sql.exec(
         `INSERT INTO memberships (email, slug, role) VALUES (?, ?, ?) ON CONFLICT (email, slug) DO UPDATE SET role = excluded.role`,
@@ -1132,14 +1160,16 @@ export class Directory extends DurableObject {
     const cursor = await startRestore(bucket, BACKUP_ROOT, run, DIRECTORY_TABLES, this.schemaVersion());
     const pages = await readRun(bucket, cursor);
     await this.backup();
-    createShadows(this.ctx.storage, DIRECTORY_TABLES);
+    // Only the tables the run has: one from before support and the inbox were backed up leaves those as they are.
+    const tables = cursor.tables ?? DIRECTORY_TABLES;
+    createShadows(this.ctx.storage, tables);
     try {
-      for (const p of pages) loadShadow(this.ctx.storage, DIRECTORY_TABLES, p.table, p.rows);
+      for (const p of pages) loadShadow(this.ctx.storage, tables, p.table, p.rows);
     } catch (err) {
-      dropShadows(this.ctx.storage, DIRECTORY_TABLES);
+      dropShadows(this.ctx.storage, tables);
       throw err;
     }
-    swapShadows(this.ctx.storage, DIRECTORY_TABLES);
+    swapShadows(this.ctx.storage, tables);
     return this.importDone();
   }
 

@@ -34,7 +34,7 @@ type Settings = {
     until?: string | null;
   };
 };
-type Notice = { tone: "ok" | "error"; text: string; signIn?: boolean; reveal?: string; snippet?: string };
+type Notice = { tone: "ok" | "warn" | "error"; text: string; signIn?: boolean; reveal?: string; snippet?: string };
 
 const main = document.getElementById("settings")!;
 let data: Settings;
@@ -50,7 +50,9 @@ async function api<T>(path: string, init?: { method?: string; body?: unknown }):
     body: init?.body ? JSON.stringify(init.body) : undefined,
   });
   if (res.status === 401) throw new SessionEnded("Your session ended.");
-  const out = (await res.json().catch(() => ({}))) as T & { error?: string };
+  const out = (await res.json().catch(() => ({}))) as T & { error?: string; reauth?: boolean };
+  // Some changes (agent tokens, approving a host) need a recent sign-in: say so, with a way to sign in again.
+  if (out.reauth) throw new SessionEnded(out.error ?? "Sign in again to do that.");
   if (!res.ok) throw new Error(out.error ?? `HTTP ${res.status}`);
   return out;
 }
@@ -92,12 +94,12 @@ function copyRow(value: string) {
 }
 
 const failed = (err: unknown): Notice =>
-  err instanceof SessionEnded ? { tone: "error", text: "Your session ended.", signIn: true } : { tone: "error", text: (err as Error).message };
+  err instanceof SessionEnded ? { tone: "error", text: err.message, signIn: true } : { tone: "error", text: (err as Error).message };
 
 function noticeNode(n: Notice) {
   // Errors interrupt: a failed action or an ended session is announced at once.
   const el = h("div", { class: `notice ${n.tone}`, role: n.tone === "error" ? "alert" : "status" }, n.text);
-  if (n.signIn) el.append(" ", h("a", { href: `/login?return=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in again"));
+  if (n.signIn) el.append(" ", h("a", { href: `/login?fresh=1&return=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in again"));
   if (n.reveal) {
     el.append(copyRow(n.reveal));
     if (n.snippet) el.append(h("p", { class: "muted small" }, "Or add it to Claude Code:"), copyRow(n.snippet));
@@ -133,9 +135,22 @@ async function act(fn: () => Promise<unknown>, ok?: string | (() => string)) {
   }
 }
 
+const size = (b: number) =>
+  b < 1024 * 1024 ? "under 1 MB" : b >= 1024 ** 3 ? `${Math.round((b / 1024 ** 3) * 10) / 10} GB` : `${Math.round(b / 1024 / 1024)} MB`;
+
 const FREE = PLANS.free.limits;
 /** What moving back to Free means, said where the customer decides. */
-const AFTER_FREE = `After that, this workspace keeps everything but can't add anything while it's over ${FREE.artifacts} artifacts or ${FREE.members} members.`;
+const AFTER_FREE = `After that, this workspace keeps everything but can't add anything while it's over ${FREE.artifacts} artifacts, ${FREE.members} members or ${size(FREE.bytes!)} of storage.`;
+
+/** Statuses after which a subscription can't charge again. */
+const ENDED = ["canceled", "expired", "scheduled_cancel"];
+
+/** Whether you see Manage billing: the payer does, and so does every admin once the payer is no longer one. */
+function seesBilling(): boolean {
+  const payer = data.billing?.subscription?.payer ?? null;
+  const payerAdmin = payer !== null && data.members.some((m) => m.email === payer && m.role === "admin");
+  return !payerAdmin || payer === data.you.email.toLowerCase();
+}
 
 /** Admins, while billing is on: upgrade to Team, or manage the subscription with the payment provider. */
 function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement {
@@ -149,35 +164,36 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
     });
   const day = (v: string) => new Date(v).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   const plainUntil = data.plan.until ? day(data.plan.until) : null;
+  const payer = sub?.payer ?? null;
+  const mine = seesBilling();
   const state = !team
     ? `This workspace is on Free. Team is $${billing.price.amount} a ${billing.price.period} for the whole workspace: no artifact or member limit, and more storage. Guests are always free.`
     : sub && ["active", "trialing", "paid"].includes(sub.status)
       ? `Team, paid${until ? ` through ${until}` : ""}.`
       : sub && ["past_due", "unpaid", "expired"].includes(sub.status)
-        ? `Team, but the last payment didn't go through. Update the card in Manage billing${plainUntil ? ` by ${plainUntil}` : ""} to keep it.`
+        ? `Team, but the last payment didn't go through. ${mine ? "Update the card in Manage billing" : `Ask ${payer} to update the card`}${plainUntil ? ` by ${plainUntil}` : ""} to keep it.`
         : sub?.status === "paused"
-          ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is paused. Resume it from Manage billing to keep Team. ${AFTER_FREE}`
+          ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is paused. ${mine ? "Resume it from Manage billing" : `Ask ${payer} to resume it`} to keep Team. ${AFTER_FREE}`
           : data.plan.until || sub?.status === "scheduled_cancel"
             ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is canceled. Subscribe again to keep Team. ${AFTER_FREE}`
             : "Team, arranged with us directly.";
   // Matches the server: a subscription that's canceled or lapsed to Free can be replaced by a new one.
   const live = sub && sub.status !== "canceled" && team;
-  const payer = sub?.payer ?? null;
-  const payerAdmin = payer !== null && data.members.some((m) => m.email === payer && m.role === "admin");
-  const mine = !payerAdmin || payer === data.you.email.toLowerCase();
   const actions = h("div", { class: "row" });
   const notes: HTMLElement[] = [];
   // Canceled with paid time left: subscribing again keeps Team past the date (the new subscription takes over).
   const resubscribe = team && sub?.status === "canceled" && Boolean(data.plan.until);
   if ((!team && !live) || resubscribe) {
     const b = btn(resubscribe ? "Subscribe again" : "Upgrade to Team", () => go("/api/settings/billing/checkout"));
-    if (!billing.ready || checkoutPending) {
+    if (!billing.ready || checkout !== "idle") {
       b.setAttribute("disabled", "");
       b.setAttribute("aria-describedby", "billing-not-ready");
       notes.push(
-        checkoutPending
+        checkout === "pending"
           ? h("p", { class: "muted small", id: "billing-not-ready" }, "Waiting for the payment to be confirmed…")
-          : h("p", { class: "muted small", id: "billing-not-ready" }, "Upgrades are unavailable for now. ", h("a", { href: "/support" }, "Ask us"), " and we'll move this workspace to Team."),
+          : checkout === "stuck"
+            ? h("p", { class: "muted small", id: "billing-not-ready" }, "Don't pay again: ", h("a", { href: "/support" }, "contact support"), " and we'll check.")
+            : h("p", { class: "muted small", id: "billing-not-ready" }, "Upgrades are unavailable for now. ", h("a", { href: "/support" }, "Ask us"), " and we'll sort out an upgrade."),
       );
     }
     actions.append(b);
@@ -212,6 +228,14 @@ function deleteSection(): HTMLElement[] {
       }),
     "button small danger-solid",
   );
+  // Deleting doesn't stop a subscription, so it has to end first.
+  const sub = data.billing?.subscription;
+  const charging = Boolean(sub && !ENDED.includes(sub.status));
+  if (charging) {
+    go.setAttribute("disabled", "");
+    confirm.setAttribute("disabled", "");
+    go.setAttribute("aria-describedby", "delete-billing");
+  }
   const others = data.members.filter((m) => m.role === "admin" && m.email !== data.you.email);
   const handOver: HTMLElement[] = [];
   if (others.length) {
@@ -243,6 +267,9 @@ function deleteSection(): HTMLElement[] {
       { class: "card-section" },
       h("h2", {}, "Delete workspace"),
       h("p", { class: "muted" }, `Deletes every artifact, comment and member, and its backups. It can't be undone: download a copy above first. Type ${slug} to confirm.`),
+      ...(charging
+        ? [h("p", { class: "muted small", id: "delete-billing" }, seesBilling() ? "Cancel the subscription in Manage billing first." : `Ask ${sub!.payer} to cancel the subscription first.`)]
+        : []),
       h("div", { class: "row" }, confirm, go),
     ),
   ];
@@ -312,30 +339,40 @@ function exportSection(): HTMLElement {
 }
 
 // Back from checkout: the plan changes once the payment provider tells us, usually within a few seconds.
-// Until then Upgrade stays off (a second checkout would mean paying twice), and we check back for a minute.
-let checkoutPending = false;
+// Until then Upgrade stays off (a second checkout would mean paying twice), and we check back for a minute
+// without re-rendering, so what you type and the notice stay put. If it never comes, Upgrade stays off until reload.
+let checkout: "idle" | "pending" | "stuck" = "idle";
 if (new URLSearchParams(location.search).get("billing") === "done") {
   notice = { tone: "ok", text: "Thanks! Your workspace moves to Team as soon as the payment is confirmed, usually within a few seconds." };
-  history.replaceState(null, "", location.pathname);
-  checkoutPending = true;
+  history.replaceState(null, "", location.pathname + location.hash);
+  checkout = "pending";
   let tries = 0;
+  // Only the plan counts: an earlier subscription's record is already there on a resubscribe.
+  const confirmed = (s: Settings) => s.plan.id === "team" && !(s.billing?.subscription?.status === "canceled" && s.plan.until);
   const check = async () => {
     tries++;
+    let fresh: Settings | null = null;
     try {
-      await load();
+      fresh = await api<Settings>("/api/settings");
     } catch {
       // try again next time
     }
-    // Only the plan counts: an earlier subscription's record is already there on a resubscribe.
-    if (data?.plan.id === "team" && !(data.billing?.subscription?.status === "canceled" && data.plan.until)) {
-      checkoutPending = false;
+    if (fresh && confirmed(fresh)) {
+      checkout = "idle";
+      data = fresh;
       notice = { tone: "ok", text: "Payment confirmed: this workspace is on Team." };
       render();
-    } else if (tries < 20) setTimeout(check, 3000);
-    else {
-      checkoutPending = false;
-      notice = { tone: "ok", text: "The payment hasn't been confirmed yet. If you were charged, it will show here soon; email us if it doesn't." };
-      render();
+    } else if (tries < 20) {
+      if (fresh && data && (fresh.plan.id !== data.plan.id || fresh.plan.until !== data.plan.until)) {
+        data = fresh;
+        render();
+      }
+      setTimeout(check, 3000);
+    } else {
+      checkout = "stuck";
+      if (fresh) data = fresh;
+      notice = { tone: "warn", text: "The payment hasn't been confirmed yet." };
+      if (data) render();
     }
   };
   setTimeout(check, 3000);
@@ -418,8 +455,7 @@ function render() {
   // Only plans with limits say anything: there's nothing to buy yet.
   const { limits, usage } = data.plan;
   if (limits.artifacts !== null || limits.bytes !== null || limits.members !== null) {
-    const mb = (b: number) =>
-      b < 1024 * 1024 ? "under 1 MB" : b >= 1024 ** 3 ? `${Math.round((b / 1024 ** 3) * 10) / 10} GB` : `${Math.round(b / 1024 / 1024)} MB`;
+    const mb = size;
     const parts = [
       limits.artifacts !== null && `${usage.artifacts} of ${limits.artifacts} artifacts (archived included)`,
       limits.members !== null && `${usage.members} of ${limits.members} members`,
@@ -435,6 +471,8 @@ function render() {
     if (near && data.billing && data.plan.id === "free") usageLine.append(" ", h("a", { href: "#plan-and-billing" }, "Upgrade to Team for more room"));
     else if (near && !admin) usageLine.append(" For more room, ask a workspace admin to upgrade, or delete artifacts you don't need.");
     sections.push(usageLine);
+    // On Free, the way to more room comes first.
+    if (admin && data.billing && data.plan.id === "free") sections.push(billingSection(data.billing));
     // Over a limit (say, after moving to Free): say what still works and what doesn't.
     const over = [
       limits.artifacts !== null && usage.artifacts > limits.artifacts && "artifacts",
@@ -444,7 +482,7 @@ function render() {
     if (over.length) {
       // Part of the page, not news: no alert role, or it would be announced on every re-render.
       const overNotice = noticeNode({
-        tone: "error",
+        tone: "warn",
         text: `This workspace is over the ${data.plan.label} plan's limit for ${over.join(" and ")}. Everything here still opens and can be changed, but nothing that adds to it (new artifacts, members or stored content) until it's back under${data.billing ? ", or the workspace moves to Team" : ""}. Archiving doesn't free room; deleting does.`,
       });
       overNotice.removeAttribute("role");
@@ -620,7 +658,7 @@ function render() {
         h("div", { class: "row" }, name, btn("Rename", () => act(() => api("/api/settings/name", { body: { name: name.value } }), "Renamed."))),
       ),
     );
-    if (data.billing) sections.push(billingSection(data.billing));
+    if (data.billing && data.plan.id !== "free") sections.push(billingSection(data.billing));
     sections.push(exportSection());
     if (data.canDelete) sections.push(...deleteSection());
   }
