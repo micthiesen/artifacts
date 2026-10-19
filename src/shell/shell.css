@@ -807,3 +807,9 @@ div.thread-anchor { cursor: default; }
 .inbox-title { font-weight: 550; overflow-wrap: anywhere; }
 .inbox-body { margin-top: .2rem; overflow-wrap: anywhere; white-space: pre-line; }
 .inline-form { margin-top: .5rem; }
+/* Cards stacked directly in a page (Help & feedback, Report) keep the same gap as in settings. */
+main.content > .card-section + .card-section,
+main.content > .card-section + section,
+main.content > section + .card-section { margin-top: 1.25rem; }
+/* A text area is as tall as its rows, not a one-line input. */
+textarea.input { height: auto; min-height: 7rem; padding: .55rem .8rem; line-height: 1.5; resize: vertical; }
