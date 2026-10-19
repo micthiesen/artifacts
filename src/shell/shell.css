@@ -598,10 +598,7 @@ div.thread-anchor { cursor: default; }
 /* Sign-in and consent. */
 .code-input { font-variant-numeric: tabular-nums; letter-spacing: .25em; font-size: 18px; max-width: 12rem; }
 .resend { margin-top: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; font-size: 14px; }
-.consent-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.25rem; }
-.consent-pick { flex-basis: 100%; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); padding: .5rem .9rem .6rem; margin: 0 0 .75rem; text-align: left; }
-.consent-pick legend { padding: 0 .3rem; font-weight: 600; }
-.consent-option { display: flex; gap: .55rem; align-items: center; padding: .4rem 0; overflow-wrap: anywhere; cursor: pointer; }
+.consent-actions { display: flex; gap: .5rem; margin-top: 1.25rem; }
 .consent p { line-height: 1.6; }
 
 /* Splash: the apex for people who aren't signed in. Audience: developers. */

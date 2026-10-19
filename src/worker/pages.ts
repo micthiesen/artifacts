@@ -572,19 +572,8 @@ export function consentPage(
   email: string,
   brand: Brand,
   admin = false,
-  /** At the apex: the workspaces to choose from (the agent works in one). */
-  workspaces?: { slug: string; name: string; admin: boolean }[],
 ): Response {
   const name = escapeHtml(details.clientName);
-  const where = workspaces ? "a workspace" : escapeHtml(brand.name);
-  const pick = workspaces
-    ? `<fieldset class="consent-pick"><legend>Which workspace?</legend>${workspaces
-        .map(
-          (w, i) =>
-            `<label class="consent-option"><input type="radio" name="workspace" value="${escapeHtml(w.slug)}"${i === 0 ? " checked" : ""} required> ${escapeHtml(w.name)}${w.admin ? ' <span class="muted small">(admin)</span>' : ""}</label>`,
-        )
-        .join("")}</fieldset>`
-    : "";
   const origin = details.clientDomain
     ? `Published by <strong>${escapeHtml(details.clientDomain)}</strong>.`
     : "This app registered itself, so its name isn't verified.";
@@ -594,11 +583,11 @@ export function consentPage(
   return page(
     `Connect ${details.clientName} · ${brand.name}`,
     `${topBar(brand)}<main class="content"><section class="empty consent">
-<h1>Connect ${name} to ${where}?</h1>
+<h1>Connect ${name} to ${escapeHtml(brand.name)}?</h1>
 <p class="muted">${origin} Access goes to <strong>${escapeHtml(details.redirectHost)}</strong>.</p>
 ${local}
-<p>It will act as <strong>${escapeHtml(email)}</strong> in ${workspaces ? "the workspace you pick" : escapeHtml(brand.name)}, with your access: create artifacts, edit and share the ones you manage${admin ? " (as an admin, that's every artifact here)" : workspaces ? " (every artifact, in one where you're an admin)" : ""}, and read and reply to comments. You can disconnect it any time in workspace settings.</p>
-<form method="post" action="/authorize" class="consent-actions">${pick}<input type="hidden" name="handle" value="${escapeHtml(handle)}">
+<p>It will act as <strong>${escapeHtml(email)}</strong> in ${escapeHtml(brand.name)}, with your access: create artifacts, edit and share the ones you manage${admin ? " (as an admin, that's every artifact here)" : ""}, and read and reply to comments. You can disconnect it any time in workspace settings.</p>
+<form method="post" action="/authorize" class="consent-actions"><input type="hidden" name="handle" value="${escapeHtml(handle)}">
 <button class="button" name="decision" value="approve" type="submit">Connect</button>
 <button class="button secondary" name="decision" value="deny" type="submit">Cancel</button>
 </form></section></main>`,

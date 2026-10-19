@@ -246,42 +246,6 @@ const tamperedUrl = linkUrl.slice(0, cut) + (linkUrl[cut] === "A" ? "B" : "A") +
 const tampered = await fetch(tamperedUrl, { redirect: "manual" });
 check("tampered link rejected", tampered.status === 400, tampered.status);
 
-// One address for agents: the apex /mcp signs you in, asks which workspace, and works there.
-{
-  const b64u = (b: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const apexAsm = (await (await fetch(`${apex}/.well-known/oauth-authorization-server`)).json()) as any;
-  check("apex is an authorization server", apexAsm.authorization_endpoint === `${apex}/authorize`, apexAsm);
-  const challenge401 = await fetch(`${apex}/mcp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-  check("apex /mcp asks for sign-in", challenge401.status === 401 && /resource_metadata=/.test(challenge401.headers.get("WWW-Authenticate") ?? ""), challenge401.status);
-  const reg = (await (await fetch(`${apex}/oauth/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ client_name: "e2e apex", redirect_uris: ["http://127.0.0.1:9/cb"], token_endpoint_auth_method: "none" }) })).json()) as any;
-  const verifier = b64u(crypto.getRandomValues(new Uint8Array(32)));
-  const challenge = b64u(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
-  const q = new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9/cb", code_challenge: challenge, code_challenge_method: "S256", state: "s", resource: `${apex}/mcp`, scope: "artifacts" });
-  const apexCookie = await cookieFor(owner, new URL(apex).hostname);
-  const page = await fetch(`${apex}/authorize?${q}`, { headers: { Cookie: apexCookie }, redirect: "manual" });
-  const html = await page.text();
-  check("apex consent lists the workspace", html.includes(`name="workspace" value="${slug}"`), page.status);
-  const handle = /name="handle" value="([^"]+)"/.exec(html)?.[1] ?? "";
-  const consent = page.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-  const approved = await fetch(`${apex}/authorize`, {
-    method: "POST",
-    headers: { Cookie: `${apexCookie}; ${consent}`, Origin: apex, "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ handle, decision: "approve", workspace: slug }),
-    redirect: "manual",
-  });
-  const next = /url=([^"]+)"/.exec(await approved.text())?.[1]?.replace(/&amp;/g, "&") ?? "";
-  const code = next ? new URL(next).searchParams.get("code") : null;
-  check("apex consent hands back a code", approved.status === 200 && Boolean(code), approved.status);
-  const tokens = (await (await fetch(`${apex}/oauth/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code: code ?? "", redirect_uri: "http://127.0.0.1:9/cb", client_id: reg.client_id, code_verifier: verifier, resource: `${apex}/mcp` }) })).json()) as any;
-  const viaApex = await fetch(`${apex}/mcp`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${tokens.access_token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "artifact_read", arguments: { id } } }),
-  });
-  const read = (await viaApex.json()) as any;
-  check("apex /mcp works in the chosen workspace", read.result?.structuredContent?.id === id && String(read.result?.structuredContent?.url).startsWith(origin), read);
-}
-
 const del = await call("artifact_delete", { id });
 check("delete", !del.isError, del);
 await finish();
