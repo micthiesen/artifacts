@@ -279,6 +279,50 @@ test("each workspace's consent uses its own authorization server, whichever this
   expect((await authorize(BETA)).status).toBe(200);
 });
 
+test("one address for agents: artifacts.boo/mcp signs you in, asks which workspace, and works there", async () => {
+  const b64u = (b: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const asm = (await (await fetchAs(`${APEX}/.well-known/oauth-authorization-server`)).json()) as { authorization_endpoint: string };
+  expect(asm.authorization_endpoint).toBe(`${APEX}/authorize`);
+  // Without a token, /mcp says where to sign in.
+  expect((await fetchAs(`${APEX}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "" }, body: "{}" })).status).toBe(401);
+  const reg = (await (
+    await fetchAs(`${APEX}/oauth/register`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "" }, body: JSON.stringify({ client_name: "Apex client", redirect_uris: ["http://127.0.0.1:9/cb"], token_endpoint_auth_method: "none" }) })
+  ).json()) as { client_id: string };
+  const verifier = b64u(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = b64u(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+  const q = new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9/cb", code_challenge: challenge, code_challenge_method: "S256", state: "s", resource: `${APEX}/mcp`, scope: "artifacts" });
+  expect((await fetchAs(`${APEX}/authorize?${q}`)).headers.get("Location")).toContain("/login?return=");
+  const { signToken } = await import("../src/worker/session.ts");
+  const cookie = `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: MIA, h: "artifacts.test" })}`;
+  const page = await fetchAs(`${APEX}/authorize?${q}`, { cookie });
+  const html = await page.text();
+  expect(html).toContain('name="workspace" value="acme"');
+  const handle = /name="handle" value="([^"]+)"/.exec(html)![1];
+  const consent = page.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+  const post = (workspace: string) =>
+    fetchAs(`${APEX}/authorize`, { method: "POST", cookie: `${cookie}; ${consent}`, headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ handle, decision: "approve", workspace }) });
+  // Only your own workspaces.
+  expect((await post("beta")).status).toBe(400);
+  const approved = await post("acme");
+  expect(approved.status).toBe(200);
+  const code = new URL(await nextUrl(approved)).searchParams.get("code")!;
+  const tokens = (await (
+    await fetchAs(`${APEX}/oauth/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "" }, body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: "http://127.0.0.1:9/cb", client_id: reg.client_id, code_verifier: verifier, resource: `${APEX}/mcp` }) })
+  ).json()) as { access_token: string };
+  const call = (id: number, method: string, params: unknown = {}) =>
+    fetchAs(`${APEX}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${tokens.access_token}`, "Content-Type": "application/json", Origin: "" }, body: JSON.stringify({ jsonrpc: "2.0", id, method, params }) });
+  const made = ((await (await call(1, "tools/call", { name: "artifact_create", arguments: { title: "From the apex", files: { "index.md": "# Hi\n" } } })).json()) as any).result;
+  const id = made.structuredContent.id;
+  expect(h.hub.meta(id)!.owner).toBe(MIA);
+  // Links it gives out are the workspace's.
+  expect(JSON.stringify(made)).toContain(`${ACME}/a/${id}`);
+  // The grant shows in that workspace's settings, and leaving the workspace ends it.
+  const settings = (await (await fetchAs(`${ACME}/api/settings`, { cookie: `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: MIA, h: "acme.artifacts.test" })}` })).json()) as any;
+  expect(settings.apps.map((a: any) => a.client)).toContain("Apex client");
+  await fetchAs(`${ACME}/api/settings/members`, { method: "POST", cookie: `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: ADMIN, h: "acme.artifacts.test" })}`, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: MIA, role: null }) });
+  expect((await call(2, "tools/list")).status).toBe(401);
+});
+
 test("OAuth: consent, code exchange with PKCE, then MCP as the member", async () => {
   const b64u = (b: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const reg = (await (

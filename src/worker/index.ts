@@ -138,7 +138,9 @@ export default {
       return Response.redirect(url.toString(), 301);
     }
     try {
-    if (url.hostname === env.APEX_HOST) response = await apex(request, env, ctx);
+    // The apex is an OAuth server too, for its own /mcp: one address an agent can connect to, which signs you in
+    // and asks which workspace.
+    if (url.hostname === env.APEX_HOST) response = await providerFor(url.origin).fetch(request, env, ctx);
     else {
       // Unknown hosts stop here, so a random subdomain never wakes a Durable Object.
       const slug = slugOf(url.hostname, env);
@@ -410,7 +412,10 @@ function oauthFor(origin: string) {
   const options: OAuthProviderOptions<Env> = {
     apiRoute: "/mcp",
     apiHandler: { fetch: (request, env, ctx) => mcpApi(request, env, (ctx as ExecutionContext & { props: McpProps }).props) },
-    defaultHandler: { fetch: (request, env) => workspaceRoute(request as Request, env as Env) },
+    defaultHandler: {
+      fetch: (request, env, ctx) =>
+        new URL(request.url).hostname === (env as Env).APEX_HOST ? apex(request as Request, env as Env, ctx as ExecutionContext) : workspaceRoute(request as Request, env as Env),
+    },
     authorizeEndpoint: "/authorize",
     tokenEndpoint: "/oauth/token",
     clientRegistrationEndpoint: "/oauth/register",
@@ -442,7 +447,9 @@ function mcpRefusal(status: number, message: string): Response {
 
 async function mcpApi(request: Request, env: Env, props: McpProps): Promise<Response> {
   const url = new URL(request.url);
-  const slug = slugOf(url.hostname, env);
+  // On the apex /mcp, the workspace is the one picked when connecting.
+  const onApex = url.hostname === env.APEX_HOST;
+  const slug = onApex ? props.slug : slugOf(url.hostname, env);
   const record = slug ? await workspaceRecord(env, slug) : null;
   if (!slug || !record || props.slug !== slug) return mcpRefusal(404, "unknown workspace");
   if (record.suspended) return mcpRefusal(403, `${record.name} is suspended`);
@@ -453,7 +460,7 @@ async function mcpApi(request: Request, env: Env, props: McpProps): Promise<Resp
   if (!access.member) return mcpRefusal(403, `${props.email} is no longer a member of ${record.name}; ask a workspace admin to add you back`);
   // A grant from a deleted workspace that had this name doesn't work here.
   if (props.gen && access.createdAt && props.gen !== access.createdAt) return mcpRefusal(401, "This connection was for an earlier workspace at this address; connect again.");
-  return handleMcp(request, { hub, origin: url.origin, env, slug, workspace: record.name, admin: access.member === "admin", person: props.email, actor: "agent" });
+  return handleMcp(request, { hub, origin: onApex ? workspaceOrigin(env, slug) : url.origin, env, slug, workspace: record.name, admin: access.member === "admin", person: props.email, actor: "agent" });
 }
 
 async function workspaceRoute(request: Request, env: Env): Promise<Response> {
@@ -769,6 +776,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
     return indexable(policyPage(path.slice(1) as PolicyKind, brand, contactEmail(env), billingOn(env)));
   }
   if (path === "/report") return reportRoute(request, url, env, brand);
+  if (path === "/authorize") return apexAuthorize(request, url, env, viewer, brand);
   if (path === "/help") return indexable(helpPage(brand, contactEmail(env)));
   if (path === "/support") return supportRoute(request, url, env, viewer.email ? { email: viewer.email, operator } : null, brand);
   if (path === "/inbox") return inboxRoute(request, url, env, viewer.email ? { email: viewer.email, operator } : null, brand);
@@ -1361,6 +1369,65 @@ async function authorize(request: Request, url: URL, env: Env, hub: HubApi, view
       }
       const approved = await oauth.approveConsent(request, handle, { remember: { ...remember, maxAgeSeconds: 90 * 86400 } });
       return complete(approved.request, approved.headers);
+    }
+    return new Response("method not allowed", { status: 405 });
+  } catch (err) {
+    if (err instanceof AuthorizationError && err.redirectTo) return Response.redirect(err.redirectTo, 302);
+    if (err instanceof AuthorizationError) return local(err.description ?? "This sign-in request isn't valid. Start again from your agent.");
+    if (err instanceof CimdFetchError) return local("This app could not be verified. Start again from your agent.");
+    throw err;
+  }
+}
+
+/**
+ * Connecting an agent at the apex's /mcp: sign in, then pick which of your workspaces it works in. The grant is
+ * the same as one made at that workspace (same user id, recorded there), so leaving the workspace, signing out
+ * everywhere or disconnecting it in settings ends it the same way.
+ */
+async function apexAuthorize(request: Request, url: URL, env: Env, viewer: Viewer, brand: Brand): Promise<Response> {
+  const oauth = oauthApi(url.origin, env);
+  const local = (message: string, status = 400) => messagePage("Can't connect", message, status, { href: "/workspaces", label: "Your workspaces" }, brand);
+  try {
+    if (!viewer.email) return Response.redirect(`${url.origin}/login?return=${encodeURIComponent(url.pathname + url.search)}`, 302);
+    const email = viewer.email;
+    const workspaces = (await directory(env).membershipsOf(email)).filter((w) => w.role !== "guest" && !w.suspended);
+    if (request.method === "GET") {
+      const authRequest = await oauth.parseAuthRequest(request);
+      if (!workspaces.length) {
+        return local(`${email} isn't a member of a workspace yet, so there's nowhere to connect an agent. Make one${env.SELF_SERVE === "on" ? " from your workspaces" : ", or ask a workspace admin to add you"}, then connect again.`, 403);
+      }
+      const details = await oauth.describeConsent(authRequest);
+      const consent = await oauth.beginConsent(authRequest);
+      const page = consentPage(details, consent.handle, email, brand, false, workspaces.map((w) => ({ slug: w.slug, name: w.name, admin: w.role === "admin" })));
+      for (const [k, v] of consent.headers) if (k.toLowerCase() !== "content-type") page.headers.append(k, v);
+      return page;
+    }
+    if (request.method === "POST") {
+      if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
+      const form = await request.formData();
+      const handle = String(form.get("handle") ?? "");
+      if (form.get("decision") !== "approve") {
+        const denied = await oauth.denyConsent(request, handle);
+        return continuePage(denied.redirectTo, denied.headers);
+      }
+      const slug = String(form.get("workspace") ?? "");
+      if (!workspaces.some((w) => w.slug === slug)) return local("Pick one of your workspaces, then connect again.");
+      const hub = workspaceHub(env, slug);
+      const access = await hub.access(email);
+      if (!access.member) return local(`${email} isn't a member of that workspace any more.`, 403);
+      const approved = await oauth.approveConsent(request, handle);
+      const client = await oauth.lookupClient(approved.request.clientId);
+      const name = client?.clientName ?? approved.request.clientId;
+      const { redirectTo } = await oauth.completeAuthorization({
+        request: approved.request,
+        userId: grantUser(slug, email),
+        metadata: { client: name, at: new Date().toISOString() },
+        scope: approved.request.scope,
+        props: { email, slug, ...(access.createdAt ? { gen: access.createdAt } : {}) } satisfies McpProps,
+      });
+      const grantId = new URL(redirectTo).searchParams.get("code")?.split(":")[1];
+      if (grantId) await hub.recordGrant(grantId, email, name);
+      return continuePage(redirectTo, approved.headers);
     }
     return new Response("method not allowed", { status: 405 });
   } catch (err) {
