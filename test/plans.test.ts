@@ -64,6 +64,10 @@ test("Free stops new artifacts and members at its limits, and deleting makes roo
     last = r.id;
   }
   await expect(h.hub.create({ title: "one too many", files, owner: ADMIN })).rejects.toThrow(`allows ${max} artifacts`);
+  // Reaching it is recorded (once a day), the free plan's readout.
+  await new Promise((r) => setTimeout(r, 0));
+  await expect(h.hub.create({ title: "again", files, owner: ADMIN })).rejects.toThrow("archived ones count");
+  expect(h.directory.opsEvents({ kind: "plan_limit_reached" })).toHaveLength(1);
   // Editing what exists still works.
   expect((await h.hub.writeFiles(last, { "index.mdx": "# Changed\n" })).ok).toBe(true);
   h.hub.delete(last);

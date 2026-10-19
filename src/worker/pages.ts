@@ -494,7 +494,7 @@ function createForm(c: { error?: string; name?: string; slug?: string; suffix: s
   }
   return `<section class="card-section create-workspace">
 <h2>Create a workspace</h2>
-<p class="muted">A workspace is where your agent publishes artifacts for you and your team. It's free for up to ${free.artifacts} artifacts, ${free.members} members and ${Math.round((free.bytes ?? 0) / 1024 / 1024)} MB; people you share artifacts with never need an account or a plan.</p>
+<p class="muted">A workspace is where your agent publishes artifacts for you and your team. It's free for up to ${free.artifacts} artifacts (archived ones included), ${free.members} members and ${Math.round((free.bytes ?? 0) / 1024 / 1024)} MB; people you share artifacts with never need an account or a plan.</p>
 ${c.error ? `<p class="notice error" role="alert">${escapeHtml(c.error)}</p>` : ""}
 <form method="post" action="/workspaces" class="create-form">
 <label class="field"><span>Name</span><input class="input" name="name" required maxlength="80" autocomplete="organization" value="${escapeHtml(c.name ?? "")}" placeholder="Acme"></label>
@@ -604,7 +604,7 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
 <p class="splash-lede muted">A workspace pays, once, however many people read its artifacts. Guests, the people you share with, never need an account or a plan.</p></section>
 <section class="splash-grid pricing-grid">
 ${plan("Free", `$0 <span class="muted">/ workspace</span>`, "For trying it out, or a small personal workspace.", [
-  `${free.artifacts} artifacts and ${free.members} members`,
+  `${free.artifacts} artifacts (archived ones count; delete to make room) and ${free.members} members`,
   `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves and ${free.emailsPerDay} emails a day`,
   "Unlimited guests, approvals, forms, comments and MCP events",
 ], selfServe ? `<a class="button secondary" href="/workspaces">Start free</a>` : `<p class="muted small">New workspaces are by invitation for now.</p>`)}

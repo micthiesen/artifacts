@@ -392,7 +392,7 @@ function render() {
     const mb = (b: number) =>
       b < 1024 * 1024 ? "under 1 MB" : b >= 1024 ** 3 ? `${Math.round((b / 1024 ** 3) * 10) / 10} GB` : `${Math.round(b / 1024 / 1024)} MB`;
     const parts = [
-      limits.artifacts !== null && `${usage.artifacts} of ${limits.artifacts} artifacts`,
+      limits.artifacts !== null && `${usage.artifacts} of ${limits.artifacts} artifacts (archived included)`,
       limits.members !== null && `${usage.members} of ${limits.members} members`,
       limits.bytes !== null && `${mb(usage.bytes)} of ${mb(limits.bytes)}`,
     ].filter((p): p is string => Boolean(p));

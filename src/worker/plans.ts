@@ -19,7 +19,7 @@ export type Limits = {
 };
 
 export const PLANS: Record<PlanId, { label: string; limits: Limits }> = {
-  free: { label: "Free", limits: { artifacts: 50, bytes: 250 * 1024 * 1024, members: 3, changesPerDay: 300, emailsPerDay: 50, inviteEmailsPerDay: 20 } },
+  free: { label: "Free", limits: { artifacts: 20, bytes: 250 * 1024 * 1024, members: 3, changesPerDay: 300, emailsPerDay: 50, inviteEmailsPerDay: 20 } },
   // A workspace is one Durable Object, which holds at most 10 GB: 5 GB of content leaves room for its
   // history, activity log and indexes. 5,000 saves a day is far past real use and bounds render checks.
   team: { label: "Team", limits: { artifacts: null, bytes: 5 * 1024 * 1024 * 1024, members: null, changesPerDay: 5000, emailsPerDay: 1000, inviteEmailsPerDay: 200 } },

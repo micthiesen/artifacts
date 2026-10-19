@@ -560,7 +560,13 @@ export class Workspace extends DurableObject {
     }[kind]();
     if (used < max) return;
     const size = max >= 1024 ** 3 ? `${max / 1024 ** 3} GB` : `${Math.round(max / 1024 / 1024)} MB`;
-    const limit = { artifacts: `${max} artifacts`, members: `${max} members`, bytes: `${size} of storage`, changesPerDay: `${max} saved changes a day` }[kind];
+    const limit = { artifacts: `${max} artifacts (archived ones count)`, members: `${max} members`, bytes: `${size} of storage`, changesPerDay: `${max} saved changes a day` }[kind];
+    // The free plan's experiment is whether people reach its limits, and then pay: record each one (once a day per kind).
+    const day = new Date().toISOString().slice(0, 10);
+    if (this.setting(`limit_hit_${kind}`) !== day) {
+      this.setSetting(`limit_hit_${kind}`, day);
+      void this.ops({ kind: "plan_limit_reached", message: `${plan.label} limit reached: ${limit}.`, detail: { limit: kind, plan: this.planId() } });
+    }
     // Read by people and by agents: say who can fix it, and never suggest deleting anything (that's a person's call).
     const fix =
       kind === "changesPerDay"
