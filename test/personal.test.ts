@@ -178,3 +178,35 @@ test("searching the list finds words in artifacts' contents too, only among what
   // Someone without access finds nothing.
   expect(ids("citric", "stranger@else.com")).toEqual([]);
 });
+
+test("links between artifacts: Linked from and link titles, only among what each person can open", async () => {
+  const b = await h.hub.create({ title: "Recipes", files: { "index.mdx": "# Recipes\n" }, owner: ADMIN });
+  if (!b.ok) throw new Error("create");
+  const a = await h.hub.create({ title: "Library", files: { "index.mdx": `# Library\n\n- https://acme.artifacts.test/a/${b.id}#n-1\n- [Again](/a/${b.id})\n` }, owner: ADMIN });
+  if (!a.ok) throw new Error("create");
+  const forB = h.hub.openArtifact(b.id, ADMIN, false) as { backlinks: { id: string; title: string }[] };
+  expect(forB.backlinks).toEqual([{ id: a.id, title: "Library" }]);
+  const forA = h.hub.openArtifact(a.id, ADMIN, false) as { linkTitles: Record<string, string> };
+  expect(forA.linkTitles).toEqual({ [b.id]: "Recipes" });
+  // Someone who can open the recipes but not the library doesn't learn it links there.
+  h.hub.share(b.id, { add: [{ email: "guest@else.example", role: "view" }] });
+  expect((h.hub.openArtifact(b.id, "guest@else.example", false) as { backlinks: unknown[] }).backlinks).toEqual([]);
+  // A presigned link learns nothing about other artifacts.
+  expect("backlinks" in (h.hub.openArtifact(b.id, ADMIN, true) as object)).toBe(false);
+  // Editing the link away, or deleting the linking artifact, removes it.
+  await h.hub.writeFiles(a.id, { "index.mdx": "# Library\n" });
+  expect((h.hub.openArtifact(b.id, ADMIN, false) as { backlinks: unknown[] }).backlinks).toEqual([]);
+});
+
+test("links already in artifacts are filled in by the backfill, a batch at a time", async () => {
+  const b = await h.hub.create({ title: "Target", files: { "index.mdx": "# Target\n" }, owner: ADMIN });
+  if (!b.ok) throw new Error("create");
+  const a = await h.hub.create({ title: "Source", files: { "index.mdx": `# Source\n\n[t](/a/${b.id})\n`, "data/x.json": `{"u":"/a/${b.id}"}` }, owner: ADMIN });
+  if (!a.ok) throw new Error("create");
+  // As after the migration: nothing recorded yet, a backfill pending.
+  h.ctx.storage.sql.exec(`DELETE FROM links`);
+  h.ctx.storage.sql.exec(`INSERT INTO settings (key, value) VALUES ('links_backfill', '') ON CONFLICT (key) DO UPDATE SET value = ''`);
+  expect((h.hub as unknown as { backfillLinks(): boolean }).backfillLinks()).toBe(false);
+  expect(h.ctx.storage.sql.exec(`SELECT artifact_id, to_id FROM links`).toArray()).toEqual([{ artifact_id: a.id, to_id: b.id }]);
+  expect(h.ctx.storage.sql.exec(`SELECT value FROM settings WHERE key = 'links_backfill'`).toArray()).toEqual([]);
+});

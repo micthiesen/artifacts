@@ -87,3 +87,18 @@ test("widths wider than a phone come back as warnings, not errors", async () => 
   expect(r.warnings?.some((w) => w.startsWith("chart.tsx: width: 640"))).toBe(true);
   expect(phoneWidthWarnings(["w-80", "w-full", "sm:min-w-[50rem]"], {})).toEqual([]);
 });
+
+test("data warnings: wrong-case-free missing columns, Notion placeholders, markdown in values, unused files", async () => {
+  const { dataWarnings } = await import("../src/worker/compile.ts");
+  const code = { "index.mdx": `<Table data="boards.json" columns="Name Layers Price" />` };
+  const data = {
+    "data/boards.json": [{ name: "A", layers: 2, inStock: "__NO__", note: "**bold**" }],
+    "data/unused.json": [{ x: 1 }],
+  };
+  const w = dataWarnings(code, data as never);
+  expect(w.some((x) => x.includes("__YES__"))).toBe(true);
+  expect(w.some((x) => x.includes("**markdown**"))).toBe(true);
+  expect(w.some((x) => x.startsWith("data/unused.json isn't used"))).toBe(true);
+  // "Name" and "Layers" match in another case; only Price is really missing.
+  expect(w.find((x) => x.startsWith('Table data="boards.json"'))).toContain("(Price)");
+});

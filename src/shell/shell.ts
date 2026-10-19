@@ -148,7 +148,10 @@ function post(msg: ShellMessage) {
 function maybeInit() {
   if (!frameReady || initSent || !snapshotReceived) return;
   initSent = true;
-  post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme() });
+  post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme(), backlinks: boot.backlinks, linkTitles: boot.linkTitles });
+  // A link to a section (/a/<id>#<section>) scrolls there once the page has rendered.
+  const section = sectionOf(location.hash);
+  if (section) post({ t: "scroll", target: section });
   // Comments and change marks follow the first render.
   sendThreads(lastThreads);
   if (marksOn && boot.since?.changedBlocks.length) post({ t: "changes", blocks: boot.since.changedBlocks });
@@ -197,6 +200,20 @@ showSince(boot, {
     marksOn = on;
     post({ t: "changes", blocks: on ? (boot.since?.changedBlocks ?? []) : [] });
   },
+});
+
+/** The section a URL fragment names, if it isn't a thread link. */
+function sectionOf(hash: string): string | null {
+  if (!hash || hash.startsWith("#thread=")) return null;
+  try {
+    return decodeURIComponent(hash.slice(1)) || null;
+  } catch {
+    return null;
+  }
+}
+window.addEventListener("hashchange", () => {
+  const section = sectionOf(location.hash);
+  if (section && initSent) post({ t: "scroll", target: section });
 });
 
 // #thread=<id> (from a notification) opens that thread once threads arrive.

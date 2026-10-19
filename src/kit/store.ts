@@ -16,6 +16,7 @@ let viewer: Viewer = ANON;
 let shared: Record<string, JsonValue> = {};
 let local: Record<string, JsonValue> = {};
 let presence: string[] = [];
+let links: { backlinks: { id: string; title: string }[]; linkTitles: Record<string, string> } = { backlinks: [], linkTitles: {} };
 let theme: Theme = "light";
 let initialized = false;
 let version = 0;
@@ -82,8 +83,11 @@ export function init(msg: {
   shared: Record<string, JsonValue>;
   presence: string[];
   theme: Theme;
+  backlinks?: { id: string; title: string }[];
+  linkTitles?: Record<string, string>;
 }) {
   viewer = msg.viewer ?? ANON;
+  links = { backlinks: msg.backlinks ?? [], linkTitles: msg.linkTitles ?? {} };
   local = { ...(msg.local ?? {}) };
   shared = { ...(msg.shared ?? {}) };
   presence = [...(msg.presence ?? [])];
@@ -96,6 +100,13 @@ export const isInitialized = () => initialized;
 // ---- viewer / presence / theme ---------------------------------------------
 
 export const getViewer = () => viewer;
+/** Artifacts linking here, and titles of those linked from here (both limited to what the viewer can open). */
+export const getLinks = () => links;
+/** The title of a workspace artifact a URL points at (/a/<id>, absolute or relative), if the viewer can open it. */
+export function linkTitle(href: string): string | null {
+  const m = /\/a\/(a[a-z0-9]{12})(?![a-z0-9])/.exec(href);
+  return m ? (links.linkTitles[m[1]] ?? null) : null;
+}
 export const getPresence = () => presence;
 export const getTheme = () => theme;
 

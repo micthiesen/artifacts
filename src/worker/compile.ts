@@ -338,8 +338,36 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
     return { errors: [{ path: "", message: `stylesheet: ${(err as Error).message}` }] };
   }
   const code = Object.fromEntries(paths.filter((p) => !p.startsWith("data/")).map((p) => [p, files[p]]));
-  const warnings = phoneWidthWarnings(candidates, code);
+  const warnings = [...phoneWidthWarnings(candidates, code), ...dataWarnings(code, data)];
   return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks, stamp: BUILD_STAMP }, errors: [], ...(warnings.length ? { warnings } : {}) };
+}
+
+/**
+ * Mistakes that save fine but show wrong, most often after an import: a Table naming columns its data doesn't
+ * have (every cell shows —), Notion's __YES__/__NO__ standing in for booleans, markdown inside data values
+ * (shown literally), and data files nothing on the page uses.
+ */
+export function dataWarnings(code: Record<string, string>, data: Record<string, JsonValue>): string[] {
+  const out: string[] = [];
+  const source = Object.values(code).join("\n");
+  const dynamicData = /useData\(\s*[^"'\s)]/.test(source);
+  for (const [path, value] of Object.entries(data)) {
+    const name = path.slice("data/".length);
+    const json = JSON.stringify(value);
+    if (/"__(YES|NO)__"/.test(json)) out.push(`${path} has Notion's "__YES__"/"__NO__" placeholders, shown literally: use true/false`);
+    if (/"[^"]*\*\*[^"*]+\*\*[^"]*"/.test(json)) out.push(`${path} has **markdown** inside values, which a Table shows literally: keep values plain if a Table shows them`);
+    // Only when every useData() names its file literally; a computed name could be using this one.
+    if (!source.includes(name) && !source.includes(path) && !dynamicData) out.push(`${path} isn't used by any page file: show it (say, in a Table) or delete it`);
+  }
+  // <Table data="x.json" columns="a b c" />: names the data has in no case at all.
+  for (const m of source.matchAll(/<Table\b[^>]*?\bdata=["']([^"']+)["'][^>]*?\bcolumns=["']([^"']+)["']/g)) {
+    const rows = data[m[1].startsWith("data/") ? m[1] : `data/${m[1]}`];
+    if (!Array.isArray(rows) || !rows.length) continue;
+    const keys = new Set(rows.slice(0, 50).flatMap((r) => (r && typeof r === "object" && !Array.isArray(r) ? Object.keys(r).map((k) => k.toLowerCase()) : [])));
+    const missing = m[2].split(/[\s,]+/).filter((c) => c && !keys.has(c.toLowerCase()));
+    if (missing.length) out.push(`Table data="${m[1]}" names columns its rows don't have (${missing.join(", ")}): every cell in them shows —`);
+  }
+  return out;
 }
 
 const ARTIFACT_CSS_ENTRY = `@import "tailwindcss/theme.css" layer(theme);

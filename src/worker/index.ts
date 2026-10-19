@@ -519,7 +519,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
       if (body?.message) await hub.recordError(id, here.email, String(body.message), body.stack ? String(body.stack) : undefined);
       return new Response(null, { status: 204 });
     }
-    const { meta, visit, member } = opened as Extract<typeof opened, { meta: unknown }>;
+    const { meta, visit, member, backlinks, linkTitles } = opened as Extract<typeof opened, { meta: unknown }>;
     const token = await signToken(env.SESSION_SECRET, "frame", FRAME_TTL, { id, e: here.email, w: slug });
     return shellPage(
       {
@@ -530,6 +530,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
         syncUrl: `/a/${id}/sync`,
         viewer: { email: here.email, role: role as Role },
         apex: apexOrigin(env),
+        ...(backlinks?.length ? { backlinks } : {}),
+        ...(linkTitles && Object.keys(linkTitles).length ? { linkTitles } : {}),
         member: Boolean(member),
         admin: member === "admin" && !scoped,
         scoped,

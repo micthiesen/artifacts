@@ -11,6 +11,10 @@
 }
 
 @media print {
+  .art-contents,
+  .art-linked-from {
+    display: none !important;
+  }
   :root,
   .dark {
     color-scheme: light;

@@ -38,6 +38,10 @@ export type ShellMessage =
       /** Emails currently viewing (presence). */
       presence: string[];
       theme: "light" | "dark";
+      /** Artifacts linking here that this viewer can open, for the "Linked from" footer. */
+      backlinks?: { id: string; title: string }[];
+      /** Titles of the artifacts this one links to (that this viewer can open), by id, so links can read as titles. */
+      linkTitles?: Record<string, string>;
     }
   | { t: "shared"; changes: Record<string, JsonValue | null> }
   | { t: "presence"; viewers: string[] }
@@ -46,6 +50,8 @@ export type ShellMessage =
   | { t: "threads"; threads: { id: string; anchor: Anchor | null; active?: boolean }[]; canComment: boolean }
   /** Scroll a thread's anchor into view and flash it. */
   | { t: "focus"; thread: string }
+  /** Scroll to a section: an element id or a heading's slug (the page's URL #fragment). */
+  | { t: "scroll"; target: string }
   /** Mark blocks that changed since the viewer's last visit (empty clears). */
   | { t: "changes"; blocks: string[] }
   | { t: "print"; title: string; meta: string };
@@ -166,6 +172,8 @@ export type ShellBoot = {
   archivedAt?: string;
   /** Origin of the apex, where account settings live. */
   apex: string;
+  backlinks?: { id: string; title: string }[];
+  linkTitles?: Record<string, string>;
   /** The viewer is a member of this workspace (not just a guest). */
   member: boolean;
   /** The viewer is a workspace admin (approves live-data hosts). */

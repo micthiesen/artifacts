@@ -292,7 +292,38 @@ const MIGRATIONS: Migration[] = [
   (sql) => sql.exec(`CREATE TABLE pins (email TEXT NOT NULL, artifact_id TEXT NOT NULL, pinned_at TEXT NOT NULL, PRIMARY KEY (email, artifact_id))`),
   // Each person's default notification level for this workspace, under any per-artifact choice.
   (sql) => sql.exec(`CREATE TABLE watch_defaults (email TEXT PRIMARY KEY, level TEXT NOT NULL)`),
+  // Which artifacts link to which (from their current files), for "Linked from" and link titles. Derived, so
+  // it isn't backed up: a restore rebuilds it.
+  // Existing artifacts' links are filled in by the alarm, a batch at a time (links_backfill is the next id).
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE links (artifact_id TEXT NOT NULL, to_id TEXT NOT NULL, PRIMARY KEY (artifact_id, to_id));
+      CREATE INDEX links_to ON links (to_id);
+      INSERT INTO settings (key, value) SELECT 'links_backfill', '' WHERE EXISTS (SELECT 1 FROM artifacts)
+        ON CONFLICT (key) DO UPDATE SET value = '';
+    `),
 ];
+
+/** Links to other artifacts in this workspace, from file contents: /a/<id> (absolute or relative). */
+const LINK_RE = /\/a\/(a[a-z0-9]{12})(?![a-z0-9])/g;
+/** Artifacts whose links one alarm step reads while backfilling. */
+const LINKS_BATCH = 100;
+
+/** The artifacts a page's own files link to: its markdown and code, not its data (which can be large and changes on every refresh). */
+function linkTargets(files: Record<string, string>, self: string): Set<string> {
+  const out = new Set<string>();
+  for (const [path, text] of Object.entries(files)) {
+    if (path.startsWith("data/")) continue;
+    for (const m of text.matchAll(LINK_RE)) if (m[1] !== self) out.add(m[1]);
+  }
+  return out;
+}
+
+/** Replace one artifact's links. Targets that don't exist (yet, or any more) drop out when links are read. */
+function setLinks(sql: SqlStorage, id: string, files: Record<string, string>) {
+  sql.exec(`DELETE FROM links WHERE artifact_id = ?`, id);
+  for (const to of linkTargets(files, id)) sql.exec(`INSERT OR IGNORE INTO links (artifact_id, to_id) VALUES (?, ?)`, id, to);
+}
 
 /** MCP event webhooks: how soon after activity they go out, how long a subscription lasts, how hard to retry. */
 const EVENT_DELAY_MS = 2_000;
@@ -350,6 +381,8 @@ export class Workspace extends DurableObject {
     // doesn't exist (or was just deleted) stays empty and stores nothing.
     this.ready = ctx.storage.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = '_schema'`).toArray().length > 0;
     if (this.ready) migrate(ctx.storage, MIGRATIONS);
+    // Work a migration left for the alarm (the links backfill) starts on the first wake.
+    if (this.ready && this.setting("links_backfill") !== null) ctx.blockConcurrencyWhile(() => this.armAlarm());
   }
 
   private ready: boolean;
@@ -1120,6 +1153,7 @@ export class Workspace extends DurableObject {
     this.requireArtifact(id);
     this.ctx.storage.transactionSync(() => {
       for (const t of ARTIFACT_TABLES) this.sql.exec(`DELETE FROM ${t} WHERE artifact_id = ?`, id);
+      this.sql.exec(`DELETE FROM links WHERE artifact_id = ? OR to_id = ?`, id, id);
       this.sql.exec(`DELETE FROM artifacts WHERE id = ?`, id);
     });
     this.markDirty();
@@ -1292,6 +1326,7 @@ export class Workspace extends DurableObject {
     };
     await step("jobs", () => this.stepJobs(Date.now() + JOB_STEP_MS));
     await step("storage", () => this.watchStorage());
+    await step("links", async () => this.backfillLinks());
     // Nothing else touches data while a restore or import replaces it.
     if (this.offline()) return;
     if (this.setting("resync_due")) await step("directory resync", () => this.resync());
@@ -1354,6 +1389,7 @@ export class Workspace extends DurableObject {
     if (job && job.kind !== "import") times.push(job.retryAt ? Date.parse(job.retryAt) : Date.now());
     else if (!job && this.setting("jobs_next")) times.push(Date.now());
     if (this.setting("resync_due")) times.push(Date.now() + 60_000);
+    if (this.setting("links_backfill") !== null) times.push(Date.now() + 1000);
     if (!times.length) return;
     const at = Math.max(Math.min(...times), Date.now() + 1000);
     const existing = await this.ctx.storage.getAlarm();
@@ -1637,7 +1673,28 @@ export class Workspace extends DurableObject {
     if (!role) return { role: null };
     const meta = this.meta(id)!;
     const member = email ? this.memberRole(email) : null;
-    return { role, meta, member, visit: email ? this.visit(id, email) : null };
+    // A presigned link opens one artifact only, so it learns nothing about others.
+    return { role, meta, member, visit: email ? this.visit(id, email) : null, ...(scoped ? {} : this.linksFor(id, email)) };
+  }
+
+  /**
+   * Artifacts linking here, and the titles of those this one links to, among those this person can open
+   * (anyone else sees the bare link, and doesn't learn the page exists).
+   */
+  private linksFor(id: string, email: string | null): { backlinks: { id: string; title: string }[]; linkTitles: Record<string, string> } {
+    const visible = (other: string) => this.roleFor(other, email) !== null;
+    // Filtered after reading, so read more than are shown: most linkers are usually visible.
+    const backlinks = this.sql
+      .exec(`SELECT a.id, a.title FROM links l JOIN artifacts a ON a.id = l.artifact_id WHERE l.to_id = ? AND a.archived_at IS NULL ORDER BY a.updated_at DESC LIMIT 200`, id)
+      .toArray()
+      .filter((r) => visible(r.id as string))
+      .slice(0, 50)
+      .map((r) => ({ id: r.id as string, title: r.title as string }));
+    const linkTitles: Record<string, string> = {};
+    for (const r of this.sql.exec(`SELECT a.id, a.title FROM links l JOIN artifacts a ON a.id = l.to_id WHERE l.artifact_id = ? LIMIT 200`, id)) {
+      if (visible(r.id as string)) linkTitles[r.id as string] = r.title as string;
+    }
+    return { backlinks, linkTitles };
   }
 
   /** Sharing summary per artifact, for the people who manage them on the index. */
@@ -1926,6 +1983,8 @@ export class Workspace extends DurableObject {
   private async afterLoad() {
     // Subscriptions' cursors point into the log that was just replaced; clients resubscribe.
     this.sql.exec(`DELETE FROM event_subs`);
+    this.sql.exec(`DELETE FROM links`);
+    this.setSetting("links_backfill", "");
     this.dirty = false;
     this.markDirty();
     this.setSetting("resync_due", "1");
@@ -2991,6 +3050,26 @@ export class Workspace extends DurableObject {
     );
     this.sql.exec(`DELETE FROM history WHERE artifact_id = ? AND version <= ?`, id, version - HISTORY_KEEP);
     this.collectBlobs(id);
+    setLinks(this.sql, id, files);
+  }
+
+  /** One batch of the links backfill (after the migration, or a restore); true while there's more. */
+  private backfillLinks(): boolean {
+    const after = this.setting("links_backfill");
+    if (after === null) return false;
+    const ids = this.sql.exec(`SELECT id FROM artifacts WHERE id > ? ORDER BY id LIMIT ?`, after, LINKS_BATCH).toArray().map((r) => r.id as string);
+    for (const id of ids) {
+      const files: Record<string, string> = {};
+      for (const r of this.sql.exec(
+        `SELECT f.path, b.content FROM files f JOIN blobs b ON b.artifact_id = f.artifact_id AND b.hash = f.hash WHERE f.artifact_id = ? AND f.path NOT LIKE 'data/%'`,
+        id,
+      )) {
+        files[r.path as string] = r.content as string;
+      }
+      setLinks(this.sql, id, files);
+    }
+    this.setSetting("links_backfill", ids.length === LINKS_BATCH ? ids[ids.length - 1] : null);
+    return ids.length === LINKS_BATCH;
   }
 
   /** Drop file contents that neither the current files nor any kept version use. */

@@ -1,14 +1,19 @@
 // Markdown element overrides so MDX reads like a well-set article with no imports.
 import { ScrollX } from "./scroll-x.tsx";
-import { assetUrl } from "../store.ts";
+import { assetUrl, linkTitle } from "../store.ts";
+import { Contents, TaskCheckbox } from "./page-extras.tsx";
 import * as React from "react";
 import { cn } from "./utils.ts";
 
 type P<T extends keyof React.JSX.IntrinsicElements> = React.ComponentProps<T>;
 
 export const markdownComponents = {
+  // A long page lists its sections under the (first) title.
   h1: ({ className, ...p }: P<"h1">) => (
-    <h1 className={cn("mt-0 mb-6 text-[2rem] leading-[1.15] font-semibold tracking-[-0.022em] text-balance sm:text-[2.35rem]", className)} {...p} />
+    <>
+      <h1 className={cn("mt-0 mb-6 text-[2rem] leading-[1.15] font-semibold tracking-[-0.022em] text-balance sm:text-[2.35rem]", className)} {...p} />
+      <Contents />
+    </>
   ),
   h2: ({ className, ...p }: P<"h2">) => (
     <h2 className={cn("mt-12 mb-4 scroll-mt-6 text-[1.375rem] leading-snug font-semibold tracking-[-0.015em] text-balance first:mt-0", className)} {...p} />
@@ -17,15 +22,20 @@ export const markdownComponents = {
   h4: ({ className, ...p }: P<"h4">) => <h4 className={cn("mt-6 mb-2 text-base font-semibold", className)} {...p} />,
   // Body copy sits a touch below full white to cut glare on the dark ground (still >12:1).
   p: ({ className, ...p }: P<"p">) => <p className={cn("my-4 text-base leading-[1.75] text-pretty text-foreground/[0.9]", className)} {...p} />,
-  a: ({ className, href, ...p }: P<"a">) => {
+  a: ({ className, href, children, ...p }: P<"a">) => {
     const external = typeof href === "string" && /^(https?:|mailto:)/.test(href);
+    // A bare link to another artifact here reads as its title.
+    const bare = typeof children === "string" && typeof href === "string" && (children === href || children === href.replace(/^https?:\/\//, ""));
+    const title = bare ? linkTitle(href) : null;
     return (
       <a
         href={href}
         className={cn("font-medium text-primary underline decoration-primary/30 underline-offset-[3px] transition-colors hover:decoration-primary", className)}
         {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
         {...p}
-      />
+      >
+        {title ?? children}
+      </a>
     );
   },
   strong: ({ className, ...p }: P<"strong">) => <strong className={cn("font-semibold text-foreground", className)} {...p} />,
@@ -33,7 +43,12 @@ export const markdownComponents = {
   ol: ({ className, ...p }: P<"ol">) => (
     <ol className={cn("my-4 list-decimal pl-6 text-base leading-[1.75] text-foreground/[0.9] marker:font-medium marker:text-muted-foreground", className)} {...p} />
   ),
-  li: ({ className, ...p }: P<"li">) => <li className={cn("my-1.5 pl-1 [&>p]:my-1 [&>ol]:my-1.5 [&>ul]:my-1.5", className)} {...p} />,
+  li: ({ className, ...p }: P<"li">) => (
+    <li className={cn("my-1.5 pl-1 [&>p]:my-1 [&>ol]:my-1.5 [&>ul]:my-1.5", className?.includes("task-list-item") && "-ml-6 list-none", className)} {...p} />
+  ),
+  // "- [ ] item" task lists: boxes people tick on the page (shared, like a Checklist).
+  // Markdown makes these disabled and without handlers; a checkbox written as JSX keeps its own behaviour.
+  input: (p: P<"input">) => (p.type === "checkbox" && p.disabled && !p.onChange ? <TaskCheckbox checked={p.checked} /> : <input {...p} />),
   blockquote: ({ className, ...p }: P<"blockquote">) => (
     <blockquote className={cn("my-6 border-l-[3px] border-input pl-5 text-muted-foreground [&>p]:my-2 [&>p]:text-muted-foreground", className)} {...p} />
   ),

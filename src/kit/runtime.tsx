@@ -7,6 +7,7 @@ import * as store from "./store.ts";
 import { ErrorBoundary, ErrorPanel } from "./ui/error.tsx";
 import { TooltipProvider } from "./ui/controls.tsx";
 import { Page } from "./ui/layout.tsx";
+import { LinkedFrom } from "./ui/page-extras.tsx";
 import { focusThread, installAnnotations, markChanged, setThreads } from "./annotate.ts";
 import { preparePrint } from "./print.ts";
 
@@ -176,7 +177,18 @@ function Frame({ Entry, markdown }: { Entry: React.ComponentType; markdown: bool
       <Entry />
     </ErrorBoundary>
   );
-  return <TooltipProvider delay={300}>{markdown ? <Page>{content}</Page> : <div className="h-full">{content}</div>}</TooltipProvider>;
+  return (
+    <TooltipProvider delay={300}>
+      {markdown ? (
+        <Page>
+          {content}
+          <LinkedFrom />
+        </Page>
+      ) : (
+        <div className="h-full">{content}</div>
+      )}
+    </TooltipProvider>
+  );
 }
 
 function renderFatal(el: HTMLElement, err: Error) {
@@ -229,6 +241,24 @@ export async function boot(options: BootOptions = {}): Promise<void> {
   let resolveInit!: () => void;
   const initialized = new Promise<void>((r) => (resolveInit = r));
 
+  // In-page links (#section) find headings by their slug as well as elements by id.
+  // Only when such a section exists: hash routers (#/settings) and the like keep their links.
+  document.addEventListener("click", (ev) => {
+    const a = (ev.target as Element | null)?.closest?.("a[href^='#']");
+    const raw = a?.getAttribute("href")?.slice(1);
+    if (!raw || ev.defaultPrevented || ev.metaKey || ev.ctrlKey) return;
+    let target: string;
+    try {
+      target = decodeURIComponent(raw);
+    } catch {
+      return;
+    }
+    const el = sectionElement(target);
+    if (!el) return;
+    ev.preventDefault();
+    el.scrollIntoView({ block: "start" });
+  });
+
   window.addEventListener("message", (ev: MessageEvent) => {
     if (ev.source !== parent) return;
     const msg = ev.data as ShellMessage;
@@ -255,6 +285,9 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         break;
       case "focus":
         whenRendered(() => focusThread(msg.thread));
+        break;
+      case "scroll":
+        whenRendered(() => scrollToSection(msg.target));
         break;
       case "changes":
         whenRendered(() => markChanged(msg.blocks));
@@ -316,6 +349,22 @@ export async function boot(options: BootOptions = {}): Promise<void> {
 
 let rendered = false;
 const afterRender: (() => void)[] = [];
+function sectionElement(target: string): Element | null {
+  return document.getElementById(target) ?? document.querySelector(`[data-b="${CSS.escape(target)}"]`);
+}
+
+/**
+ * A section link: an element with that id, or the block (heading) with that slug. Content that renders late
+ * (tables, lazy components) gets a few tries to appear; a newer request replaces an older one.
+ */
+let scrollTimer: ReturnType<typeof setTimeout> | undefined;
+function scrollToSection(target: string, tries = 30) {
+  clearTimeout(scrollTimer);
+  const el = sectionElement(target);
+  if (el) el.scrollIntoView({ block: "start" });
+  else if (tries > 0) scrollTimer = setTimeout(() => scrollToSection(target, tries - 1), 100);
+}
+
 function whenRendered(fn: () => void) {
   if (rendered) fn();
   else afterRender.push(fn);

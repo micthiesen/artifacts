@@ -33,3 +33,34 @@ test("every column header sorts, including the last text column", async () => {
   expect(firstCells()[0]).toBe("Excellent");
   root.unmount();
 });
+
+test("columns match their data in any case; ISO dates read as dates; {label, url} cells are links", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const rows = [{ name: "Board A", made: "2026-10-04T00:18:13.115Z", docs: { label: "Gerbers", url: "https://example.com/a.zip" } }];
+  const root = createRoot(container);
+  await act(async () => root.render(<Table data={rows} columns="Name Made Docs" cards="never" />));
+  const cells = [...container.querySelectorAll("tbody td")].map((td) => td.textContent);
+  expect(cells[0]).toBe("Board A");
+  expect(cells[1]).not.toContain("T00:18");
+  expect(container.querySelector("tbody a")?.textContent).toBe("Gerbers");
+  expect(container.querySelector("tbody a")?.getAttribute("href")).toBe("https://example.com/a.zip");
+  root.unmount();
+});
+
+test("as cards, each row is a card titled by its first column, with the rest as label and value", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const rows = [
+    { item: "Yarn", qty: 2, colour: "Black", fibre: "", hook: 4 },
+    { item: "Hook", qty: 1, colour: "", fibre: "", hook: 5 },
+  ];
+  const root = createRoot(container);
+  await act(async () => root.render(<Table data={rows} cards="always" />));
+  const cards = [...container.querySelectorAll("li")];
+  expect(cards).toHaveLength(2);
+  expect(cards[0].textContent).toContain("Yarn");
+  expect([...cards[0].querySelectorAll("dt")].map((d) => d.textContent)).toEqual(["Qty", "Colour", "Hook"]);
+  expect(container.querySelector("table")).toBeNull();
+  root.unmount();
+});
