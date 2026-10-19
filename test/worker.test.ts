@@ -104,7 +104,19 @@ test("signed out, the apex shows the splash page, with the examples and the word
   expect(res.headers.get("X-Robots-Tag")).toBe("all");
   expect((await fetchAs(`${APEX}/privacy`)).headers.get("X-Robots-Tag")).toBe("all");
   expect((await fetchAs(`${APEX}/login`)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
-  expect(await (await fetchAs(`${APEX}/robots.txt`)).text()).toBe("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /terms\nAllow: /security\nAllow: /pricing\nDisallow: /\n");
+  // (Billing is off here, so there's no pricing page to list.)
+  expect(await (await fetchAs(`${APEX}/robots.txt`)).text()).toBe(
+    "User-agent: *\nAllow: /$\nAllow: /help$\nAllow: /privacy$\nAllow: /terms$\nAllow: /security$\nDisallow: /\n\nSitemap: https://artifacts.test/sitemap.xml\n",
+  );
+  const sitemap = await (await fetchAs(`${APEX}/sitemap.xml`)).text();
+  expect([...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1])).toEqual(["/", "/help", "/privacy", "/terms", "/security"].map((p) => `https://artifacts.test${p}`));
+  expect((await fetchAs(`${APEX}/help`)).headers.get("X-Robots-Tag")).toBe("all");
+  expect(await (await fetchAs(`${APEX}/help`)).text()).toContain('<link rel="canonical" href="https://artifacts.test/help">');
+  // What the front page tells search engines is only what's true: no offers while there's no pricing, no ratings.
+  const ld = JSON.parse(/<script type="application\/ld\+json">(.*?)<\/script>/.exec(html)![1]);
+  expect(ld).toMatchObject({ "@type": "WebApplication", name: "artifacts.boo", url: "https://artifacts.test/" });
+  expect(ld.offers).toBeUndefined();
+  expect(ld.aggregateRating).toBeUndefined();
   expect(await (await fetchAs(`${ACME}/robots.txt`)).text()).toBe("User-agent: *\nDisallow: /\n");
 });
 

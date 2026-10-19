@@ -697,7 +697,8 @@ async function noteSignIn(env: Env, slug: string, email: string, join = true) {
 
 // ---- apex: front door, sign-in, account and operator -------------------------------------
 
-const INDEXABLE = ["/", "/privacy", "/terms", "/security", "/pricing"];
+/** Public apex pages search engines may index (pricing only exists with billing on). */
+const indexablePages = (env: Env) => ["/", "/help", "/privacy", "/terms", "/security", ...(billingOn(env) ? ["/pricing"] : [])];
 
 /** Opt a public apex page out of the default noindex (see the fetch handler). */
 function indexable(response: Response): Response {
@@ -714,9 +715,16 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
     if (url.searchParams.get("deep") === "1") await directory(env).workspace("healthz");
     return new Response("ok", { headers: { "Cache-Control": "no-store" } });
   }
-  // Search engines may index the front page and the policies, nothing else.
+  // Search engines may index the front page, help, pricing and the policies, nothing else.
   if (path === "/robots.txt") {
-    return new Response(`User-agent: *\n${INDEXABLE.map((p) => `Allow: ${p === "/" ? "/$" : p}\n`).join("")}Disallow: /\n`, { headers: { "Content-Type": "text/plain" } });
+    const allow = indexablePages(env).map((p) => `Allow: ${p === "/" ? "/$" : `${p}$`}\n`).join("");
+    return new Response(`User-agent: *\n${allow}Disallow: /\n\nSitemap: ${apexOrigin(env)}/sitemap.xml\n`, { headers: { "Content-Type": "text/plain" } });
+  }
+  if (path === "/sitemap.xml") {
+    const urls = indexablePages(env).map((p) => `<url><loc>${apexOrigin(env)}${p}</loc></url>`).join("");
+    return new Response(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>\n`, {
+      headers: { "Content-Type": "application/xml", "Cache-Control": "public, max-age=3600" },
+    });
   }
   if (PREVIEW_BOT.test(request.headers.get("User-Agent") ?? "")) return previewPage({ url: url.href, origin: url.origin, title: PRODUCT, description: DESCRIPTION });
   const viewer = await currentViewer(request, env);

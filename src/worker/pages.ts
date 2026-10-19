@@ -323,6 +323,31 @@ ${panels}
 /** What this is, in one sentence: the splash page and link previews of the apex. */
 export const DESCRIPTION = "Collaborative documents and little apps your agent can build, inspect and maintain.";
 
+/** A public apex page's description and canonical address, for search engines and link previews. */
+function publicHead(brand: Brand, path: string, description: string, extra = ""): string {
+  return `<meta name="description" content="${escapeHtml(description)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}${path}">\n${extra}`;
+}
+
+/** What the front page says about the product to search engines: only what's true (no ratings or reviews). */
+function appJsonLd(brand: Brand, pricing: boolean): string {
+  const app: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    name: PRODUCT,
+    url: `${brand.apex}/`,
+    description: DESCRIPTION,
+    applicationCategory: "BusinessApplication",
+    operatingSystem: "Web",
+  };
+  if (pricing) {
+    app.offers = [
+      { "@type": "Offer", name: PLANS.free.label, price: "0", priceCurrency: "USD" },
+      { "@type": "Offer", name: PLANS.team.label, price: String(TEAM_PRICE.amount), priceCurrency: "USD", description: `per workspace a ${TEAM_PRICE.period}`, url: `${brand.apex}/pricing` },
+    ];
+  }
+  return `<script type="application/ld+json">${scriptJson(app)}</script>\n`;
+}
+
 /**
  * The apex front page, for everyone: what this is, for developers, and how to
  * run it. Someone signed in also gets their account menu and a way to their
@@ -406,7 +431,7 @@ bun run deploy</code></pre></div>
 <footer class="splash-foot muted">${pricing ? `<a href="/pricing">Pricing</a> · ` : ""}${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/docs/AUTOMATIONS.md">Automations</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/help">Help</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
 </main>`,
     {},
-    `<meta name="description" content="${escapeHtml(DESCRIPTION)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}/">\n`,
+    publicHead(brand, "/", DESCRIPTION, appJsonLd(brand, pricing)),
   );
 }
 
@@ -630,6 +655,8 @@ ${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_P
 </section>
 <footer class="splash-foot muted"><a href="/help">Help</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>
 </main>`,
+    {},
+    publicHead(brand, "/pricing", `${PRODUCT} pricing: Free for small workspaces, Team at $${TEAM_PRICE.amount} a workspace a month. Guests are always free.`),
   );
 }
 
@@ -764,6 +791,8 @@ ${
   return page(
     `${title} · ${PRODUCT}`,
     `${topBar(brand)}<main class="content policy"><p class="muted policy-nav">${nav}</p><h1>${title}</h1>${body}<p class="muted policy-date">Last updated ${POLICY_UPDATED}.</p></main>`,
+    {},
+    publicHead(brand, `/${kind}`, `${title} for ${PRODUCT}.`),
   );
 }
 
@@ -791,6 +820,8 @@ export function helpPage(brand: Brand, contact: string): Response {
 <h2>Report something</h2>
 <p>If a page made with ${PRODUCT} is phishing, malware or abusive, <a href="/report">report it</a>.</p>
 </main>${POLICY_FOOTER}`,
+    {},
+    publicHead(brand, "/help", `Help with ${PRODUCT}: getting started, common questions, and how to reach us.`),
   );
 }
 
