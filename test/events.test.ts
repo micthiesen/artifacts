@@ -119,7 +119,7 @@ test("poll: start from now, then only people's answers and comments you can see"
       timestamp: expect.any(String),
       data: {
         artifactId: id, title: "Launch", url: expect.stringContaining(`/a/${id}`), by: DANA, component: "approval", block: "go",
-        stateKey: `approve/go/${DANA}`, withdrawn: false, decision: "changes", note: "Cheaper", version: 1, untrusted: ["title", "by", "note"],
+        stateKey: `approve/go/${DANA}`, withdrawn: false, decision: "changes", note: "Cheaper", version: 1, untrusted: ["title", "by", "block", "stateKey", "note"],
       },
     },
   ]);

@@ -52,6 +52,12 @@ webhook and no billing in settings; the operator sets plans by hand.
   record, so a later workspace with the same address starts clean. Whoever
   made a self-serve workspace can delete it from settings once nothing is
   billed, and then make another.
+- **Free Team:** the operator console's **Give Team free** keeps a workspace
+  on Team at no charge whatever billing says (your own workspaces, say);
+  settings shows "Team, free: arranged with us" and offers no upgrade.
+  **End free Team** hands the plan back to billing, or to the plan set by
+  hand. The support workspace always has it. Refunds and disputes alert the
+  operator; **End billing** in the console ends paid time at once.
 - Moving to Free keeps everything: every artifact still opens, can be
   edited, shared and commented on. Past Free's limits nothing new can be
   added (artifacts, members, storage) until it trims or upgrades again;

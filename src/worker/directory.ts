@@ -50,7 +50,7 @@ export type WorkspaceRecord = {
   jobError: { message: string; at: string } | null;
 };
 
-export type WorkspaceStats = { artifacts: number; members: number; bytes: number; lastActivity: string | null; plan?: PlanId };
+export type WorkspaceStats = { artifacts: number; members: number; bytes: number; lastActivity: string | null; plan?: PlanId; freeTeam?: boolean };
 export type WorkspaceJob = { kind: string; phase?: string; error?: string; startedAt: string };
 
 /** A saved passkey as the account page lists it (no key material). */
@@ -148,6 +148,7 @@ const CASES_PER_DAY = 200;
 const INBOX_KEEP = 200;
 /** ...and none older than this. */
 const INBOX_DAYS = 90;
+const inboxSince = () => new Date(Date.now() - INBOX_DAYS * 86_400_000).toISOString();
 /** Error groups kept. */
 const ERROR_GROUPS_KEEP = 500;
 /** Ops events kept for the operator console. */
@@ -768,7 +769,7 @@ export class Directory extends DurableObject {
     // This person's latest INBOX_KEEP (ids are shared by everyone, so count theirs).
     if (added) {
       this.sql.exec(`DELETE FROM inbox WHERE email = ? AND id <= (SELECT id FROM inbox WHERE email = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, email, email, INBOX_KEEP);
-      this.sql.exec(`DELETE FROM inbox WHERE email = ? AND at < ?`, email, new Date(Date.now() - INBOX_DAYS * 86_400_000).toISOString());
+      this.sql.exec(`DELETE FROM inbox WHERE email = ? AND at < ?`, email, inboxSince());
     }
     return added;
   }
@@ -785,20 +786,20 @@ export class Directory extends DurableObject {
    */
   forgetInbox(f: { slug: string; artifactId?: string; email?: string }) {
     const host = `https://${f.slug}.%`;
-    const where = f.artifactId
-      ? `((slug = ? AND artifact_id = ?) OR (slug IS NULL AND url LIKE ? || '/a/' || ? || '%'))`
-      : `(slug = ? OR (slug IS NULL AND url LIKE ?))`;
-    const args: SqlStorageValue[] = f.artifactId ? [f.slug, f.artifactId, host, f.artifactId] : [f.slug, host];
-    if (f.email) {
-      this.sql.exec(`DELETE FROM inbox WHERE email = ? AND ${where}`, f.email, ...args);
-    } else {
-      this.sql.exec(`DELETE FROM inbox WHERE ${where}`, ...args);
+    const by = f.email ? `email = ? AND ` : "";
+    const who: SqlStorageValue[] = f.email ? [f.email] : [];
+    if (f.artifactId) this.sql.exec(`DELETE FROM inbox WHERE ${by}slug = ? AND artifact_id = ?`, ...who, f.slug, f.artifactId);
+    else this.sql.exec(`DELETE FROM inbox WHERE ${by}slug = ?`, ...who, f.slug);
+    // Older rows (no workspace on them) by address, while any are left: that one's a scan.
+    if (this.sql.exec(`SELECT 1 FROM inbox WHERE slug IS NULL LIMIT 1`).toArray().length) {
+      if (f.artifactId) this.sql.exec(`DELETE FROM inbox WHERE ${by}slug IS NULL AND url LIKE ? || '/a/' || ? || '%'`, ...who, host, f.artifactId);
+      else this.sql.exec(`DELETE FROM inbox WHERE ${by}slug IS NULL AND url LIKE ?`, ...who, host);
     }
   }
 
   inbox(email: string, limit = 50): { items: InboxItem[]; unread: number } {
     const items = this.sql
-      .exec(`SELECT * FROM inbox WHERE email = ? ORDER BY id DESC LIMIT ?`, email, Math.min(limit, INBOX_KEEP))
+      .exec(`SELECT * FROM inbox WHERE email = ? AND at >= ? ORDER BY id DESC LIMIT ?`, email, inboxSince(), Math.min(limit, INBOX_KEEP))
       .toArray()
       .map((r) => ({
         id: r.id as number,
@@ -813,7 +814,7 @@ export class Directory extends DurableObject {
   }
 
   unreadCount(email: string): number {
-    return this.sql.exec(`SELECT COUNT(*) AS n FROM inbox WHERE email = ? AND read_at IS NULL`, email).one().n as number;
+    return this.sql.exec(`SELECT COUNT(*) AS n FROM inbox WHERE email = ? AND read_at IS NULL AND at >= ?`, email, inboxSince()).one().n as number;
   }
 
   /** Mark items (or, without ids, everything) read. */
@@ -1174,6 +1175,8 @@ export class Directory extends DurableObject {
   }
 
   async alarm() {
+    // Daily, with the backup: notifications past their 90 days go for everyone, not only people still getting new ones.
+    this.sql.exec(`DELETE FROM inbox WHERE at < ?`, inboxSince());
     const due = this.sql.exec(`SELECT value FROM settings WHERE key = 'backup_due_at'`).toArray()[0];
     if (due && Number(due.value) <= Date.now()) await this.backup();
   }

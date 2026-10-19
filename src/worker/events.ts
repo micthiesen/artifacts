@@ -147,7 +147,7 @@ export function toOccurrence(e: LoggedEvent, name: EventName, origin: string, cu
     const scope = e.type === "state" && e.data.created ? /^comments\/([^/]+)\//.exec(String(e.data.key))?.[1] : undefined;
     if (!scope || e.data.value === null) return null;
     const value = parsed(e.data.value) ?? record(current);
-    return occurrence({ threadId: `comments/${scope}`, text: String(value?.text ?? "").slice(0, textMax), reply: false, untrusted: ["title", "by", "text"] });
+    return occurrence({ threadId: `comments/${scope}`, text: String(value?.text ?? "").slice(0, textMax), reply: false, untrusted: ["title", "by", "text", "threadId"] });
   }
   if (e.type !== "state") return null;
   const key = String(e.data.key);
@@ -164,7 +164,8 @@ export function toOccurrence(e: LoggedEvent, name: EventName, origin: string, cu
     ...(m[1] === "approve" && value && typeof value.decision === "string" ? { decision: value.decision } : {}),
     ...(note !== undefined ? { note } : {}),
     ...(value && typeof value.version === "number" ? { version: value.version } : {}),
-    untrusted: ["title", "by", ...(note !== undefined ? ["note"] : [])],
+    // The block id is the page author's (and part of stateKey).
+    untrusted: ["title", "by", "block", "stateKey", ...(note !== undefined ? ["note"] : [])],
   });
 }
 

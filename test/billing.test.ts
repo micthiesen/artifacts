@@ -454,3 +454,19 @@ test("a paused or unpaid subscription still blocks deleting the workspace", asyn
   const del = await worker.fetch(new Request(`${APEX}/api/admin/workspaces/acme`, { method: "DELETE", headers: { Authorization: "Bearer op-token" } }), env as never, ctx);
   expect(del.status).toBe(409);
 });
+
+test("Team given free by the operator stays whatever billing says, and turning it off hands the plan back", async () => {
+  Object.assign(env, KEYS);
+  const freeTeam = (on: boolean) =>
+    worker.fetch(new Request(`${APEX}/api/admin/workspaces/acme/free-team`, { method: "POST", headers: { Authorization: "Bearer op-token", "Content-Type": "application/json" }, body: JSON.stringify({ on }) }), env as never, ctx);
+  expect(await (await freeTeam(true)).json()).toMatchObject({ plan: { id: "team", free: true } });
+  expect(h.directory.workspace("acme")?.stats).toMatchObject({ plan: "team", freeTeam: true });
+  // No checkout for it; a subscription's events don't move it.
+  const checkout = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  expect(checkout.status).toBe(400);
+  await webhook(checkoutCompleted());
+  await webhook(event("subscription.canceled", { ...sub("canceled"), current_period_end_date: new Date(Date.now() - 86_400_000).toISOString() }));
+  expect(h.hub.plan()).toMatchObject({ id: "team", free: true });
+  await freeTeam(false);
+  expect(h.hub.plan()).toMatchObject({ id: "free", free: false });
+});

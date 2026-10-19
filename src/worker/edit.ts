@@ -136,10 +136,10 @@ export function grepFiles(files: Record<string, string>, pattern: string, onlyPa
   const literal = () => new RegExp(pattern.slice(0, 500).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   let re: RegExp;
   // A pattern that could backtrack for ages would stall the whole workspace while it runs, so it's searched for as
-  // plain text instead: any repeated group (`(a|aa)+`), a back-reference, or more than one open-ended repeat
-  // (`a*a*c` is cubic in a line). With one, a line costs at most its length squared, and only its first
-  // LINE_TESTED characters are tried.
-  const repeats = (pattern.match(/(?<!\\)[*+]|\{\d+,\d*\}/g) ?? []).length;
+  // plain text instead: any repeated group (`(a|aa)+`), a back-reference, or more than one repeat of any kind
+  // (`a*a*c` is cubic in a line, `a?a?a?…aaa` exponential). With one, a line costs at most its length squared,
+  // and only its first LINE_TESTED characters are tried.
+  const repeats = (pattern.match(/(?<!\\)[*+?]|\{\d+(,\d*)?\}/g) ?? []).length;
   if (pattern.length > 200 || /\)\s*[+*?{]/.test(pattern) || /\\[1-9]|\\k</.test(pattern) || repeats > 1) re = literal();
   else {
     try {

@@ -1339,7 +1339,8 @@ function describeEvent(e: { seq: number; at: string; artifact: string; title: st
   // People's words (titles, comments, notes, ids they chose) as JSON strings: a newline in them can't pose as another event line.
   const head = `#${e.seq} ${e.at.slice(0, 16).replace("T", " ")} ${e.artifact} (${quoted(e.title)}): ${who(e.actor)}`;
   const text = typeof e.text === "string" ? ` ${quoted(e.text)}` : "";
-  const thread = quoted(e.thread);
+  // A thread id we made (t…) is shown as is, so it can be passed straight back; anything else is quoted.
+  const thread = typeof e.thread === "string" && /^t[a-z0-9]+$/.test(e.thread) ? e.thread : quoted(e.thread);
   switch (e.type) {
     case "thread":
       return `${head} started thread ${thread}:${text}`;

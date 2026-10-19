@@ -150,7 +150,7 @@ export type HubApi = AsyncMethods<
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
-    | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment" | "endSessions"
+    | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment" | "endSessions" | "setFreeTeam"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
     | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault" | "visibleCount"
   >
@@ -181,6 +181,8 @@ const CHECK_SPACING_MS = 1_000;
 const NAMES_TTL_MS = 5 * 60_000;
 /** An import that gets no rows for this long is cancelled, so a dead script can't keep a workspace offline. */
 const IMPORT_IDLE_MS = 60 * 60_000;
+/** Notification rows taken per run (whole groups; the rest are due already, so the next alarm takes them). */
+const DUE_BATCH = 500;
 /** Words of a search looked for in artifacts' files. */
 const CONTENT_WORDS_MAX = 3;
 /** Comments aren't counted in storage, so each artifact holds at most this many. */
@@ -514,12 +516,15 @@ export class Workspace extends DurableObject {
       bytes: this.sql.databaseSize,
       lastActivity: (this.sql.exec(`SELECT MAX(at) AS at FROM events`).one().at as string | null) ?? null,
       plan: this.planId(),
+      ...(this.setting("free_team") ? { freeTeam: true } : {}),
     };
   }
 
   // ---- plan ---------------------------------------------------------------------
 
   private planId(): PlanId {
+    // Team given free by the operator (their own workspaces, support): whatever billing says.
+    if (this.setting("free_team")) return "team";
     const p = this.setting("plan");
     // A paid-up plan that was canceled lapses to Free on its own once its period ends.
     const until = this.setting("plan_until");
@@ -532,7 +537,15 @@ export class Workspace extends DurableObject {
     const id = this.planId();
     const { artifacts, members } = this.stats();
     const until = id === "team" ? this.setting("plan_until") : null;
-    return { id, label: PLANS[id].label, limits: PLANS[id].limits, usage: { artifacts, members, bytes: this.storedBytes() }, until };
+    const free = Boolean(this.setting("free_team"));
+    return { id, label: PLANS[id].label, limits: PLANS[id].limits, usage: { artifacts, members, bytes: this.storedBytes() }, until: free ? null : until, free };
+  }
+
+  /** Operator only: Team at no charge, until turned off (then the plan is whatever billing or the operator set). */
+  async setFreeTeam(on: boolean) {
+    this.setSetting("free_team", on ? "1" : null);
+    await this.directory().recordStats(this.info().slug, this.stats());
+    return this.plan();
   }
 
   /** Operator only (no billing yet). */
@@ -601,21 +614,29 @@ export class Workspace extends DurableObject {
    * plus what's been written since; it counts afresh near the limit.
    */
   private withinPlanForState(changes: Record<string, JsonValue | null>) {
+    this.withinCapacity();
     const max = PLANS[this.planId()].limits.bytes;
-    if (max === null) return this.withinCapacity();
+    if (max === null) return;
     const adding = Object.values(changes).reduce<number>((n, v) => n + (v === null ? 0 : JSON.stringify(v).length), 0);
     const s = this.storedSample;
     if (!s || Date.now() - s.at > 60_000 || s.n + adding >= max * 0.9) {
-      this.storedSample = null;
-      this.withinPlan("bytes");
-      this.storedSample = { at: Date.now(), n: this.storedBytes() };
+      const n = this.storedBytes();
+      this.storedSample = { at: Date.now(), n };
+      if (n >= max) {
+        this.storedSample = null;
+        this.withinPlan("bytes");
+      }
     }
-    this.storedSample!.n += adding;
+    if (this.storedSample) this.storedSample.n += adding;
   }
 
   /** Refuses a write that would go past the plan. Deleting is always allowed, so a full workspace can make room. */
   private withinPlan(kind: "artifacts" | "bytes" | "members" | "changesPerDay") {
-    if (kind === "bytes") this.withinCapacity();
+    if (kind === "bytes") {
+      this.withinCapacity();
+      // A save or an asset is about to add to the total: shared state's reused reading is out of date.
+      this.storedSample = null;
+    }
     const plan = PLANS[this.planId()];
     const max = plan.limits[kind];
     if (max === null) return;
@@ -1296,11 +1317,19 @@ export class Workspace extends DurableObject {
    * Take notifications out of inboxes (in the directory). One that fails is kept and retried on the alarm, so a
    * deleted comment's words don't stay in someone's inbox because the directory was busy.
    */
-  private async forgetInbox(items: { artifactId?: string; email?: string }[]) {
+  private forgetting: Promise<void> = Promise.resolve();
+
+  private forgetInbox(items: { artifactId?: string; email?: string }[]): Promise<void> {
+    // One at a time, so two can't both read the queue and the first's success clear the second's.
+    this.forgetting = this.forgetting.then(() => this.forgetInboxNow(items)).catch(() => {});
+    return this.forgetting;
+  }
+
+  private async forgetInboxNow(items: { artifactId?: string; email?: string }[]) {
     const slug = this.info().slug;
     const pending = [...(JSON.parse(this.setting("inbox_forget_due") ?? "[]") as typeof items), ...items];
     if (!pending.length) return;
-    this.setSetting("inbox_forget_due", JSON.stringify(pending.slice(-500)));
+    this.setSetting("inbox_forget_due", JSON.stringify(pending.slice(-2000)));
     try {
       for (const f of pending) await this.directory().forgetInbox({ slug, ...f });
       this.setSetting("inbox_forget_due", null);
@@ -2141,6 +2170,7 @@ export class Workspace extends DurableObject {
 
   /** Swap the loaded shadows in, all at once, and drop sockets and in-memory state that described the old data. */
   private swapIn() {
+    this.storedSample = null;
     for (const ws of this.ctx.getWebSockets()) ws.close(4003, "data restored");
     swapShadows(this.ctx.storage, DATA_TABLES);
   }
@@ -2883,7 +2913,14 @@ export class Workspace extends DurableObject {
   /** Send due notifications, one message per person and artifact, skipping people who have the page open. */
   async deliverDue(now = Date.now()): Promise<number> {
     // A bounded batch: whatever is left is due already, so the next alarm takes it.
-    const due = this.sql.exec(`SELECT * FROM outbox WHERE due_at <= ? ORDER BY due_at LIMIT 500`, now).toArray();
+    // Whole groups only, so one person's notification about one artifact isn't split across two runs.
+    const due = this.sql.exec(`SELECT * FROM outbox WHERE due_at <= ? ORDER BY email, artifact_id, due_at LIMIT ?`, now, DUE_BATCH + 1).toArray();
+    if (due.length > DUE_BATCH) {
+      const last = due[DUE_BATCH];
+      const cut = due.filter((r) => r.email !== last.email || r.artifact_id !== last.artifact_id);
+      due.length = 0;
+      due.push(...(cut.length ? cut : this.sql.exec(`SELECT * FROM outbox WHERE due_at <= ? AND email = ? AND artifact_id = ?`, now, last.email, last.artifact_id).toArray()));
+    }
     if (!due.length) return 0;
     const groups = new Map<string, Record<string, SqlStorageValue>[]>();
     for (const row of due) {
@@ -3291,9 +3328,14 @@ export class Workspace extends DurableObject {
     const resolves = (opts.resolves ?? []).filter((t) => this.sql.exec(`SELECT 1 FROM threads WHERE id = ? AND artifact_id = ?`, t, id).toArray().length > 0);
     const actor = opts.actor ?? "agent";
     let raced: number | null = null;
-    this.ctx.storage.transactionSync(() => {
-      // Saves to other artifacts may have landed while this one compiled.
+    // Saves to other artifacts may have landed while this one compiled: checked again, answered like the first check.
+    try {
       this.withinPlan("changesPerDay");
+    } catch (err) {
+      if (err instanceof HubError) return { ok: false, version: current, errors: [{ path: "", message: err.message }] };
+      throw err;
+    }
+    this.ctx.storage.transactionSync(() => {
       // Another write may have landed while this one compiled.
       if (!this.sql.exec(`UPDATE artifacts SET version = ?, updated_at = ? WHERE id = ? AND version = ?`, next, now, id, current).rowsWritten) {
         raced = this.requireArtifact(id).version as number;

@@ -237,3 +237,19 @@ test("a render check's frame link works once", async () => {
   expect((await open()).status).toBe(200);
   expect((await open()).status).toBe(403);
 });
+
+test("an old session handed to a workspace stays old there, so it can't pass as a recent sign-in", async () => {
+  const { signToken, SESSION_COOKIE } = await import("../src/worker/session.ts");
+  const now = Math.floor(Date.now() / 1000);
+  // Someone no earlier test signed out (sign-outs are remembered for the isolate).
+  const YO = "yo@corp.com";
+  await h.hub.setMember(YO, "admin", ADMIN);
+  const apexOld = `${SESSION_COOKIE}=${await signToken(String(env.SESSION_SECRET), "session", 3600, { e: YO, h: "artifacts.test", iat: now - 3600 })}`;
+  const toLogin = await worker.fetch(new Request(`${APEX}/login?to=${encodeURIComponent(ACME)}&n=nonce123&return=/`, { headers: { Cookie: apexOld } }), env as never, ctx);
+  const callback = toLogin.headers.get("Location")!;
+  expect(callback).toContain("/auth/callback");
+  const landed = await worker.fetch(new Request(callback, { headers: { Cookie: "__Host-art_login=nonce123" } }), env as never, ctx);
+  const cookie = (landed.headers.getSetCookie?.() ?? [landed.headers.get("Set-Cookie") ?? ""]).find((c) => c.startsWith(SESSION_COOKIE))!.split(";")[0];
+  const mint = await worker.fetch(new Request(`${ACME}/api/settings/tokens`, { method: "POST", headers: { Cookie: cookie, Origin: ACME, "Content-Type": "application/json" }, body: JSON.stringify({ label: "x" }) }), env as never, ctx);
+  expect(mint.status).toBe(403);
+});

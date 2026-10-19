@@ -32,6 +32,8 @@ type Settings = {
     usage: { artifacts: number; bytes: number; members: number };
     /** A canceled subscription's Team lasts until then. */
     until?: string | null;
+    /** Team given free by us, whatever billing says. */
+    free?: boolean;
   };
 };
 type Notice = { tone: "ok" | "warn" | "error"; text: string; signIn?: boolean; reveal?: string; snippet?: string };
@@ -166,7 +168,9 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
   const plainUntil = data.plan.until ? day(data.plan.until) : null;
   const payer = sub?.payer ?? null;
   const mine = seesBilling();
-  const state = !team
+  const state = data.plan.free
+    ? `Team, free: arranged with us.${sub && !["canceled", "expired"].includes(sub.status) ? " It still has a subscription: cancel it in Manage billing if you don't need it." : ""}`
+    : !team
     ? `This workspace is on Free. Team is $${billing.price.amount} a ${billing.price.period} for the whole workspace: no artifact or member limit, and more storage. Guests are always free.`
     : sub && ["active", "trialing", "paid"].includes(sub.status)
       ? `Team, paid${until ? ` through ${until}` : ""}.`

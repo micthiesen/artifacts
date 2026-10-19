@@ -1037,7 +1037,9 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
       // here, so a link to this page can't sign anyone out.
       return loginPage({ ...state, step: "email" }, brand);
     }
-    if (viewer.email) return finishLogin(viewer.email, to, nonce, ret, env, false);
+    // Handed off from an existing session: the workspace's session keeps its sign-in time, so an old cookie can't be
+    // turned into a "recent sign-in" there.
+    if (viewer.email) return finishLogin(viewer.email, to, nonce, ret, env, false, viewer.iat ?? nowSeconds());
     return loginPage({ ...state, step: "email" }, brand);
   }
   if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
@@ -1050,7 +1052,7 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
     // Offer a passkey so next time needs no email, unless they have one or said "Not now" lately.
     // Continuing goes back through GET /login, which hands off to the workspace afresh (a minute).
     const res = readCookie(request, PASSKEY_LATER_COOKIE) || (await directory(env).passkeys(email)).length
-      ? await finishLogin(email, to, nonce, ret, env, true)
+      ? await finishLogin(email, to, nonce, ret, env, true, nowSeconds())
       : passkeyOfferPage(to ? `/login?${new URLSearchParams({ to, n: nonce, return: ret })}` : ret, brand);
     const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST, iat: nowSeconds() });
     res.headers.append("Set-Cookie", sessionCookie(session));
@@ -1089,7 +1091,7 @@ function expandIpv6(ip: string): string[] {
 }
 
 /** Where a signed-in browser goes next: a workspace's callback with a one-minute hand-off code, or null for a page here. */
-async function handoff(email: string, to: string, nonce: string, ret: string, env: Env): Promise<string | null> {
+async function handoff(email: string, to: string, nonce: string, ret: string, env: Env, iat: number): Promise<string | null> {
   let target: URL | null = null;
   try {
     target = to ? new URL(to) : null;
@@ -1097,7 +1099,7 @@ async function handoff(email: string, to: string, nonce: string, ret: string, en
     target = null;
   }
   if (!target || target.protocol !== "https:" || !slugOf(target.hostname, env) || target.origin !== to) return null;
-  const code = await signToken(env.LOGIN_SECRET, "login", 60, { e: email, aud: target.origin, n: nonce });
+  const code = await signToken(env.LOGIN_SECRET, "login", 60, { e: email, aud: target.origin, n: nonce, iat });
   const callback = new URL(`${target.origin}/auth/callback`);
   callback.searchParams.set("code", code);
   callback.searchParams.set("next", ret);
@@ -1105,8 +1107,8 @@ async function handoff(email: string, to: string, nonce: string, ret: string, en
 }
 
 /** Send a signed-in browser on: to a workspace via a one-minute hand-off code, or to a page here. */
-async function finishLogin(email: string, to: string, nonce: string, ret: string, env: Env, fromForm: boolean): Promise<Response> {
-  const callback = await handoff(email, to, nonce, ret, env);
+async function finishLogin(email: string, to: string, nonce: string, ret: string, env: Env, fromForm: boolean, iat: number): Promise<Response> {
+  const callback = await handoff(email, to, nonce, ret, env, iat);
   // After the code form, a redirect to the workspace would be blocked (see continuePage).
   if (callback) return fromForm ? continuePage(callback) : new Response(null, { status: 303, headers: { Location: callback } });
   return new Response(null, { status: 303, headers: { Location: ret } });
@@ -1128,19 +1130,19 @@ async function passkeyLogin(request: Request, url: URL, env: Env): Promise<Respo
     if (err instanceof PasskeyError) return Response.json({ error: err.message }, { status: 400 });
     throw err;
   }
-  const location = (await handoff(email, to, String(body.n ?? ""), ret, env)) ?? ret;
+  const location = (await handoff(email, to, String(body.n ?? ""), ret, env, nowSeconds())) ?? ret;
   const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: env.APEX_HOST, iat: nowSeconds() });
   return Response.json({ location }, { headers: { "Set-Cookie": sessionCookie(session) } });
 }
 
 async function authCallback(request: Request, url: URL, env: Env): Promise<Response> {
-  const claims = await verifyToken<{ e: string; aud: string; n: string }>(env.LOGIN_SECRET, "login", url.searchParams.get("code"));
+  const claims = await verifyToken<{ e: string; aud: string; n: string; iat?: number }>(env.LOGIN_SECRET, "login", url.searchParams.get("code"));
   const nonce = readCookie(request, NONCE_COOKIE);
   if (!claims || claims.aud !== url.origin || !nonce || !claims.n || !timingSafeEqual(claims.n, nonce)) {
     return messagePage("Sign-in failed", "That sign-in link expired. Try again.", 400, { href: "/login", label: "Sign in" });
   }
   const email = claims.e.toLowerCase();
-  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: url.hostname, iat: nowSeconds() });
+  const session = await signToken(env.SESSION_SECRET, "session", SESSION_TTL, { e: email, h: url.hostname, iat: typeof claims.iat === "number" ? Math.min(claims.iat, nowSeconds()) : nowSeconds() });
   const slug = slugOf(url.hostname, env);
   if (slug) await noteSignIn(env, slug, email);
   const headers = new Headers({ Location: safeNext(url.searchParams.get("next")) });
@@ -1212,7 +1214,13 @@ async function signOutEverywhere(env: Env, email: string) {
   await env.OAUTH_KV.put(`${SIGNED_OUT_PREFIX}${email}`, String(now), { expirationTtl: SESSION_TTL + 86_400 });
   signedOutCache.set(email, { at: Date.now(), value: now });
   // Agents too: a stolen session could have connected one. Their tokens and connections end, and open pages close.
-  for (const w of await directory(env).membershipsOf(email)) {
+  const memberships = await Promise.resolve()
+    .then(() => directory(env).membershipsOf(email))
+    .catch((err: Error) => {
+      console.error(JSON.stringify({ ops: "sign_out_everywhere_partial", message: err.message }));
+      return [];
+    });
+  for (const w of memberships) {
     try {
       const hub = workspaceHub(env, w.slug);
       await hub.endSessions(email);
@@ -1459,12 +1467,14 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       }
       // Clicking Upgrade again soon after (the payment's webhook can lag) reopens the same checkout, which Creem
       // charges at most once, instead of starting a second one.
-      const recent = await env.OAUTH_KV.get(`${CHECKOUT_PREFIX}${slug}`).catch(() => null);
+      // (Only this admin's, for this workspace: not one a workspace deleted and made again at the address started.)
+      const created = (await directory(env).workspace(slug))?.createdAt ?? null;
+      const key = `${CHECKOUT_PREFIX}${slug}:${created ?? ""}:${email}`;
+      const recent = await env.OAUTH_KV.get(key).catch(() => null);
       if (recent) return Response.json({ url: recent });
       try {
-        const created = (await directory(env).workspace(slug))?.createdAt ?? null;
         const checkout = await startCheckout(env, { workspace: slug, created, email, successUrl: `${url.origin}/settings?billing=done` });
-        await env.OAUTH_KV.put(`${CHECKOUT_PREFIX}${slug}`, checkout, { expirationTtl: 15 * 60 }).catch(() => {});
+        await env.OAUTH_KV.put(key, checkout, { expirationTtl: 15 * 60 }).catch(() => {});
         return Response.json({ url: checkout });
       } catch (err) {
         if (err instanceof BillingError) return Response.json({ error: err.message }, { status: 503 });
@@ -1738,8 +1748,9 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
     if (url.pathname === "/api/me/channels" && request.method === "POST") {
       const type = String(body.type) as ChannelType;
       if (!["pushover", "ntfy", "webhook", "webpush"].includes(type)) return Response.json({ error: "unknown channel type" }, { status: 400 });
-      // Everything you're notified about would go to it: a stolen cookie mustn't be enough (this device's push is fine).
-      if (type !== "webpush" && !recentlySignedIn(viewer)) return Response.json({ error: "Sign in again to add a channel.", reauth: true }, { status: 403 });
+      // Everything you're notified about would go to it (a push endpoint too comes from the request): a stolen
+      // cookie mustn't be enough.
+      if (!recentlySignedIn(viewer)) return Response.json({ error: "Sign in again to add a channel.", reauth: true }, { status: 403 });
       const prepared = await prepareChannel(type, body, env);
       const id = await dir.addChannel(email, type, prepared.config, prepared.label);
       return Response.json({ id, label: prepared.label, reveal: prepared.reveal ?? null });
@@ -1799,6 +1810,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
  * - GET    /api/admin/signins?email=                     recent code sends and failures, for support
  * - POST   /api/admin/workspaces/<slug>/restore {run}    back up, then replace everything with that run
  * - the same export, import, backups, backup and restore under /api/admin/directory/ for the directory
+ * - POST   /api/admin/workspaces/<slug>/free-team {on}   Team at no charge, whatever billing says (or not)
  * - POST   /api/admin/workspaces/<slug>/end-billing      end its paid time now (refund, dispute), so it's Free
  * - POST   /api/admin/workspaces/<slug>/hosts {host, allowed}   approve or revoke a live-data host, as its admins can
  * - POST   /api/admin/workspaces/<slug>/tokens {email}   an agent token for a member
@@ -1935,6 +1947,11 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       if (!rec) return Response.json({ error: `${slug} has no subscription record` }, { status: 400 });
       await hub.setPlan(rec.plan, rec.until);
       return Response.json({ plan: rec.plan, until: rec.until });
+    }
+    // Team at no charge (the operator's own workspaces, say), whatever billing says; off puts billing back in charge.
+    if (action === "free-team" && request.method === "POST") {
+      if (typeof body.on !== "boolean") return Response.json({ error: "on must be true or false" }, { status: 400 });
+      return Response.json({ plan: await hub.setFreeTeam(body.on) });
     }
     // After a refund or dispute: Team ends now, whatever the subscription said (cancel it in Creem too).
     if (action === "end-billing" && request.method === "POST") {

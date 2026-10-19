@@ -342,7 +342,7 @@ test("return paths can't become another host; grep patterns that could stall are
   // Alternation or nesting under a repeat, and several open-ended repeats, are searched as plain text.
   const long = "a".repeat(2000);
   const t2 = Date.now();
-  for (const p of ["(a|aa)+$", "((a+))+$", "a*a*c", ".*.*c"]) expect(grepFiles({ "a.md": long }, p)).toEqual([]);
+  for (const p of ["(a|aa)+$", "((a+))+$", "a*a*c", ".*.*c", `${"a?".repeat(40)}${"a".repeat(40)}`]) expect(grepFiles({ "a.md": long }, p)).toEqual([]);
   expect(Date.now() - t2).toBeLessThan(100);
   expect(grepFiles({ "a.md": "foo then bar" }, "foo.*bar")).toHaveLength(1);
 });

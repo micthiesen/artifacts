@@ -73,9 +73,14 @@ export async function supportHub(env: SupportEnv): Promise<HubApi> {
       if (!(await d.workspace(SUPPORT_SLUG))) throw err;
     }
   }
-  if (await hub.exists()) return hub;
+  if (await hub.exists()) {
+    // Support is never limited by a plan.
+    if (!(await hub.plan()).free) await hub.setFreeTeam(true);
+    return hub;
+  }
   try {
     await hub.provision({ slug: SUPPORT_SLUG, name: "Support", admin: first, plan: "team" });
+    await hub.setFreeTeam(true);
   } catch (err) {
     // The other first request provisioned it meanwhile.
     if (!(await hub.exists())) throw err;

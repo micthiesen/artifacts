@@ -4,7 +4,7 @@
 // list polls while one is running. Typed values are kept across re-renders
 // (keyed by data-key), and a failed action only shows its notice.
 
-type Stats = { artifacts: number; members: number; bytes: number; lastActivity: string | null; plan?: "free" | "team" };
+type Stats = { artifacts: number; members: number; bytes: number; lastActivity: string | null; plan?: "free" | "team"; freeTeam?: boolean };
 type Job = { kind: "backup" | "restore" | "import"; phase?: string; progress?: string; error?: string; startedAt: string };
 type Workspace = {
   slug: string;
@@ -243,7 +243,7 @@ function render() {
         "p",
         { class: "small" },
         s
-          ? `${s.plan === "free" ? "Free" : "Team"} plan · ${s.artifacts} artifacts · ${s.members} members · ${size(s.bytes)} · last activity ${s.lastActivity ? stamp(s.lastActivity) : "none"} · stats from ${w.statsAt ? stamp(w.statsAt) : "never"}`
+          ? `${s.freeTeam ? "Team (free)" : s.plan === "free" ? "Free" : "Team"} plan · ${s.artifacts} artifacts · ${s.members} members · ${size(s.bytes)} · last activity ${s.lastActivity ? stamp(s.lastActivity) : "none"} · stats from ${w.statsAt ? stamp(w.statsAt) : "never"}`
           : "No stats yet.",
       ),
     );
@@ -284,10 +284,13 @@ function render() {
               }), `End billing for ${w.slug}`),
             ]
           : []),
-        ...(w.billing ? [] : [named(btn(s?.plan === "free" ? "Move to Team" : "Move to Free", () => {
-          const plan = s?.plan === "free" ? "team" : "free";
-          return act(() => api(`/api/admin/workspaces/${w.slug}/plan`, { body: { plan } }), `${w.slug} is now on the ${plan === "free" ? "Free" : "Team"} plan.`);
-        }), `Move ${w.slug} to ${s?.plan === "free" ? "Team" : "Free"}`)]),
+        // Team at no charge, whatever billing says (the operator's own workspaces); off hands the plan back to billing.
+        named(
+          btn(s?.freeTeam ? "End free Team" : "Give Team free", () =>
+            act(() => api(`/api/admin/workspaces/${w.slug}/free-team`, { body: { on: !s?.freeTeam } }), s?.freeTeam ? `${w.slug}'s plan follows billing again.` : `${w.slug} has Team free.`),
+          ),
+          `${s?.freeTeam ? "End free Team for" : "Give Team free to"} ${w.slug}`,
+        ),
         backup,
         named(btn("Backups…", () =>
           act(async () => {
