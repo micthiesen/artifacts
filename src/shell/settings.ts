@@ -121,10 +121,20 @@ function flash(n: Notice) {
   el.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
+// Requests cut off by leaving the page (Safari says "Load failed") aren't errors worth showing.
+let leaving = false;
+addEventListener("pagehide", () => (leaving = true));
+addEventListener("pageshow", (e) => {
+  leaving = false;
+  // Back from the provider through the back button: the page is as we left it (Upgrade busy), so refresh it.
+  if (e.persisted) void load().catch(() => {});
+});
+
 async function act(fn: () => Promise<unknown>, ok?: string | (() => string)) {
   try {
     await fn();
   } catch (err) {
+    if (leaving) return;
     notice = null;
     flash(failed(err));
     return;
@@ -133,7 +143,7 @@ async function act(fn: () => Promise<unknown>, ok?: string | (() => string)) {
   try {
     await load();
   } catch (err) {
-    flash(failed(err));
+    if (!leaving) flash(failed(err));
   }
 }
 
@@ -163,6 +173,8 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
     act(async () => {
       const r = await api<{ url: string }>(path, { body: {} });
       location.href = r.url;
+      // We're leaving for the provider: don't refresh this page meanwhile (the browser would cancel it mid-way).
+      await new Promise(() => {});
     });
   const day = (v: string) => new Date(v).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   const plainUntil = data.plan.until ? day(data.plan.until) : null;
