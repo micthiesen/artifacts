@@ -449,7 +449,7 @@ export function initOwnerMenu(
                   : email.startsWith("@")
                     ? `Shared with everyone at ${email.slice(1)}.`
                     : emailed === "not emailed"
-                      ? `Shared with ${email}, but we couldn't email them (today's email limit). Send them the page link yourself.`
+                      ? `Shared with ${email}, but we couldn't email them (the workspace's email limit for now). Send them the page link yourself.`
                       : `Shared with ${email}. We emailed them a link.`,
             };
           });

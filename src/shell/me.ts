@@ -26,6 +26,8 @@ type Profile = {
   /** Your default for this workspace; null is the standard one. */
   watchDefault?: WatchLevel | null;
   account?: string;
+  /** Your role here, if you're a member (not just a guest). */
+  member?: "admin" | "member" | null;
 };
 
 const main = document.getElementById("profile")!;
@@ -231,6 +233,7 @@ function renderAccount(sections: HTMLElement[]) {
         : h("p", { class: "muted" }, "None yet. When someone shares an artifact with you, its workspace shows up here."),
     ),
   );
+  sections.push(deleteAccountSection());
 }
 
 function passkeySection(passkeys: NonNullable<Profile["passkeys"]>): HTMLElement {
@@ -341,6 +344,98 @@ function renderWatches(sections: HTMLElement[], watches: NonNullable<Profile["wa
         : []),
     ),
   );
+  if (profile.member) sections.push(leaveSection());
+}
+
+/** A member takes themselves out of this workspace; artifacts they own pass to an admin. */
+function leaveSection(): HTMLElement {
+  const name = profile.workspace?.name ?? "this workspace";
+  let armed = false;
+  const b = btn(
+    "Leave workspace",
+    () => {
+      if (!armed) {
+        armed = true;
+        b.textContent = `Yes, leave ${name}`;
+        note.textContent = "Press again to leave. Your agents lose access here, and artifacts you own pass to an admin.";
+        return;
+      }
+      // The refusal (say, the last admin) shows here, next to the button, not in a banner far above.
+      return showing(async () => {
+        try {
+          const r = await api<{ location: string }>("/api/me/leave", { body: {} });
+          location.href = r.location;
+          await new Promise(() => {});
+        } catch (err) {
+          note.textContent = (err as Error).message;
+          note.classList.add("notice", "error");
+          armed = false;
+          b.textContent = "Leave workspace";
+        }
+      });
+    },
+    "button small secondary",
+  );
+  const note = h("p", { class: "muted" }, `You'd stop being a member of ${name}. Artifacts shared with you directly still open.`);
+  return h("section", { class: "card-section" }, h("h2", {}, "Leave"), note, h("div", { class: "row" }, b));
+}
+
+async function showing(fn: () => Promise<void>) {
+  try {
+    await fn();
+  } catch (err) {
+    flash(failed(err));
+  }
+}
+
+/** Delete your account: first see what that means (and what's in the way), then type delete. */
+function deleteAccountSection(): HTMLElement {
+  const body = h("div", {});
+  const section = h(
+    "section",
+    { class: "card-section" },
+    h("h2", {}, "Delete your account"),
+    h("p", { class: "muted" }, "Removes you from every workspace, stops everything shared with your address being shared with you, and deletes your name, channels and passkeys. Comments you wrote stay where they are, under your address; ask an admin there to remove them."),
+    body,
+  );
+  // Only the final delete goes through act(): it reloads and re-renders, which would drop these steps.
+  const check = btn(
+    "Delete account…",
+    () =>
+      showing(async () => {
+        const plan = await api<{ blockers: string[]; deletes: { name: string }[]; leaves: { name: string }[]; guestOf: { name: string }[] }>("/api/me/delete");
+        body.replaceChildren();
+        if (plan.blockers.length) {
+          body.append(h("p", {}, "First:"), h("ul", {}, ...plan.blockers.map((b) => h("li", {}, b))));
+          return;
+        }
+        if (plan.deletes.length) body.append(h("p", {}, `These workspaces have no other members, so they're deleted too, and anyone you shared their artifacts with loses access: ${plan.deletes.map((w) => w.name).join(", ")}. Download anything you need from their settings first.`));
+        if (plan.leaves.length) body.append(h("p", { class: "muted" }, `You leave: ${plan.leaves.map((w) => w.name).join(", ")}.`));
+        if (plan.guestOf.length) body.append(h("p", { class: "muted" }, `Artifacts shared with you in ${plan.guestOf.map((w) => w.name).join(", ")} stop being shared with you.`));
+        const confirm = h("input", { class: "input", type: "text", autocomplete: "off", "aria-label": "Type delete to confirm", placeholder: "delete" }) as HTMLInputElement;
+        body.append(
+          h("p", { class: "muted" }, "It can't be undone. Type delete to confirm."),
+          h(
+            "div",
+            { class: "row" },
+            confirm,
+            btn(
+              "Delete my account",
+              () =>
+                act(async () => {
+                  const r = await api<{ location: string }>("/api/me/delete", { body: { confirm: confirm.value.trim() } });
+                  location.href = r.location;
+                  await new Promise(() => {});
+                }),
+              "button small danger-solid",
+            ),
+          ),
+        );
+      }),
+    "button small secondary",
+  );
+  body.append(h("div", { class: "row" }, check));
+  return section;
 }
 
 function addChannels(): HTMLElement {

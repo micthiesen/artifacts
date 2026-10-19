@@ -164,3 +164,14 @@ export function sendShare(env: MailEnv, to: string, input: { title: string; work
     footer: `You got this because ${who} shared an artifact with this address.`,
   });
 }
+
+/** To the operator: something worth knowing happened (a signup, a payment, a report). Never fails the caller. */
+export async function sendOperatorNote(env: MailEnv & { OPERATOR_EMAILS?: string }, subject: string, lines: string[], link: { href: string; label: string }) {
+  const to = (env.OPERATOR_EMAILS ?? "").split(",")[0].trim();
+  if (!to) return;
+  try {
+    await simple(env, to, { subject: `[${PRODUCT}] ${subject}`, preheader: lines[0] ?? subject, lines, link, footer: "You get these because you operate this deployment." });
+  } catch (err) {
+    console.error("operator note failed", subject, err);
+  }
+}

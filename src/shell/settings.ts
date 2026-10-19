@@ -151,7 +151,7 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
         : sub?.status === "paused"
           ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is paused. Resume it from Manage billing to keep Team.`
           : data.plan.until || sub?.status === "scheduled_cancel"
-            ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is canceled. Resubscribe from Manage billing to keep Team.`
+            ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is canceled. Subscribe again to keep Team.`
             : "Team, arranged with us directly.";
   // Matches the server: a subscription that's canceled or lapsed to Free can be replaced by a new one.
   const live = sub && sub.status !== "canceled" && team;
@@ -160,8 +160,10 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
   const mine = !payerAdmin || payer === data.you.email.toLowerCase();
   const actions = h("div", { class: "row" });
   const notes: HTMLElement[] = [];
-  if (!team && !live) {
-    const b = btn("Upgrade to Team", () => go("/api/settings/billing/checkout"));
+  // Canceled with paid time left: subscribing again keeps Team past the date (the new subscription takes over).
+  const resubscribe = team && sub?.status === "canceled" && Boolean(data.plan.until);
+  if ((!team && !live) || resubscribe) {
+    const b = btn(resubscribe ? "Subscribe again" : "Upgrade to Team", () => go("/api/settings/billing/checkout"));
     if (!billing.ready || checkoutPending) {
       b.setAttribute("disabled", "");
       b.setAttribute("aria-describedby", "billing-not-ready");
@@ -174,7 +176,7 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
   return h(
     "section",
     { class: "card-section" },
-    h("h2", {}, "Plan and billing"),
+    h("h2", { id: "plan-and-billing" }, "Plan and billing"),
     h("p", { class: "muted" }, state),
     ...notes,
     actions,
@@ -196,9 +198,21 @@ function deleteSection(): HTMLElement {
       }),
     "button small danger-solid",
   );
+  const others = data.members.filter((m) => m.role === "admin" && m.email !== data.you.email);
+  const handOver: HTMLElement[] = [];
+  if (others.length) {
+    const pick = h("select", { class: "input", "aria-label": "Admin to hand the workspace to" }) as HTMLSelectElement;
+    for (const m of others) pick.append(h("option", { value: m.email }, m.email));
+    handOver.push(
+      h("h3", {}, "Hand it over"),
+      h("p", { class: "muted" }, "Make another admin its owner: they can then delete it, and you could make a workspace of your own."),
+      h("div", { class: "row" }, pick, btn("Hand over", () => act(() => api("/api/settings/owner", { body: { email: pick.value } }), () => `${pick.value} owns this workspace now.`), "button small secondary")),
+    );
+  }
   return h(
     "section",
     { class: "card-section" },
+    ...handOver,
     h("h2", {}, "Delete workspace"),
     h("p", { class: "muted" }, `Deletes every artifact, comment and member, and its backups. It can't be undone: download a copy above first. Type ${slug} to confirm.`),
     h("div", { class: "row" }, confirm, go),
@@ -283,7 +297,8 @@ if (new URLSearchParams(location.search).get("billing") === "done") {
     } catch {
       // try again next time
     }
-    if (data?.plan.id === "team" || data?.billing?.subscription) {
+    // Only the plan counts: an earlier subscription's record is already there on a resubscribe.
+    if (data?.plan.id === "team" && !(data.billing?.subscription?.status === "canceled" && data.plan.until)) {
       checkoutPending = false;
       notice = { tone: "ok", text: "Payment confirmed: this workspace is on Team." };
       render();
@@ -381,7 +396,15 @@ function render() {
       limits.members !== null && `${usage.members} of ${limits.members} members`,
       limits.bytes !== null && `${mb(usage.bytes)} of ${mb(limits.bytes)}`,
     ].filter((p): p is string => Boolean(p));
-    sections.push(h("p", { class: "muted plan-usage" }, `${data.plan.label} plan: ${parts.join(" · ")}. People you share artifacts with don't count.`));
+    const usageLine = h("p", { class: "muted plan-usage" }, `${data.plan.label} plan: ${parts.join(" · ")}. People you share artifacts with don't count.`);
+    // Close to a limit, admins get a way to more room before they hit it.
+    const near = [
+      limits.artifacts !== null && usage.artifacts >= limits.artifacts * 0.8,
+      limits.members !== null && usage.members >= limits.members,
+      limits.bytes !== null && usage.bytes >= limits.bytes * 0.8,
+    ].some(Boolean);
+    if (near && data.billing && data.plan.id === "free") usageLine.append(" ", h("a", { href: "#plan-and-billing" }, "Upgrade to Team for more room"));
+    sections.push(usageLine);
     // Over a limit (say, after moving to Free): say what still works and what doesn't.
     const over = [
       limits.artifacts !== null && usage.artifacts > limits.artifacts && "artifacts",

@@ -293,9 +293,22 @@ export const TOOLS: Tool[] = [
       });
       if (r.ok && (Array.isArray(args.share) || typeof args.public === "boolean" || expiry.until)) {
         const add = ((args.share as { email: string; role: string }[] | undefined) ?? []).filter((a) => a && typeof a.email === "string");
-        await hub.share(r.id, { add: add as never, public: args.public as boolean | undefined, publicUntil: expiry.until });
+        // The artifact is saved either way: if the public link is refused (a new Free workspace's first day),
+        // share it with the people named and say so, rather than fail and invite a duplicate on retry.
+        let refused: string | null = null;
+        try {
+          await hub.share(r.id, { add: add as never, public: args.public as boolean | undefined, publicUntil: expiry.until });
+        } catch (err) {
+          if (!/first day/.test((err as Error).message)) throw err;
+          refused = (err as Error).message;
+          await hub.share(r.id, { add: add as never });
+        }
         const people = add.map((a) => sharePrincipal(a.email)).filter((p) => p.includes("@") && !p.startsWith("@") && p !== ctx.person);
         if (people.length) await announceShares(ctx, r.id, String(args.title), people, true);
+        if (refused) {
+          const out = await writeResult(r, ctx, true);
+          return { ...out, text: `${out.text}\nCreated, but the public link stayed off: ${refused}` };
+        }
       }
       return writeResult(r, ctx, true);
     },

@@ -23,6 +23,8 @@ const pages: [string, string, string | undefined][] = [
   ["privacy", `${apex}/privacy`, undefined],
   ["terms", `${apex}/terms`, undefined],
   ["security", `${apex}/security`, undefined],
+  ["help", `${apex}/help`, undefined],
+  ["report", `${apex}/report?url=${encodeURIComponent(`${origin}/a/${id}`)}`, undefined],
   ["your workspaces", `${apex}/workspaces`, ownerApex],
   ["account", `${apex}/me`, ownerApex],
   ["artifact list", `${origin}/`, ownerHere],

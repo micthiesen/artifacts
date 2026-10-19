@@ -11,7 +11,9 @@ import { diffBlocks, type BlockInfo } from "./blocks.ts";
 import { composeMessage, mentionedEmails, type OutboxItem } from "./notifications.ts";
 import { isBlockedHost, sendToChannel, type NotifyEnv } from "./notify.ts";
 import { DEFAULT_PLAN, PLANS, isPlan, type PlanId } from "./plans.ts";
+import { TEAM_PRICE } from "./billing.ts";
 import { cleanQuery, listing, queryWords, type InContent } from "./listing.ts";
+import { ops, type OpsEvent } from "./ops.ts";
 import {
   EVENT_ERRORS,
   EventsFailure,
@@ -121,6 +123,8 @@ type QueuedJob = { kind: "backup" } | { kind: "restore"; run: string };
 export type HubEnv = CheckEnv &
   NotifyEnv & {
     DIRECTORY: DurableObjectNamespace;
+    /** The operator's addresses, for ops alerts. */
+    OPERATOR_EMAILS?: string;
     /** Nightly backups; optional so tests and local runs work without R2. */
     BACKUPS?: R2Bucket;
   };
@@ -134,7 +138,7 @@ export type HubApi = AsyncMethods<
   Pick<
     Workspace,
     | "provision" | "access" | "info" | "rename" | "stats" | "destroy" | "members" | "setMember" | "createToken" | "tokens"
-    | "revokeToken" | "verifyAgentToken" | "signedIn" | "closeSockets" | "allowMail" | "indexData" | "listPage" | "openArtifact" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
+    | "revokeToken" | "verifyAgentToken" | "signedIn" | "closeSockets" | "allowMail" | "indexData" | "listPage" | "exists" | "forgetPerson" | "openArtifact" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
@@ -147,6 +151,8 @@ export type HubApi = AsyncMethods<
 type SocketTag = { id: string; email: string | null; role: Role; origin?: string; exp?: number };
 
 const HISTORY_KEEP = 50;
+/** Invitation and share emails a Free workspace may send on its first day. */
+const NEW_FREE_INVITES = 10;
 const ASSETS_MAX_BYTES = 20 * 1024 * 1024;
 const SOURCE_MAX_BYTES = 1024 * 1024;
 const SOURCES_PER_RUN = 20;
@@ -383,6 +389,28 @@ export class Workspace extends DurableObject {
     return this.info();
   }
 
+  /**
+   * A deleted account, as far as this workspace goes (after it's stopped being a member): artifacts shared with
+   * that address stop being shared with it, and its pins, read state, notification levels, queued notifications,
+   * grants and event subscriptions go. Comments it wrote stay.
+   */
+  forgetPerson(email: string) {
+    if (!this.ready) return;
+    const clean = email.trim().toLowerCase();
+    this.ctx.storage.transactionSync(() => {
+      for (const table of ["shares", "seen", "pins", "watches", "watch_defaults", "outbox", "grants"]) this.sql.exec(`DELETE FROM ${table} WHERE email = ?`, clean);
+      this.sql.exec(`DELETE FROM event_subs WHERE principal = ?`, clean);
+      this.sql.exec(`DELETE FROM event_receivers WHERE principal = ?`, clean);
+    });
+    this.markDirty();
+    for (const ws of this.ctx.getWebSockets()) if ((ws.deserializeAttachment() as SocketTag).email === clean) ws.close(4003, "access changed");
+  }
+
+  /** Whether this workspace still has its data (false once destroyed, or never provisioned). */
+  exists(): boolean {
+    return this.ready && !this.setting("destroyed");
+  }
+
   info(): { slug: string; name: string; createdAt: string | null } {
     if (!this.ready) return { slug: "", name: "", createdAt: null };
     const slug = this.setting("slug") ?? "";
@@ -504,7 +532,7 @@ export class Workspace extends DurableObject {
     const fix =
       kind === "changesPerDay"
         ? "Try again later: changes save again as the oldest of today's fall out of the last 24 hours."
-        : `A workspace admin can ${kind === "members" ? "remove a member" : "delete artifacts nobody needs"}${this.planId() === "free" ? " or move the workspace to Team" : ""}. Agents: tell the person; don't delete anything to make room.`;
+        : `A workspace admin can ${kind === "members" ? "remove a member" : "delete artifacts nobody needs"}${this.planId() === "free" ? `, or move the workspace to Team in its settings (${TEAM_PRICE.amount} USD a ${TEAM_PRICE.period})` : ""}. (Agents: tell the person rather than deleting anything to make room.)`;
     throw new HubError(`This workspace is on the ${plan.label} plan, which allows ${limit}. ${fix}`);
   }
 
@@ -605,6 +633,12 @@ export class Workspace extends DurableObject {
    * invitations, so a busy day of notifications can't stop someone being
    * invited.
    */
+  /** A Free workspace less than a day old: held back from what a throwaway one could abuse. */
+  private newFree(): boolean {
+    const created = this.info().createdAt;
+    return this.planId() === "free" && created !== null && Date.now() - Date.parse(created) < DAY_MS;
+  }
+
   allowMail(n: number, by?: string, kind: "invite" | "notify" = "invite"): boolean {
     const day = new Date().toISOString().slice(0, 10);
     const used = JSON.parse(this.setting("mail_sent") ?? "{}") as { day?: string; n?: number; notify?: number; by?: Record<string, number> };
@@ -612,8 +646,23 @@ export class Workspace extends DurableObject {
     const mine = by ? (today.by?.[by] ?? 0) : 0;
     const limits = PLANS[this.planId()].limits;
     const cap = Math.min(MAIL_PER_DAY, limits.emailsPerDay);
-    if ((today.n ?? 0) + n > cap || (by && mine + n > SHARE_MAIL_PER_PERSON)) return false;
+    if ((today.n ?? 0) + n > cap) {
+      // Once a day, so the operator console shows which workspaces run out (and whether a cap is too tight).
+      if (this.setting("mail_capped") !== day) {
+        this.setSetting("mail_capped", day);
+        void this.ops({ kind: "email_cap_reached", message: `Used all ${cap} emails for ${day} (${this.planId()}).` });
+      }
+      return false;
+    }
+    if (by && mine + n > SHARE_MAIL_PER_PERSON) return false;
     if (kind === "notify" && (today.notify ?? 0) + n > cap - limits.inviteEmailsPerDay) return false;
+    // On a new Free workspace's first day, invitations and shares are held to a handful.
+    // Counted since creation (not per calendar day), so a workspace made just before midnight gets no more.
+    const firstDay = Number(this.setting("first_day_invites") ?? 0);
+    if (kind === "invite" && this.newFree()) {
+      if (firstDay + n > NEW_FREE_INVITES) return false;
+      this.setSetting("first_day_invites", String(firstDay + n));
+    }
     this.setSetting(
       "mail_sent",
       JSON.stringify({ day, n: (today.n ?? 0) + n, notify: (today.notify ?? 0) + (kind === "notify" ? n : 0), by: by ? { ...today.by, [by]: mine + n } : today.by }),
@@ -1037,6 +1086,10 @@ export class Workspace extends DurableObject {
     const current = this.sql.exec(`SELECT public, public_until FROM artifacts WHERE id = ?`, id).one();
     const keep = input.publicUntil === undefined && isPublic(current) ? ((current.public_until as string | null) ?? null) : null;
     const until = on ? (input.publicUntil === undefined ? keep : publicExpiry(input.publicUntil)) : null;
+    // A brand-new Free workspace is where a phishing page would come from: no public links on its first day.
+    if (on && !isPublic(current) && this.newFree()) {
+      throw new HubError("Public links open after a new Free workspace's first day. Share with people by email until then, or move the workspace to Team.");
+    }
     for (const s of input.add ?? []) {
       if (!isValidPrincipal(sharePrincipal(String(s.email ?? "")))) throw new HubError(`"${s.email}" is not an email address, @domain or workspace`);
       if (s.role !== "view" && s.role !== "edit") throw new HubError(`role must be view or edit, not ${s.role}`);
@@ -1234,10 +1287,11 @@ export class Workspace extends DurableObject {
       try {
         await fn();
       } catch (err) {
-        console.error(`alarm ${name} failed`, err);
+        console.error(JSON.stringify({ ops: "alarm_step_failed", slug: this.info().slug, step: name, message: (err as Error).message }));
       }
     };
     await step("jobs", () => this.stepJobs(Date.now() + JOB_STEP_MS));
+    await step("storage", () => this.watchStorage());
     // Nothing else touches data while a restore or import replaces it.
     if (this.offline()) return;
     if (this.setting("resync_due")) await step("directory resync", () => this.resync());
@@ -1312,6 +1366,10 @@ export class Workspace extends DurableObject {
     if ("rateLimited" in result) {
       this.nextCheckAt = Date.now() + 10_000;
       return null;
+    }
+    // Browser Run itself failing makes every check skip quietly; that's worth an email (once an hour, for everyone).
+    if (result.check.status === "skipped" && /^browser /.test(result.check.reason)) {
+      void this.ops({ kind: "render_check_skipped", message: `A render check was skipped: ${result.check.reason}`, detail: { artifactId: id, version }, alert: "render_check_unavailable" });
     }
     this.sql.exec(
       `INSERT INTO checks (artifact_id, version, origin, status, result, screenshot, at) VALUES (?, ?, ?, 'done', ?, ?, ?)
@@ -1770,7 +1828,7 @@ export class Workspace extends DurableObject {
         this.setJob(null);
         // Tidying up afterwards can't undo a finished backup.
         const pending = JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[];
-        await pruneBackups(bucket, slug, BACKUPS_KEEP, pending.flatMap((q) => (q.kind === "restore" ? [q.run] : []))).catch((err) => console.error("prune failed", err));
+        await pruneBackups(bucket, slug, BACKUPS_KEEP, pending.flatMap((q) => (q.kind === "restore" ? [q.run] : []))).catch((err) => console.error(JSON.stringify({ ops: "prune_failed", slug, message: (err as Error).message })));
         await this.reportJob();
         return true;
       }
@@ -1806,6 +1864,7 @@ export class Workspace extends DurableObject {
       }
       // Give up. Nothing live was changed: a backup failed, or a restore never swapped in.
       if (job.kind === "restore") dropShadows(this.ctx.storage, DATA_TABLES);
+      await this.ops({ kind: `${job.kind}_failed`, message: `The ${job.kind} gave up after ${tries} tries: ${message}`, detail: { run: (job as { run?: string }).run }, alert: true });
       this.setJob(null);
       this.setSetting("last_job_error", JSON.stringify({ message: `${job.kind}: ${message}`, at: new Date().toISOString() }));
       if (job.kind === "backup") {
@@ -1830,7 +1889,23 @@ export class Workspace extends DurableObject {
     const summary = job ? { kind: job.kind, phase: job.phase, error: job.error, startedAt: job.startedAt } : null;
     await this.directory()
       .recordJob(this.info().slug, summary, this.lastJobError())
-      .catch((err: unknown) => console.error("reporting job failed", err));
+      .catch((err: unknown) => console.error(JSON.stringify({ ops: "report_job_failed", slug: this.info().slug, message: (err as Error).message })));
+  }
+
+  /** An ops event for this workspace (see ops.ts): logged, kept for the operator console, urgent ones emailed. */
+  private ops(e: Omit<OpsEvent, "slug">) {
+    return ops(this.hubEnv, { ...e, slug: this.info().slug });
+  }
+
+  /** Once a day: tell the operator when this workspace's database passes 80% of what one Durable Object holds. */
+  private async watchStorage() {
+    const last = Number(this.setting("storage_checked_at") ?? 0);
+    if (Date.now() - last < DAY_MS) return;
+    this.setSetting("storage_checked_at", String(Date.now()));
+    const used = this.sql.databaseSize;
+    if (used > DATABASE_CAPACITY_BYTES * 0.8) {
+      await this.ops({ kind: "storage_near_cap", message: `Database at ${(used / 1024 ** 3).toFixed(2)} GB of the ${(DATABASE_CAPACITY_BYTES / 1024 ** 3).toFixed(1)} GB writes stop at.`, alert: `storage:${this.info().slug}` });
+    }
   }
 
   /** A run id later than any before it here, even for two backups in the same millisecond. */
@@ -1866,7 +1941,7 @@ export class Workspace extends DurableObject {
       this.setSetting("resync_due", null);
       await this.reportJob();
     } catch (err) {
-      console.error("resync with the directory failed; the alarm retries", err);
+      console.error(JSON.stringify({ ops: "resync_failed", slug, message: (err as Error).message }));
     }
   }
 
@@ -2753,7 +2828,7 @@ export class Workspace extends DurableObject {
         sends += await this.deliverTo(sub, now, deadline, SENDS_PER_ALARM - sends);
       } catch (err) {
         // One broken subscription doesn't hold up the rest; it tries again later.
-        console.error("event delivery failed", err);
+        console.error(JSON.stringify({ ops: "event_delivery_failed", slug: this.info().slug, message: (err as Error).message }));
         this.sql.exec(`UPDATE event_subs SET next_at = ? WHERE id = ?`, now + EVENT_RETRY_MS[1], sub.id);
       }
     }

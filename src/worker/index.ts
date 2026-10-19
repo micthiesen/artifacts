@@ -26,10 +26,14 @@ import {
   workspacesPage,
   POLICY_UPDATED,
   pricingPage,
+  helpPage,
+  REPORT_REASONS,
+  reportPage,
   type Brand,
 } from "./pages.ts";
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
+import { ops } from "./ops.ts";
 import { publicMessage } from "./errors.ts";
 import { isPlan } from "./plans.ts";
 import { BillingError, billingOn, billingReady, planFor, portalLink, readEvent, startCheckout, subscriptionLive, TEAM_PRICE, verifyWebhook } from "./billing.ts";
@@ -75,6 +79,8 @@ export type Env = {
   OPERATOR_TOKEN: string;
   /** Comma-separated emails who run this deployment. */
   OPERATOR_EMAILS: string;
+  /** Where people write for help (support@<domain> when Email Routing forwards it); else the first operator. */
+  SUPPORT_EMAIL?: string;
   /** The front door, e.g. "artifacts.boo". */
   APEX_HOST: string;
   /** https://<APEX_HOST>, for links in notification emails. */
@@ -131,7 +137,8 @@ export default {
     else {
       // Unknown hosts stop here, so a random subdomain never wakes a Durable Object.
       const slug = slugOf(url.hostname, env);
-      const record = slug ? await workspaceRecord(env, slug, ctx) : null;
+      const signingIn = url.pathname === "/login" || url.pathname.startsWith("/s/") || Boolean(readCookie(request, SESSION_COOKIE));
+      const record = slug ? await workspaceRecord(env, slug, ctx, signingIn) : null;
       response = record
         ? await providerFor(url.origin).fetch(request, env, ctx)
         : messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: PRODUCT }, apexBrand(env));
@@ -169,9 +176,55 @@ export function workspaceOrigin(env: Pick<Env, "WORKSPACE_SUFFIX">, slug: string
   return `https://${slug}${env.WORKSPACE_SUFFIX}`;
 }
 
-/** Where people reach us: the first operator address. */
+/**
+ * Reporting an artifact (phishing, malware, anything that breaks the terms): anyone, signed in or not,
+ * from the Report link on artifacts they don't belong to. It emails the operator, who can suspend the
+ * workspace from the operator console.
+ */
+async function reportRoute(request: Request, url: URL, env: Env, brand: Brand): Promise<Response> {
+  const target = (request.method === "POST" ? null : url.searchParams.get("url")) ?? "";
+  if (request.method !== "POST") return reportPage(brand, { url: ourArtifactUrl(env, target) ?? "" });
+  if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
+  const form = await request.formData().catch(() => new FormData());
+  const field = (k: string, max: number) => String(form.get(k) ?? "").trim().slice(0, max);
+  const state = { url: field("url", 500), reason: field("reason", 40), details: field("details", 2000), email: field("email", 200) };
+  const artifact = ourArtifactUrl(env, state.url);
+  if (!artifact) return reportPage(brand, { ...state, error: `Paste the artifact's link (it looks like https://<workspace>${env.WORKSPACE_SUFFIX}/a/…).` }, 400);
+  if (!REPORT_REASONS.some(([k]) => k === state.reason)) return reportPage(brand, { ...state, error: "Pick what's wrong." }, 400);
+  if (!(await directory(env).allowReport(request.headers.get("CF-Connecting-IP") ?? "unknown"))) {
+    return reportPage(brand, { ...state, error: `Too many reports from your network just now. Email ${contactEmail(env)} instead.` }, 429);
+  }
+  const slug = new URL(artifact).hostname.slice(0, -env.WORKSPACE_SUFFIX.length);
+  if (!(await directory(env).workspace(slug))) return reportPage(brand, { ...state, error: "There's no workspace at that link." }, 400);
+  // Kept in the ops log (the operator console lists reports) as well as emailed: an email alone can be lost.
+  const label = REPORT_REASONS.find(([k]) => k === state.reason)![1];
+  const stored = await ops(env, {
+    kind: "report",
+    slug,
+    message: `Report (${label}): ${artifact}. Suspend the workspace from the operator console if it's real.`,
+    detail: { url: artifact, reason: state.reason, details: state.details || undefined, from: state.email || "anonymous" },
+    alert: `report:${slug}`,
+    keepAll: true,
+  });
+  if (!stored) return reportPage(brand, { ...state, error: `We couldn't take the report just now. Email ${contactEmail(env)} instead.` }, 503);
+  return reportPage(brand, { done: true });
+}
+
+/** An artifact link on one of our workspaces, normalized; null for anything else. */
+function ourArtifactUrl(env: Env, raw: string): string | null {
+  try {
+    const u = new URL(raw);
+    const m = /^\/a\/([a-z0-9]+)/.exec(u.pathname);
+    if (u.protocol !== "https:" || !u.hostname.endsWith(env.WORKSPACE_SUFFIX) || !m) return null;
+    return `${u.origin}/a/${m[1]}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Where people reach us: the support address, else the first operator. */
 function contactEmail(env: Env): string {
-  return (env.OPERATOR_EMAILS ?? "").split(",")[0].trim();
+  return env.SUPPORT_EMAIL || (env.OPERATOR_EMAILS ?? "").split(",")[0].trim();
 }
 
 function apexOrigin(env: Env): string {
@@ -200,9 +253,9 @@ const workspaceCache = new Map<string, { record: Routable | null; at: number }>(
 let listCache: { value: WorkspaceList | null; at: number } | null = null;
 let publishing = false;
 
-async function workspaceRecord(env: Env, slug: string, ctx?: ExecutionContext): Promise<Routable | null> {
+async function workspaceRecord(env: Env, slug: string, ctx?: ExecutionContext, verifyMiss = false): Promise<Routable | null> {
   const hit = workspaceCache.get(slug);
-  if (hit && Date.now() - hit.at < (hit.record ? WORKSPACE_CACHE_MS : MISSING_CACHE_MS)) return hit.record;
+  if (hit && Date.now() - hit.at < (hit.record ? WORKSPACE_CACHE_MS : MISSING_CACHE_MS) && !(verifyMiss && !hit.record)) return hit.record;
   const remember = (record: Routable | null) => {
     // Random subdomains shouldn't grow an isolate's memory without bound.
     if (workspaceCache.size >= WORKSPACE_CACHE_MAX) workspaceCache.clear();
@@ -216,7 +269,9 @@ async function workspaceRecord(env: Env, slug: string, ctx?: ExecutionContext): 
   const listed = listCache.value;
   const entry = listed && Object.hasOwn(listed.list, slug) ? listed.list[slug] : null;
   if (entry) return remember({ slug, ...entry });
-  if (listed && Date.now() - Date.parse(listed.at) > LIST_SETTLE_MS) return remember(null);
+  // Our copy of the list can be a minute behind; a just-made workspace would 404. Only a browser that's signing
+  // in or signed in (verifyMiss) asks the directory about a miss, so random subdomains still never reach it.
+  if (listed && Date.now() - Date.parse(listed.at) > LIST_SETTLE_MS && !verifyMiss) return remember(null);
   if (!listed && ctx && !publishing) {
     publishing = true;
     ctx.waitUntil(directory(env).publish().finally(() => (publishing = false)));
@@ -300,9 +355,13 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const slug = slugOf(url.hostname, env)!;
-  if (path === "/healthz") return new Response("ok");
+  // ?deep=1 also reaches the directory, so an uptime monitor notices when it's down.
+  if (path === "/healthz") {
+    if (url.searchParams.get("deep") === "1") await directory(env).workspace("healthz");
+    return new Response("ok", { headers: { "Cache-Control": "no-store" } });
+  }
   if (path === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n", { headers: { "Content-Type": "text/plain" } });
-  if (path === "/privacy" || path === "/terms" || path === "/security") return Response.redirect(`${apexOrigin(env)}${path}`, 301);
+  if (path === "/privacy" || path === "/terms" || path === "/security" || path === "/help") return Response.redirect(`${apexOrigin(env)}${path}`, 301);
   const record = await workspaceRecord(env, slug);
   const brand: Brand = { name: record?.name ?? slug, home: "/", apex: apexOrigin(env) };
   if (!record) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: PRODUCT }, apexBrand(env));
@@ -362,7 +421,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
     if (!viewer.email) return signIn(path);
     const archived = path === "/archived";
     const data = await hub.indexData(viewer.email, { archived, q: url.searchParams.get("q"), page: url.searchParams.get("page") });
-    return indexPage({ email: viewer.email, member: data.member }, data, brand, data.summaries, archived);
+    return indexPage({ email: viewer.email, member: data.member }, data, brand, data.summaries, archived, { mcpUrl: `${url.origin}/mcp`, name: `artifacts-${slug}` });
   }
   if (path === "/me") {
     if (!viewer.email) return signIn("/me");
@@ -478,6 +537,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
         ...(visit ? { since: visit.since, readSeq: visit.readSeq, watch: visit.watch, ...(scoped ? {} : { pinned: visit.pinned }) } : {}),
       },
       brand,
+      // Anyone outside the workspace can report what they were sent; it sits outside the frame, so a page can't hide it.
+      member ? undefined : `${apexOrigin(env)}/report?url=${encodeURIComponent(`${url.origin}/a/${id}`)}`,
     );
   }
 
@@ -526,7 +587,11 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   const url = new URL(request.url);
   const path = url.pathname;
   const brand = apexBrand(env);
-  if (path === "/healthz") return new Response("ok");
+  // ?deep=1 also reaches the directory, so an uptime monitor notices when it's down.
+  if (path === "/healthz") {
+    if (url.searchParams.get("deep") === "1") await directory(env).workspace("healthz");
+    return new Response("ok", { headers: { "Cache-Control": "no-store" } });
+  }
   // Search engines may index the front page and the policies, nothing else.
   if (path === "/robots.txt") {
     return new Response(`User-agent: *\n${INDEXABLE.map((p) => `Allow: ${p === "/" ? "/$" : p}\n`).join("")}Disallow: /\n`, { headers: { "Content-Type": "text/plain" } });
@@ -536,14 +601,17 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   const operator = viewer.email !== null && operatorEmails(env).has(viewer.email);
 
   // The front page is the same for everyone; signed in, it links to /workspaces.
-  if (path === "/") return indexable(splashPage(brand, undefined, viewer.email ? { email: viewer.email, operator } : undefined, billingOn(env)));
+  if (path === "/") return indexable(splashPage(brand, url.searchParams.get("deleted") === "account" ? "Your account is deleted." : undefined, viewer.email ? { email: viewer.email, operator } : undefined, billingOn(env), env.SELF_SERVE === "on"));
   if (path === "/workspaces") {
     if (!viewer.email) return Response.redirect(`${url.origin}/login?return=/workspaces`, 302);
     const selfServe = env.SELF_SERVE === "on";
     const list = async () => (await directory(env).membershipsOf(viewer.email!)).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) }));
     // Once they've made their one workspace, there's no form to fill in only to be told no.
-    const create = async (state: { error?: string; name?: string; slug?: string } = {}) =>
-      selfServe && (state.error || (await directory(env).canMakeWorkspace(viewer.email!))) ? { ...state, suffix: env.WORKSPACE_SUFFIX } : null;
+    // A full day shows as such up front, rather than after filling in the form.
+    const create = async (state: { error?: string; name?: string; slug?: string } = {}) => {
+      if (!selfServe || !(state.error || (await directory(env).canMakeWorkspace(viewer.email!)))) return null;
+      return { ...state, suffix: env.WORKSPACE_SUFFIX, full: !state.error && (await directory(env).selfServeFullToday()) };
+    };
     if (request.method === "POST") {
       if (!selfServe) return new Response("not found", { status: 404 });
       if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
@@ -555,7 +623,10 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
       const res = workspacesPage(viewer.email, await list(), operator, brand, await create({ error: made.error, name, slug }));
       return new Response(res.body, { status: 400, headers: res.headers });
     }
-    return workspacesPage(viewer.email, await list(), operator, brand, await create());
+    const deleted = url.searchParams.get("deleted");
+    const left = url.searchParams.get("left");
+    const note = deleted ? `Deleted ${deleted.slice(0, 80)}.` : left ? `You left ${left.slice(0, 80)}.` : undefined;
+    return workspacesPage(viewer.email, await list(), operator, brand, await create(), note);
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
   if (path === "/login/passkey/options" && request.method === "POST") {
@@ -564,8 +635,10 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   }
   if (path === "/login/passkey" && request.method === "POST") return passkeyLogin(request, url, env);
   if (path === "/privacy" || path === "/terms" || path === "/security") {
-    return indexable(policyPage(path.slice(1) as PolicyKind, brand, contactEmail(env)));
+    return indexable(policyPage(path.slice(1) as PolicyKind, brand, contactEmail(env), billingOn(env)));
   }
+  if (path === "/report") return reportRoute(request, url, env, brand);
+  if (path === "/help") return indexable(helpPage(brand, contactEmail(env)));
   // Billing: the pricing page and the payment provider's webhook, only while billing is on.
   if (path === "/pricing" && billingOn(env)) return indexable(pricingPage(brand, env.SELF_SERVE === "on", viewer.email ? { email: viewer.email, operator } : undefined));
   if (path === "/api/billing/webhook" && request.method === "POST") return billingWebhook(request, env);
@@ -575,7 +648,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   }
   // Where a workspace's Sign out lands: end the apex session too, so the next sign-in asks again.
   if (path === "/signed-out") {
-    const res = splashPage(brand, "You're signed out. Other workspaces you opened sign out separately.");
+    const res = splashPage(brand, "You're signed out. Other workspaces you opened sign out separately.", undefined, billingOn(env), env.SELF_SERVE === "on");
     res.headers.append("Set-Cookie", clearSessionCookie());
     return res;
   }
@@ -594,6 +667,49 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
 }
 
 /** What settings shows an admin about paying: the price, whether checkout works yet, and the subscription. */
+/**
+ * What deleting this person's account means: workspaces where they're the only member go with it;
+ * the rest they leave (anything they made passes to another admin). Refused while they're the
+ * last admin of a workspace with other people, or one of theirs is still billed.
+ */
+async function accountDeletion(env: Env, email: string) {
+  const dir = directory(env);
+  const blockers: string[] = [];
+  const deletes: { slug: string; name: string }[] = [];
+  const leaves: { slug: string; name: string; heir: string | null }[] = [];
+  const guestOf: { slug: string; name: string }[] = [];
+  for (const w of await dir.membershipsOf(email)) {
+    if (w.role === "guest") {
+      guestOf.push({ slug: w.slug, name: w.name });
+      continue;
+    }
+    // A workspace whose data is already gone (an earlier attempt stopped partway) only needs its record removed.
+    // A workspace whose data is already gone (an earlier attempt stopped partway) only needs its record removed;
+    // one that's merely unreachable right now is never treated as gone.
+    const hub = workspaceHub(env, w.slug);
+    if (!(await hub.exists())) {
+      deletes.push({ slug: w.slug, name: w.name });
+      continue;
+    }
+    const members = await hub.members();
+    const others = members.filter((m) => m.email !== email);
+    const otherAdmins = others.filter((m) => m.role === "admin");
+    const record = await dir.billing(w.slug);
+    const billed = record && subscriptionLive(record.status, record.periodEnd);
+    if (!others.length) {
+      if (billed) blockers.push(`${w.name} still has a subscription: cancel it in its settings (Manage billing) first.`);
+      else deletes.push({ slug: w.slug, name: w.name });
+    } else if (w.role === "admin" && !otherAdmins.length) {
+      blockers.push(`You're the only admin of ${w.name}: make someone else an admin there first.`);
+    } else {
+      if (billed && record?.payerEmail === email) blockers.push(`You pay for ${w.name}: cancel it in its settings (Manage billing), or ask us to move billing.`);
+      const mine = (await dir.workspace(w.slug))?.createdBy === personKey(email);
+      leaves.push({ slug: w.slug, name: w.name, heir: mine ? (otherAdmins[0]?.email ?? null) : null });
+    }
+  }
+  return { blockers, deletes, leaves, guestOf };
+}
+
 /** Self-serve workspaces belong to whoever made them. */
 async function ownWorkspace(env: Env, slug: string, email: string): Promise<boolean> {
   const record = await directory(env).workspace(slug);
@@ -618,6 +734,8 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
   if (!billingOn(env) || !env.CREEM_WEBHOOK_SECRET) return new Response("not found", { status: 404 });
   const raw = await request.text();
   if (!(await verifyWebhook(env.CREEM_WEBHOOK_SECRET, raw, request.headers.get("creem-signature")))) {
+    // A burst of these after a deploy usually means CREEM_WEBHOOK_SECRET doesn't match Creem's.
+    await ops(env, { kind: "billing_bad_signature", message: "A billing webhook failed its signature check. If payments stop moving workspaces, check CREEM_WEBHOOK_SECRET.", alert: "billing_bad_signature" });
     return Response.json({ error: "bad signature" }, { status: 401 });
   }
   let payload: unknown;
@@ -627,11 +745,47 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: "bad JSON" }, { status: 400 });
   }
   const update = readEvent(payload);
-  if (!update) return Response.json({ ignored: true });
+  if (!update) {
+    // Events we don't act on (refunds, disputes) are expected; one about a subscription we couldn't read isn't.
+    const e = payload as { id?: string; eventType?: string; object?: { object?: string; subscription?: unknown } };
+    const aboutSubscription = e?.object?.object === "subscription" || Boolean(e?.object?.subscription) || String(e?.eventType ?? "").startsWith("subscription.");
+    await ops(env, {
+      kind: aboutSubscription ? "billing_event_unread" : "billing_event_ignored",
+      message: aboutSubscription ? "A subscription webhook couldn't be read: has Creem changed its payload? The workspace's plan didn't change." : `Ignored billing event ${e?.eventType ?? "?"}.`,
+      detail: { eventId: e?.id, eventType: e?.eventType },
+      alert: aboutSubscription ? "billing_event_unread" : false,
+    });
+    return Response.json({ ignored: true });
+  }
+  try {
+    return await applyBillingEvent(env, update);
+  } catch (err) {
+    // Creem retries a failed delivery for about a day; if it keeps failing, someone paid and nothing happened.
+    await ops(env, {
+      kind: "billing_apply_failed",
+      slug: update.workspace,
+      message: `Applying a billing event failed (Creem will retry): ${(err as Error).message}. If it persists, fix the plan with Resync plan in the operator console.`,
+      detail: { eventId: update.eventId, subscriptionId: update.subscriptionId, status: update.status },
+      alert: true,
+    });
+    throw err;
+  }
+}
+
+async function applyBillingEvent(env: Env, update: NonNullable<ReturnType<typeof readEvent>>): Promise<Response> {
+  const before = update.workspace ? await directory(env).billing(update.workspace) : null;
   const applied = await directory(env).applyBilling(update, "creem");
   if (!applied) {
     // Someone paid for a workspace we can't find (deleted mid-checkout?): refund them.
-    if (update.plan === "team" && update.workspace) console.error(`billing: payment for unknown workspace ${update.workspace}; check Creem and refund`, update.subscriptionId);
+    if (update.plan === "team" && update.workspace) {
+      await ops(env, {
+        kind: "billing_unknown_workspace",
+        slug: update.workspace,
+        message: `A subscription paid for ${update.workspace}, which doesn't exist (deleted during checkout?). Refund and cancel it in Creem.`,
+        detail: { eventId: update.eventId, subscriptionId: update.subscriptionId },
+        alert: true,
+      });
+    }
     return Response.json({ ok: true, ignored: true });
   }
   // Two webhooks at once can finish in either order, so settle on what the record says now.
@@ -642,6 +796,31 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
     const now = await directory(env).billingPlan(applied.slug);
     if (!now || (now.plan === plan && now.until === until)) break;
     ({ plan, until } = now);
+  }
+  // The plan is set; telling the operator mustn't make Creem retry (or raise a misleading "apply failed").
+  try {
+    const after = await directory(env).billing(applied.slug);
+    if (after && after.status !== before?.status) {
+      const what: Record<string, string> = {
+        active: "subscribed to Team",
+        trialing: "started a Team trial",
+        past_due: "has a failed payment (Team kept while Creem retries)",
+        unpaid: "has an unpaid subscription",
+        canceled: "canceled Team",
+        scheduled_cancel: "scheduled a cancel",
+        paused: "paused its subscription",
+        expired: "has an expired subscription",
+      };
+      await ops(env, {
+        kind: "billing",
+        slug: applied.slug,
+        message: `${applied.slug} ${what[after.status] ?? `is now ${after.status}`}${after.payerEmail ? ` (billed to ${after.payerEmail})` : ""}. Plan now: ${plan}${until ? ` until ${until.slice(0, 10)}` : ""}.`,
+        detail: { eventId: update.eventId, subscriptionId: update.subscriptionId, status: after.status },
+        alert: `billing:${applied.slug}:${after.status}`,
+      });
+    }
+  } catch (err) {
+    console.error("billing note failed", applied.slug, err);
   }
   return Response.json({ ok: true, workspace: applied.slug, plan, ...(until ? { until } : {}) });
 }
@@ -670,6 +849,7 @@ async function createOwnWorkspace(env: Env, email: string, input: { name: string
     return { error: "Something went wrong making the workspace. Try again." };
   }
   forgetWorkspaces();
+  await ops(env, { kind: "signup", slug: input.slug, message: `${email} made “${input.name}” (${input.slug}) on Free.`, alert: `signup:${input.slug}` });
   return { location: `${workspaceOrigin(env, input.slug)}/login?return=${encodeURIComponent("/settings")}` };
 }
 
@@ -721,7 +901,8 @@ async function apexLogin(request: Request, url: URL, env: Env, viewer: Viewer, b
   try {
     await sendCode(env, email, code);
   } catch (err) {
-    console.error("sign-in email failed", err);
+    // If sending fails for everyone, nobody can sign in (or pay): worth an email, once an hour.
+    await ops(env, { kind: "signin_email_failed", message: `A sign-in email failed: ${(err as Error).message}`, detail: { domain: email.split("@")[1] }, alert: "signin_email_failed" });
     return loginPage({ ...state, step: "email", email, error: "We couldn't send the email. Try again in a moment." }, brand, 502);
   }
   return loginPage({ ...state, step: "code", email }, brand);
@@ -1025,6 +1206,16 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
         canDelete: admin && (await ownWorkspace(env, slug, email)),
       });
     }
+    // Self-serve: whoever made the workspace can hand it to another admin, who can then delete it.
+    if (path === "/api/settings/owner" && request.method === "POST") {
+      if (!admin || !(await ownWorkspace(env, slug, email))) return Response.json({ error: "Only the person who made this workspace can hand it over." }, { status: 403 });
+      const to = String((await jsonBody(request)).email ?? "").trim().toLowerCase();
+      if (!(await hub.members()).some((m) => m.email === to && m.role === "admin") || to === email) {
+        return Response.json({ error: "Hand it to another admin of this workspace." }, { status: 400 });
+      }
+      await directory(env).setCreator(slug, to);
+      return Response.json({ owner: to });
+    }
     // Self-serve: whoever made the workspace can delete it (and then make another), once nothing is billed.
     if (path === "/api/settings/delete" && request.method === "POST") {
       if (!admin || !(await ownWorkspace(env, slug, email))) return Response.json({ error: "Only the person who made this workspace can delete it. Email us if that's not possible." }, { status: 403 });
@@ -1040,14 +1231,15 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       await hub.destroy(slug);
       await directory(env).removeWorkspace(slug);
       forgetWorkspaces();
-      return Response.json({ location: `${apexOrigin(env)}/workspaces` });
+      return Response.json({ location: `${apexOrigin(env)}/workspaces?deleted=${encodeURIComponent(name)}` });
     }
     // Billing (admins): start paying for Team, or open the provider's portal to manage it.
     if (path === "/api/settings/billing/checkout" && request.method === "POST") {
       if (!admin) return adminOnly();
-      if ((await hub.plan()).id === "team") return Response.json({ error: "This workspace is already on Team." }, { status: 400 });
-      // A subscription that still exists would mean paying twice: put the plan right instead.
       const existing = await directory(env).billing(slug);
+      // Canceled with paid time left is still Team, but subscribing again is how to keep it (the new one takes over).
+      if ((await hub.plan()).id === "team" && existing?.status !== "canceled") return Response.json({ error: "This workspace is already on Team." }, { status: 400 });
+      // A subscription that still exists would mean paying twice: put the plan right instead.
       if (existing && subscriptionLive(existing.status, existing.periodEnd)) {
         const fix = planFor(existing.status, existing.periodEnd);
         await hub.setPlan(fix.plan, fix.until);
@@ -1113,6 +1305,11 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       const existed = (await hub.members()).some((m) => m.email === target);
       const members = await hub.setMember(target, role, email);
       if (role === null) await revokeGrants(env, url.origin, slug, target, hub);
+      // Whoever made a self-serve workspace owns it; if they're removed (or remove themselves), an admin does.
+      if (role === null && (await directory(env).workspace(slug))?.createdBy === personKey(target)) {
+        const heir = members.find((m) => m.role === "admin");
+        if (heir) await directory(env).setCreator(slug, heir.email);
+      }
       const emailed = role !== null && !existed && (await invite(env, hub, target, { workspace: name, url: url.origin, by: email, role }));
       return Response.json({ members, existed, emailed });
     }
@@ -1201,6 +1398,7 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
         watchesTotal: await hub.visibleCount(email),
         watchDefault: await hub.watchDefault(email),
         account: `${apexOrigin(env)}/me`,
+        member: viewer.only ? null : (await hub.access(email)).member,
       });
     }
     // Pins and dismissing the changed-since bar: your own, on artifacts you can open.
@@ -1212,6 +1410,23 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
       if (own[1] === "pin") return Response.json(await hub.setPin(email, id, body.pinned !== false));
       await hub.dismissSince(id, email);
       return Response.json({ dismissed: true });
+    }
+    // Leaving: a member takes themselves out. What they owned passes to an admin, and so does the
+    // workspace itself if they made it; the last admin has to hand over or delete it instead.
+    if (url.pathname === "/api/me/leave" && request.method === "POST") {
+      const slug = (await hub.info()).slug;
+      const { member } = await hub.access(email);
+      if (!member) return Response.json({ error: "You're not a member here." }, { status: 400 });
+      const admins = (await hub.members()).filter((m) => m.role === "admin" && m.email !== email);
+      if (member === "admin" && !admins.length) {
+        return Response.json({ error: "You're the only admin. Make someone else an admin first, or delete the workspace in settings." }, { status: 409 });
+      }
+      // Handed over first, so a failure partway never leaves the workspace owned by someone who's gone.
+      const record = await directory(env).workspace(slug);
+      if (record?.createdBy === personKey(email) && admins[0]) await directory(env).setCreator(slug, admins[0].email);
+      await revokeGrants(env, url.origin, slug, email, hub);
+      await hub.setMember(email, null, null);
+      return Response.json({ location: `${apexOrigin(env)}/workspaces?left=${encodeURIComponent((await hub.access(null)).name)}` });
     }
     if (url.pathname === "/api/me/watch-default" && request.method === "POST") {
       const body = await jsonBody(request);
@@ -1259,6 +1474,36 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
         vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null,
         pushover: Boolean(env.PUSHOVER_TOKEN),
       });
+    }
+    // Deleting your account: GET says what would happen (and what's in the way), POST {confirm: "delete"} does it.
+    if (url.pathname === "/api/me/delete") {
+      const plan = await accountDeletion(env, email);
+      if (request.method === "GET") return Response.json(plan);
+      if (request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
+      if (body.confirm !== "delete") return Response.json({ error: "Type delete to confirm." }, { status: 400 });
+      if (plan.blockers.length) return Response.json({ error: plan.blockers[0], ...plan }, { status: 409 });
+      for (const w of plan.deletes) {
+        const hub = workspaceHub(env, w.slug);
+        await revokeGrants(env, workspaceOrigin(env, w.slug), w.slug, email, hub).catch((err) => console.error("revoking grants failed", err));
+        await hub.destroy(w.slug);
+        await dir.removeWorkspace(w.slug);
+      }
+      for (const w of plan.leaves) {
+        const hub = workspaceHub(env, w.slug);
+        if (w.heir) await dir.setCreator(w.slug, w.heir);
+        await revokeGrants(env, workspaceOrigin(env, w.slug), w.slug, email, hub).catch((err) => console.error("revoking grants failed", err));
+        await hub.setMember(email, null, null);
+      }
+      // Wherever they were a member or a guest, what was shared with their address stops being shared with it.
+      for (const w of [...plan.leaves, ...plan.guestOf]) {
+        const hub = workspaceHub(env, w.slug);
+        await Promise.resolve()
+          .then(() => hub.forgetPerson(email))
+          .catch((err: unknown) => console.error(JSON.stringify({ ops: "forget_person_failed", slug: w.slug, message: (err as Error).message })));
+      }
+      await dir.forgetPerson(email);
+      forgetWorkspaces();
+      return Response.json({ deleted: true, location: `${apexOrigin(env)}/?deleted=account` }, { headers: { "Set-Cookie": clearSessionCookie() } });
     }
     if (url.pathname === "/api/me/channels" && request.method === "POST") {
       const type = String(body.type) as ChannelType;
@@ -1362,7 +1607,13 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
     }
     if (path === "/api/admin/workspaces" && request.method === "GET") {
       // Jobs come from the directory, which each workspace reports to, so this wakes no workspace.
-      return Response.json({ workspaces: (await dir.workspaces()).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) })) });
+      const billing = await dir.billingAll();
+      return Response.json({ workspaces: (await dir.workspaces()).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug), billing: billing[w.slug] ?? null })) });
+    }
+    // What happened lately: signups, billing changes, reports and failures (the ops log, see ops.ts).
+    if (path === "/api/admin/ops" && request.method === "GET") {
+      const q = url.searchParams;
+      return Response.json({ events: await dir.opsEvents({ kind: q.get("kind") ?? undefined, slug: q.get("slug") ?? undefined, limit: Number(q.get("limit")) || 50 }) });
     }
     if (path === "/api/admin/workspaces" && request.method === "POST") {
       const body = await jsonBody(request);
@@ -1431,6 +1682,13 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       return Response.json({ members, emailed });
     }
     // Plans are set by hand until there's billing.
+    // Put the plan back to what its subscription record says (after a webhook that kept failing).
+    if (action === "resync" && request.method === "POST") {
+      const rec = await dir.billingPlan(slug);
+      if (!rec) return Response.json({ error: `${slug} has no subscription record` }, { status: 400 });
+      await hub.setPlan(rec.plan, rec.until);
+      return Response.json({ plan: rec.plan, until: rec.until });
+    }
     if (action === "plan" && request.method === "POST") {
       if (!isPlan(body.plan)) return Response.json({ error: "plan must be free or team" }, { status: 400 });
       return Response.json({ plan: await hub.setPlan(body.plan) });

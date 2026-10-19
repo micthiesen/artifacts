@@ -16,11 +16,17 @@ type Workspace = {
   admins: string[];
   url: string;
   job: Job | null;
+  /** Self-serve: who made it. */
+  createdBy: string | null;
+  billing: { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null } | null;
 };
+type OpsEvent = { id: number; at: string; kind: string; slug: string | null; message: string; detail: Record<string, unknown> | null };
 type Notice = { tone: "ok" | "error"; text: string; signIn?: boolean };
 
 const main = document.getElementById("admin")!;
 let workspaces: Workspace[] = [];
+let events: OpsEvent[] = [];
+let eventFilter = "";
 let notice: Notice | null = null;
 const backups = new Map<string, string[]>();
 const drafts = new Map<string, string>();
@@ -107,7 +113,13 @@ async function act(fn: () => Promise<unknown>, ok?: string | (() => string), cle
 
 async function load() {
   const previous = new Map(workspaces.map((w) => [w.slug, w.job]));
-  workspaces = (await api<{ workspaces: Workspace[] }>("/api/admin/workspaces")).workspaces;
+  const [list, ops] = await Promise.all([
+    api<{ workspaces: Workspace[] }>("/api/admin/workspaces"),
+    api<{ events: OpsEvent[] }>(`/api/admin/ops?limit=40${eventFilter ? `&kind=${eventFilter}` : ""}`),
+  ]);
+  // Newest first, so new signups are at the top.
+  workspaces = list.workspaces.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  events = ops.events;
   // A job that was running and is gone has finished.
   for (const w of workspaces) {
     const was = previous.get(w.slug);
@@ -166,13 +178,49 @@ function jobLine(w: Workspace, job: Job) {
   return line;
 }
 
+const EVENT_FILTERS: [string, string][] = [
+  ["", "Everything"],
+  ["report", "Reports"],
+  ["signup", "Signups"],
+  ["billing", "Billing"],
+];
+
+/** The ops log: signups, billing changes, reports and failures, newest first. */
+function eventsSection(): HTMLElement {
+  const filter = h("select", { "aria-label": "Show" }, ...EVENT_FILTERS.map(([v, label]) => h("option", { value: v }, label))) as HTMLSelectElement;
+  filter.value = eventFilter;
+  filter.addEventListener("change", () => {
+    eventFilter = filter.value;
+    void act(async () => {});
+  });
+  const urgent = /failed|unread|unknown|bad_signature|near_cap|report/;
+  const rows = events.map((e) =>
+    h(
+      "li",
+      {},
+      h("span", { class: `chip${urgent.test(e.kind) ? " caution" : ""}` }, e.kind.replaceAll("_", " ")),
+      h("span", { class: "small" }, e.message),
+      h("span", { class: "muted small" }, `${e.slug ? `${e.slug} · ` : ""}${stamp(e.at)}${e.detail ? ` · ${Object.entries(e.detail).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join(" · ")}` : ""}`),
+    ),
+  );
+  return h(
+    "section",
+    { class: "card-section" },
+    h("h2", {}, "Recent events"),
+    h("div", { class: "row" }, filter),
+    rows.length ? h("ul", { class: "channels ops-events" }, ...rows) : h("p", { class: "muted" }, "Nothing yet."),
+  );
+}
+
 function render() {
   const sections: HTMLElement[] = [h("h1", { class: "page-title" }, "Workspaces")];
   if (notice) sections.push(noticeNode(notice));
   notice = null;
 
   const total = workspaces.reduce((n, w) => n + (w.stats?.bytes ?? 0), 0);
-  sections.push(h("p", { class: "muted" }, `${workspaces.length} workspaces · ${size(total)} stored (as of each workspace's last stats)`));
+  const paying = workspaces.filter((w) => w.billing && ["active", "trialing", "paid"].includes(w.billing.status)).length;
+  sections.push(h("p", { class: "muted" }, `${workspaces.length} workspaces · ${paying} paying · ${size(total)} stored (as of each workspace's last stats)`));
+  sections.push(eventsSection());
 
   for (const w of workspaces) {
     const s = w.stats;
@@ -181,7 +229,10 @@ function render() {
       "section",
       { class: "card-section" },
       h("h2", {}, h("a", { href: `${w.url}/` }, w.name), " ", h("span", { class: `chip${w.suspended ? " caution" : " positive"}` }, w.suspended ? "suspended" : "active")),
-      h("p", { class: "muted small" }, `${new URL(w.url).hostname} · admins ${w.admins.join(", ") || "none"} · created ${w.createdAt.slice(0, 10)}`),
+      h("p", { class: "muted small" }, `${new URL(w.url).hostname} · admins ${w.admins.join(", ") || "none"} · created ${w.createdAt.slice(0, 10)}${w.createdBy ? ` by ${w.createdBy} (self-serve)` : ""}`),
+      ...(w.billing
+        ? [h("p", { class: "small" }, `Billing: ${w.billing.status}${w.billing.periodEnd ? `, period ends ${w.billing.periodEnd.slice(0, 10)}` : ""}${w.billing.payerEmail ? ` · paid by ${w.billing.payerEmail}` : ""}${w.billing.subscriptionId ? ` · ${w.billing.subscriptionId}` : ""}`)]
+        : []),
       h(
         "p",
         { class: "small" },
@@ -218,6 +269,7 @@ function render() {
         "div",
         { class: "channel-actions" },
         btn("Refresh stats", () => act(() => api(`/api/admin/workspaces/${w.slug}/stats`, { body: {} }))),
+        ...(w.billing ? [btn("Resync plan", () => act(() => api(`/api/admin/workspaces/${w.slug}/resync`, { body: {} }), `${w.slug}'s plan matches its subscription again.`))] : []),
         btn(s?.plan === "free" ? "Move to Team" : "Move to Free", () => {
           const plan = s?.plan === "free" ? "team" : "free";
           return act(() => api(`/api/admin/workspaces/${w.slug}/plan`, { body: { plan } }), `${w.slug} is now on the ${plan === "free" ? "Free" : "Team"} plan.`);

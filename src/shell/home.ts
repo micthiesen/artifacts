@@ -158,3 +158,14 @@ document.addEventListener("click", (e) => {
     },
   );
 });
+
+// The first-run steps: copy the connect command or the example prompt.
+document.addEventListener("click", (e) => {
+  const b = (e.target as Element).closest<HTMLButtonElement>("button[data-copy]");
+  if (!b) return;
+  void navigator.clipboard.writeText(b.dataset.copy!).then(() => {
+    for (const other of document.querySelectorAll<HTMLButtonElement>("button[data-copy]")) other.textContent = "Copy";
+    b.textContent = "Copied ✓";
+    setTimeout(() => (b.textContent = "Copy"), 1600);
+  });
+});

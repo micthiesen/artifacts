@@ -103,3 +103,13 @@ test("an agent's shared-state writes are its person's: it can't vote as someone 
   await call(MIA, "artifact_state", { id, set: { "comments/main/1": { text: "hi", by: OLU } } });
   expect(h.hub.state(id)["comments/main/1"]).toMatchObject({ by: MIA });
 });
+
+test("create with public: true on a new Free workspace saves the artifact, shares it, and says the link stayed off", async () => {
+  await h.hub.setPlan("free");
+  const r = await call(MIA, "artifact_create", { title: "Day one", files, public: true, share: [{ email: OLU, role: "view" }] });
+  expect(r.error).toBe(false);
+  expect(r.text).toContain("public link stayed off");
+  expect(h.hub.list(MIA).map((a) => a.title)).toEqual(["Day one"]);
+  expect(h.hub.list(OLU).map((a) => a.title)).toEqual(["Day one"]);
+  expect(h.hub.meta(r.data.id)!.public).toBe(false);
+});

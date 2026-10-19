@@ -42,6 +42,25 @@ export default Alchemy.Stack(
     yield* Cloudflare.Email.SendingSubdomain("Mail", { zoneId: zone.id, name: mailHost });
     const mailFrom = `sign-in@${mailHost}`;
 
+    // support@<domain> forwards to the first operator (prod only): the address the site gives for help.
+    // Cloudflare emails that operator once to confirm the forwarding destination; until it's confirmed (and
+    // the next deploy sees that), the site keeps giving the operator's own address.
+    // Off until SUPPORT_ROUTING=on: the deploy token then also needs Email Routing permissions (docs/DEPLOY.md).
+    let supportEmail: Output.Output<string> | undefined;
+    if (prod && (yield* optional("SUPPORT_ROUTING")) === "on") {
+      const operator = operators.split(",")[0].trim();
+      yield* Cloudflare.Email.Routing("MailRouting", { zone: zone.id });
+      const inbox = yield* Cloudflare.Email.Address("SupportInbox", { email: operator });
+      yield* Cloudflare.Email.Rule("SupportForward", {
+        zone: zone.id,
+        name: "support",
+        matchers: [{ type: "literal", field: "to", value: `support@${domain}` }],
+        actions: [{ type: "forward", value: [operator] }],
+      });
+      supportEmail = Output.map(inbox.verified, (verified: boolean) => (verified ? `support@${domain}` : ""));
+
+    }
+
     const secret = (id: string) => Alchemy.Random(id).pipe(Effect.map((r) => r.text));
     // Web Push keys: a P-256 key pair derived from a generated seed, so it stays
     // stable across deploys (changing it would invalidate every subscription).
@@ -88,6 +107,7 @@ export default Alchemy.Stack(
         // Local operator scripts (export, import, e2e) read it from .env too.
         OPERATOR_TOKEN: yield* Config.Redacted("OPERATOR_TOKEN"),
         OPERATOR_EMAILS: operators,
+        ...(supportEmail ? { SUPPORT_EMAIL: supportEmail } : {}),
         APEX_HOST: apexHost,
         APEX_ORIGIN: `https://${apexHost}`,
         WORKSPACE_SUFFIX: workspaceSuffix,

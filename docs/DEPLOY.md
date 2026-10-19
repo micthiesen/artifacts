@@ -42,6 +42,20 @@ wildcard DNS record, so deploy prod first.
 
 ## Operating
 
+What to watch and what to do when something breaks (failed payments, sign-in
+email, abuse, restores) is in [OPERATIONS.md](OPERATIONS.md). With
+`SUPPORT_ROUTING=on` in `.env`, production also forwards `support@<domain>`
+to the first operator through Cloudflare Email Routing. The deploy token then
+needs **Account → Email Routing Addresses: Edit** and **Zone → Email Routing
+Rules: Edit** (plus the DNS edit it already has). Cloudflare emails the
+operator once to confirm the destination, and the site shows `support@`
+only after a deploy that sees it confirmed; until then it shows the
+operator's own address.
+
+For a monthly spend alert, give the token **Account → Notifications: Edit**
+and run `bun scripts/spend-alert.ts 20`, or add a Billing Budget Alert in
+the dashboard (Notifications → Add).
+
 - **Backups:** each workspace backs itself up to R2 at 10:00 UTC on days it changed, keeping 30 runs, as a resumable job. The operator console starts a backup, or a restore (which backs up first and takes the workspace offline until it's loaded), and shows each job's progress.
 - **Off-Cloudflare copy:** `bun scripts/export.ts <slug|directory>` writes `exports/<slug>-<time>.json`; `bun scripts/import.ts <slug|directory> <file>` replaces that data with it (the workspace is offline while it loads).
 - **Plans:** workspaces are on Team (no artifact or member limits; 5 GB of content and 5,000 saves a day, sized to one Durable Object's 10 GB) unless the operator console moves them to Free; self-serve workspaces start on Free. Limits live in `src/worker/plans.ts`. Nothing is charged yet.

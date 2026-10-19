@@ -69,7 +69,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "billing" | "applyBilling" | "billingPlan" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "billing" | "applyBilling" | "billingPlan" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -94,9 +94,11 @@ export function validSlug(slug: string): boolean {
 
 /** Self-serve workspaces: how many one person may make, and how many everyone may make a day. */
 const SELF_SERVE_PER_PERSON = 1;
+/** Ops events kept for the operator console. */
+const OPS_KEEP = 500;
 /** Deleting one and making another is fine now and then, not on a loop. */
 const SELF_SERVE_PER_PERSON_MONTH = 3;
-const SELF_SERVE_PER_DAY = 50;
+const SELF_SERVE_PER_DAY = 100;
 
 const CODE_TTL_MS = 10 * 60_000;
 // Anyone can ask for a code, so cap what one client, one address and everyone together can make us send.
@@ -194,6 +196,16 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX self_serve_by_at ON self_serve_log (at);
       INSERT INTO self_serve_log (person, slug, at) SELECT created_by, slug, created_at FROM workspaces WHERE created_by IS NOT NULL;
     `),
+  // Abuse reports, counted per network so the form can't be used to flood the operator.
+  (sql) => sql.exec(`CREATE TABLE reports (ip TEXT NOT NULL, at INTEGER NOT NULL); CREATE INDEX reports_by_ip ON reports (ip, at);`),
+  // What the operator should know about (failures, reports, signups), the latest few hundred, and when each
+  // alert last emailed them.
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE ops_events (id INTEGER PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, slug TEXT, message TEXT NOT NULL, detail TEXT);
+      CREATE INDEX ops_events_by_slug ON ops_events (slug, id);
+      CREATE TABLE ops_alerts (key TEXT PRIMARY KEY, at INTEGER NOT NULL, repeats INTEGER NOT NULL DEFAULT 0);
+    `),
 ];
 
 export class Directory extends DurableObject {
@@ -246,13 +258,17 @@ export class Directory extends DurableObject {
     return now && (this.sql.exec(`SELECT COUNT(*) AS n FROM self_serve_log WHERE person = ? AND at > ?`, person, month).one().n as number) < SELF_SERVE_PER_PERSON_MONTH;
   }
 
+  /** Everyone together has made as many self-serve workspaces as a day allows. */
+  selfServeFullToday(): boolean {
+    return (this.sql.exec(`SELECT COUNT(*) AS n FROM self_serve_log WHERE at > ?`, new Date(Date.now() - 86_400_000).toISOString()).one().n as number) >= SELF_SERVE_PER_DAY;
+  }
+
   async createOwnWorkspace(email: string, slug: string, name: string, terms: string, contact = ""): Promise<WorkspaceRecord> {
     const person = personKey(email);
+    if (this.selfServeFullToday()) throw new DirectoryError("We can't make more workspaces today. Try again tomorrow.");
     if (!this.canMakeWorkspace(email)) {
       throw new DirectoryError(`You already made a workspace. Add people to it from its settings${contact ? `, or email ${contact} for another` : ""}.`);
     }
-    const today = this.sql.exec(`SELECT COUNT(*) AS n FROM self_serve_log WHERE at > ?`, new Date(Date.now() - 86_400_000).toISOString()).one().n as number;
-    if (today >= SELF_SERVE_PER_DAY) throw new DirectoryError("We can't make more workspaces today. Try again tomorrow.");
     const made = await this.createWorkspace(slug, name, { createdBy: person, terms });
     this.sql.exec(`INSERT INTO self_serve_log (person, slug, at) VALUES (?, ?, ?)`, person, slug, made.createdAt);
     return made;
@@ -368,6 +384,99 @@ export class Directory extends DurableObject {
     this.sql.exec(`UPDATE workspaces SET suspended = ? WHERE slug = ?`, suspended ? 1 : 0, slug);
     this.markDirty();
     await this.publish();
+  }
+
+  /** Hand a self-serve workspace to another of its admins: they can then delete it, and it counts as theirs. */
+  setCreator(slug: string, email: string) {
+    this.sql.exec(`UPDATE workspaces SET created_by = ? WHERE slug = ?`, personKey(email), slug);
+    this.markDirty();
+  }
+
+  /**
+   * Stores an ops event (keeping the latest OPS_KEEP), and says whether its alert should email the operator now.
+   * An alerting kind is stored once an hour per key; repeats in between only count, so a flood (say, junk posted
+   * to the webhook) can't push real events out. `keepAll` stores every one (reports).
+   */
+  recordOps(e: { kind: string; slug: string | null; message: string; detail: Record<string, unknown> | null; alertKey: string | null; keepAll?: boolean }): { alert: boolean } {
+    let alert = false;
+    if (e.alertKey) {
+      const last = this.sql.exec(`SELECT at, repeats FROM ops_alerts WHERE key = ?`, e.alertKey).toArray()[0];
+      if (last && Date.now() - (last.at as number) < 3_600_000) {
+        this.sql.exec(`UPDATE ops_alerts SET repeats = repeats + 1 WHERE key = ?`, e.alertKey);
+        if (!e.keepAll) return { alert: false };
+      } else {
+        const repeats = (last?.repeats as number | undefined) ?? 0;
+        if (repeats) e = { ...e, detail: { ...e.detail, repeatsInLastHour: repeats } };
+        this.sql.exec(`INSERT INTO ops_alerts (key, at, repeats) VALUES (?, ?, 0) ON CONFLICT (key) DO UPDATE SET at = excluded.at, repeats = 0`, e.alertKey, Date.now());
+        alert = true;
+      }
+    }
+    this.sql.exec(
+      `INSERT INTO ops_events (at, kind, slug, message, detail) VALUES (?, ?, ?, ?, ?)`,
+      new Date().toISOString(),
+      e.kind,
+      e.slug,
+      e.message.slice(0, 2000),
+      e.detail ? JSON.stringify(e.detail).slice(0, 4000) : null,
+    );
+    this.sql.exec(`DELETE FROM ops_events WHERE id <= (SELECT MAX(id) FROM ops_events) - ?`, OPS_KEEP);
+    return { alert };
+  }
+
+  /** Every workspace's subscription, for the operator console in one call. */
+  billingAll(): Record<string, { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null }> {
+    const out: Record<string, { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null }> = {};
+    for (const r of this.sql.exec(`SELECT slug, status, period_end, payer_email, subscription_id FROM billing`)) {
+      out[r.slug as string] = {
+        status: r.status as string,
+        periodEnd: (r.period_end as string | null) ?? null,
+        payerEmail: (r.payer_email as string | null) ?? null,
+        subscriptionId: (r.subscription_id as string | null) ?? null,
+      };
+    }
+    return out;
+  }
+
+  /** The latest ops events, newest first, optionally of one kind or workspace. */
+  opsEvents(filter: { kind?: string; slug?: string; limit?: number } = {}): { id: number; at: string; kind: string; slug: string | null; message: string; detail: Record<string, unknown> | null }[] {
+    const where: string[] = [];
+    const args: SqlStorageValue[] = [];
+    if (filter.kind) (where.push("kind = ?"), args.push(filter.kind));
+    if (filter.slug) (where.push("slug = ?"), args.push(filter.slug));
+    return this.sql
+      .exec(`SELECT * FROM ops_events ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`, ...args, Math.min(filter.limit ?? 100, OPS_KEEP))
+      .toArray()
+      .map((r) => ({
+        id: r.id as number,
+        at: r.at as string,
+        kind: r.kind as string,
+        slug: (r.slug as string | null) ?? null,
+        message: r.message as string,
+        detail: r.detail ? (JSON.parse(r.detail as string) as Record<string, unknown>) : null,
+      }));
+  }
+
+  /** Room for one more abuse report from this network: a few an hour, and a cap for everyone. */
+  allowReport(ip: string): boolean {
+    // An IPv6 network hands out a /64, so count the network, not the address.
+    const network = ip.includes(":") ? ip.split(":").slice(0, 4).join(":") : ip;
+    this.sql.exec(`DELETE FROM reports WHERE at < ?`, Date.now() - 3_600_000);
+    if ((this.sql.exec(`SELECT COUNT(*) AS n FROM reports WHERE ip = ?`, network).one().n as number) >= 5) return false;
+    this.sql.exec(`INSERT INTO reports (ip, at) VALUES (?, ?)`, network, Date.now());
+    return true;
+  }
+
+  /**
+   * Deleting an account: everything the directory holds about this person (name, channels, passkeys, codes,
+   * visits). Their workspace memberships go first, through each workspace, which updates memberships here.
+   */
+  forgetPerson(email: string) {
+    this.ctx.storage.transactionSync(() => {
+      for (const table of ["users", "channels", "login_codes", "login_sends", "login_fails", "visits", "channel_tests", "passkeys", "memberships"]) {
+        this.sql.exec(`DELETE FROM ${table} WHERE email = ?`, email);
+      }
+    });
+    this.markDirty();
   }
 
   async removeWorkspace(slug: string) {

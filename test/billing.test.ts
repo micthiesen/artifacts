@@ -350,8 +350,52 @@ test("whoever made a self-serve workspace can delete it, once nothing is billed,
   await webhook(event("subscription.canceled", { ...sub("canceled"), current_period_end_date: "2020-01-01T00:00:00.000Z" }));
   const r = await del("acme");
   expect(r.status).toBe(200);
-  expect(await r.json()).toEqual({ location: `${APEX}/workspaces` });
+  expect(await r.json()).toEqual({ location: `${APEX}/workspaces?deleted=Acme` });
   expect(h.directory.workspace("acme")).toBeNull();
   // The operator-made workspace wasn't in the self-serve log, so there's room for one.
   expect(h.directory.canMakeWorkspace(ADMIN)).toBe(true);
+});
+
+test("the operator hears when a workspace subscribes, cancels or fails a payment, once per change", async () => {
+  Object.assign(env, KEYS);
+  const sent: { to: string; subject: string }[] = [];
+  env.EMAIL = { send: async (m: { to: string; subject: string }) => void sent.push(m) };
+  const paid = checkoutCompleted();
+  await webhook(paid);
+  await webhook(paid);
+  await webhook(event("subscription.paid", sub("active")));
+  await webhook(event("subscription.past_due", sub("past_due")));
+  await webhook(event("subscription.canceled", sub("canceled")));
+  expect(sent.map((m) => m.subject.replace(/ \(billed to .*$|\. Plan now.*$/, ""))).toEqual([
+    "[artifacts.boo] acme subscribed to Team",
+    "[artifacts.boo] acme has a failed payment (Team kept while Creem retries)",
+    "[artifacts.boo] acme canceled Team",
+  ]);
+  expect(sent.every((m) => m.to === "op@corp.com")).toBe(true);
+});
+
+test("canceled with paid time left: subscribing again is allowed, and the new subscription takes over", async () => {
+  Object.assign(env, KEYS);
+  await webhook(checkoutCompleted());
+  await webhook(event("subscription.canceled", { ...sub("canceled"), current_period_end_date: new Date(Date.now() + 10 * 86_400_000).toISOString() }));
+  expect(h.hub.plan().id).toBe("team");
+  creemAnswer = () => Response.json({ checkout_url: "https://checkout.creem.io/ch_3" });
+  expect((await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })).status).toBe(200);
+  await webhook(event("subscription.active", { ...sub("active"), id: "sub_9" }));
+  expect(h.hub.plan()).toMatchObject({ id: "team", until: null });
+  expect(h.directory.billing("acme")?.subscriptionId).toBe("sub_9");
+});
+
+test("webhook trouble lands in the ops log, and Resync plan puts a drifted plan right", async () => {
+  Object.assign(env, KEYS);
+  await webhook({ id: "evt_x", eventType: "subscription.active", created_at: 1, object: sub("active") }, "bad");
+  expect(h.directory.opsEvents({ kind: "billing_bad_signature" })).toHaveLength(1);
+  // Unreadable (no created_at): its subscription can't be ordered, so nothing changes, but the operator hears.
+  await webhook({ id: "evt_y", eventType: "subscription.active", object: sub("active") });
+  expect(h.directory.opsEvents({ kind: "billing_event_unread" })).toHaveLength(1);
+  await webhook(checkoutCompleted());
+  await h.hub.setPlan("free");
+  const resync = await worker.fetch(new Request(`${APEX}/api/admin/workspaces/acme/resync`, { method: "POST", headers: { Authorization: "Bearer op-token" } }), env as never, ctx);
+  expect(await resync.json()).toEqual({ plan: "team", until: null });
+  expect(h.hub.plan().id).toBe("team");
 });

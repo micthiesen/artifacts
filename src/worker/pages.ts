@@ -150,6 +150,7 @@ export function indexPage(
   brand: Brand,
   summaries?: Record<string, ShareSummary>,
   archived = false,
+  connect?: { mcpUrl: string; name: string },
 ): Response {
   const account = `${avatar(viewer.email, brand, "workspace", { member: Boolean(viewer.member) })}${ACCOUNT_SCRIPT}`;
   const artifacts = view.rows;
@@ -187,7 +188,7 @@ export function indexPage(
     }${pager}<p class="muted archive-empty" data-list-empty${artifacts.length || view.q ? " hidden" : ""}>Nothing archived.</p>`;
   } else if (!view.activeCount) {
     const nothing = viewer.member
-      ? `<section class="empty"><h1>Nothing here yet</h1><p class="muted">Ask your agent to make an artifact: connect it from <a href="/settings">workspace settings</a>. Artifacts shared with you show up here too.</p></section>`
+      ? firstRun(connect)
       : `<section class="empty"><h1>Nothing here yet</h1><p class="muted">Artifacts in ${escapeHtml(brand.name)} shared with ${escapeHtml(viewer.email)} will show up here.</p></section>`;
     body = view.archivedCount ? `<section class="empty"><h1>All tidy</h1><p class="muted">Everything here is archived.</p></section>${archivedLink}` : nothing;
   } else {
@@ -196,6 +197,19 @@ export function indexPage(
   const script = `<script type="module" src="${asset("/static/home.js")}"></script>`;
   const title = archived ? `Archived · ${brand.name}` : brand.name;
   return page(title, `${topBar(brand, account)}<main class="content">${body}</main>${script}`);
+}
+
+/** A new workspace's empty list: connect an agent, then ask it for a first artifact. */
+function firstRun(connect?: { mcpUrl: string; name: string }): string {
+  const copy = (value: string) => `<div class="reveal-row"><code class="reveal">${escapeHtml(value)}</code><button type="button" class="button small ghost" data-copy="${escapeHtml(value)}">Copy</button></div>`;
+  const prompt = "Make an artifacts.boo page with this week's project status for the team, and an approval at the end for the go-ahead.";
+  return `<section class="empty first-run"><h1>Nothing here yet</h1>
+<p class="muted">Your agent makes artifacts here. Two steps:</p>
+<ol class="first-steps">
+<li><strong>Connect it.</strong> In Claude Code:${connect ? copy(`claude mcp add --transport http ${connect.name} ${connect.mcpUrl}`) : ""}<span class="muted small">Codex, Cursor, Claude Desktop and others: see <a href="/settings">settings</a>.</span></li>
+<li><strong>Ask it for something.</strong> For example:${copy(prompt)}</li>
+</ol>
+<p class="muted small">It signs you in the first time. Artifacts people share with you show up here too.</p></section>`;
 }
 
 function list(artifacts: ListedArtifact[], summaries: Record<string, ShareSummary> | undefined, archived: boolean): string {
@@ -312,7 +326,7 @@ export const DESCRIPTION = "Collaborative documents and little apps your agent c
  * run it. Someone signed in also gets their account menu and a way to their
  * workspaces (/workspaces).
  */
-export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }, pricing = false): Response {
+export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }, pricing = false, selfServe = false): Response {
   const card = (title: string, body: string, points: string[]) =>
     `<div class="splash-card"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(body)}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
   const host = brand.apex.replace(/^https?:\/\//, "") || PRODUCT;
@@ -320,7 +334,8 @@ export function splashPage(brand: Brand, notice?: string, viewer?: { email: stri
     `${PRODUCT}: live pages your agent builds`,
     `${topBar(
       brand,
-      `<a class="bar-link" href="${REPO}">GitHub</a>${
+      // Signed in, the bar holds the account controls; pricing stays in the footer and settings.
+      `${pricing && !viewer ? `<a class="bar-link" href="/pricing">Pricing</a>` : ""}<a class="bar-link" href="${REPO}">GitHub</a>${
         viewer
           ? `<a class="button small secondary" href="/workspaces">Your workspaces</a>${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}`
           : `<a class="button small secondary" href="/login">Sign in</a>`
@@ -328,10 +343,14 @@ export function splashPage(brand: Brand, notice?: string, viewer?: { email: stri
     )}<main class="splash">
 <section class="splash-hero">
 ${notice ? `<p class="splash-notice" role="status">${escapeHtml(notice)}</p>` : ""}
-<p class="splash-kicker">Source available · runs on Cloudflare</p>
+<p class="splash-kicker">${selfServe ? "Free to start · no card needed" : "Source available · runs on Cloudflare"}</p>
 <h1>${escapeHtml(DESCRIPTION)}</h1>
 <p class="splash-lede muted">Your agent (Claude, Codex, Cursor or any MCP client) writes MDX or React over MCP. People open a link, sign in with an emailed code, and get a live page: shared state, per-person state, presence, comments, approvals and forms built in, with no backend to wire up. What they decide comes back to the agent. Everyone it isn't shared with never sees it.</p>
-<p class="splash-actions"><a class="button" href="#examples">See examples</a><a class="button secondary" href="${REPO}">View the source</a></p>
+<p class="splash-actions">${
+      selfServe
+        ? `<a class="button" href="/workspaces">Start free</a><a class="button secondary" href="#examples">See examples</a>`
+        : `<a class="button" href="#examples">See examples</a><a class="button secondary" href="${REPO}">View the source</a>`
+    }</p>
 <span class="splash-ghost" aria-hidden="true"></span>
 </section>
 
@@ -363,13 +382,17 @@ ${PRINCIPLES ? `<p class="splash-why"><a href="${PRINCIPLES}">How artifacts.boo 
 
 <section class="splash-self" id="self-host">
 <div>
-<h2>Self-host it for your team in one deploy</h2>
-<p class="muted"><a href="https://alchemy.run">Alchemy</a>, an infrastructure-as-code tool for TypeScript, creates everything: the Worker and its Durable Objects, DNS for workspace subdomains, the sign-in email sender, OAuth storage, R2 backups and every secret. Schema changes migrate themselves when each workspace wakes up.</p>
-<ul class="splash-facts">
+<h2>${selfServe ? "Prefer to run it yourself?" : "Self-host it for your team in one deploy"}</h2>
+${selfServe ? `<p class="muted">It's source available: one deploy puts the same thing on your own Cloudflare account, with your own domain and data.</p>` : `<p class="muted"><a href="https://alchemy.run">Alchemy</a>, an infrastructure-as-code tool for TypeScript, creates everything: the Worker and its Durable Objects, DNS for workspace subdomains, the sign-in email sender, OAuth storage, R2 backups and every secret. Schema changes migrate themselves when each workspace wakes up.</p>`}
+${
+  selfServe
+    ? ""
+    : `<ul class="splash-facts">
 <li><strong>$5 a month</strong> for Workers Paid; an idle workspace costs only its stored bytes</li>
 <li><strong>OAuth for MCP</strong>, or personal agent tokens for headless clients</li>
 <li><strong>Nightly backups</strong> to R2, paged so size never hits Worker memory</li>
-</ul>
+</ul>`
+}
 <p class="muted splash-license"><strong>No lock-in.</strong> Admins can download everything in their workspace any time, as plain JSON an agent can read (<a href="${REPO}/blob/main/docs/EXPORT.md">the format</a>), and run it on their own account from the source. Free to run for your own organization under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>; offering it to others as a hosted service isn't. Each release becomes Apache 2.0 after two years.</p>
 </div>
 <div class="splash-code"><div class="splash-code-head"><span>terminal</span></div><pre><code>git clone ${REPO}
@@ -378,7 +401,7 @@ cd artifacts.boo &amp;&amp; bun install
 bun run deploy</code></pre></div>
 </section>
 
-<footer class="splash-foot muted">${pricing ? `<a href="/pricing">Pricing</a> · ` : ""}${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/docs/AUTOMATIONS.md">Automations</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
+<footer class="splash-foot muted">${pricing ? `<a href="/pricing">Pricing</a> · ` : ""}${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/docs/AUTOMATIONS.md">Automations</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/help">Help</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
 </main>`,
     {},
     `<meta name="description" content="${escapeHtml(DESCRIPTION)}">\n<link rel="canonical" href="${escapeHtml(brand.apex)}/">\n`,
@@ -442,7 +465,8 @@ export function workspacesPage(
   operator: boolean,
   brand: Brand,
   /** Self-serve signup, when it's on: the form's state and the workspace host suffix. */
-  create: { error?: string; name?: string; slug?: string; suffix: string } | null = null,
+  create: { error?: string; name?: string; slug?: string; suffix: string; full?: boolean } | null = null,
+  notice?: string,
 ): Response {
   const rows = workspaces
     .map(
@@ -456,13 +480,16 @@ export function workspacesPage(
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
   return page(
     `Your workspaces · ${PRODUCT}`,
-    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${body}${create ? createForm(create) : ""}${admin}</main>${POLICY_FOOTER}`,
+    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${notice ? `<p class="notice ok" role="status">${escapeHtml(notice)}</p>` : ""}${body}${create ? createForm(create) : ""}${admin}</main>${POLICY_FOOTER}`,
   );
 }
 
 /** Make a Free workspace (self-serve). Posts back to /workspaces. */
-function createForm(c: { error?: string; name?: string; slug?: string; suffix: string }): string {
+function createForm(c: { error?: string; name?: string; slug?: string; suffix: string; full?: boolean }): string {
   const free = PLANS.free.limits;
+  if (c.full) {
+    return `<section class="card-section create-workspace"><h2>Create a workspace</h2><p class="muted">We've opened as many new workspaces as we can today. Come back tomorrow, or ask someone with a workspace to add you.</p></section>`;
+  }
   return `<section class="card-section create-workspace">
 <h2>Create a workspace</h2>
 <p class="muted">A workspace is where your agent publishes artifacts for you and your team. It's free for up to ${free.artifacts} artifacts, ${free.members} members and ${Math.round((free.bytes ?? 0) / 1024 / 1024)} MB; people you share artifacts with never need an account or a plan.</p>
@@ -589,14 +616,15 @@ ${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_P
 <p><strong>No lock-in.</strong> Admins can download everything at any time, and the <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
 <p><strong>Cancel any time</strong> from your workspace's settings. Team stays until the end of the period you paid for, then the workspace moves to Free and keeps everything.</p>
 <p>Payments are handled by Creem, our merchant of record: they're the seller on your invoice and handle sales tax and VAT. Prices are in US dollars, plus tax where it applies. See the <a href="/terms">terms</a> for refunds.</p>
+<p>To keep throwaway workspaces from being used for spam, a new Free workspace's first day has no public links and only a few invitation and share emails. Sharing with people works from the start.</p>
 </section>
-<footer class="splash-foot muted"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>
+<footer class="splash-foot muted"><a href="/help">Help</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>
 </main>`,
   );
 }
 
 /** Privacy, terms, and security and data: what this hosted instance does with your data and expects of you. */
-export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Response {
+export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid = false): Response {
   const mail = contact ? `<a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a>` : "the operator";
   const sections: Record<PolicyKind, { title: string; body: string }> = {
     privacy: {
@@ -616,6 +644,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
 <li><strong>Render checks</strong>: after each change a headless browser renders the artifact; we keep the result, a screenshot and any errors. Viewers' browsers also report runtime errors (the latest 30 per artifact).</li>
 <li><strong>Sign-in records</strong>: when codes were sent and checked, with your IP address or network, to limit abuse. Kept for an hour.</li>
+<li><strong>Reports</strong>: if you report an artifact, what you wrote and, if you give it, your email go to us by email and into our operations log; your network address is kept for an hour to limit repeat reports. The workspace isn't told who reported it.</li>
 <li><strong>Request logs</strong>: Cloudflare keeps logs of requests to this service for debugging, for a limited period.</li>
 </ul>
 <h2>In your browser</h2>
@@ -639,9 +668,12 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <li>As long as the artifact or workspace exists. Deleting an artifact removes it from the live database at once.</li>
 <li>Each workspace is backed up nightly when it changed; the newest 30 backups are kept, so deleted data leaves backups within about a month.</li>
 <li>Deleting a workspace deletes its data and its backups, and ends its agents' access.</li>
+<li>A workspace's billing record (its subscription's status, and the payer's email) is kept while the workspace exists.</li>
+<li>After you delete your account, your address stays in two places, to limit abuse: our record of who made which self-serve workspaces (so the free plan can't be farmed), and in the list of people removed from each workspace you left (so joining by email domain doesn't add you back).</li>
+<li>Our operations log (sign-ups, billing changes, reports and failures, with workspace names and sometimes an email address) keeps its latest 500 entries.</li>
 </ul>
 <h2>Your choices</h2>
-<p>Turn email notifications off in your account. Ask the owner or an admin to remove you from an artifact or workspace. Workspace admins can download a full export of their workspace from its settings at any time. To get a copy of your own data, or to have it deleted, email ${mail}; we reply within 30 days.</p>
+<p>Turn email notifications off in your account. Leave a workspace from its notifications page, or ask the owner or an admin to remove you from an artifact or workspace. Delete your account from your account page: it removes you from every workspace, and your name, notification channels and passkeys (comments you wrote stay in their workspaces, under your address, until an admin there removes them). Workspace admins can download a full export of their workspace from its settings at any time. To get a copy of your own data, or to have anything else deleted, email ${mail}; we reply within 30 days.</p>
 <h2>Changes</h2>
 <p>We'll update this page when what we do changes, and change the date below.</p>`,
     },
@@ -663,9 +695,14 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <h2>Your data</h2>
 <p>Workspace admins can download everything in their workspace at any time, from its settings, in a documented format. If you stop using ${PRODUCT}, you keep your data.</p>
 <h2>Plans and prices</h2>
-<p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>
+${
+  paid
+    ? `<p>Each workspace is on Free or Team. Free is free, with limits on artifacts, members, storage, and saves and emails a day, listed on the <a href="/pricing">pricing page</a> and in workspace settings. Team is $${TEAM_PRICE.amount} a ${TEAM_PRICE.period} per workspace, with more room. People you share artifacts with as guests never need a plan. To limit abuse, a new Free workspace can't turn on public links in its first day, and sends only a few invitation and share emails until then.</p>
+<p>Moving a workspace to Free keeps everything in it; past Free's limits, nothing new can be added until it's back under them or on Team again. We'll tell workspace admins at least 30 days before a price or limit change that affects them, and a new price applies from the first billing period after that. Workspaces made before paid plans began keep the plan they had unless we've told their admins 30 days ahead.</p>`
+    : `<p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>`
+}
 <h2>Payments and refunds</h2>
-<p>When paid plans are offered, they're sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their terms cover the purchase itself. A paid plan renews each period until a workspace admin cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If you were charged by mistake, or ask within 14 days of your first payment, we'll refund it in full: email us.</p>
+<p>${paid ? "Team is" : "When paid plans are offered, they're"} sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their terms cover the purchase itself. A paid plan renews each period until a workspace admin cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If a payment fails, the workspace keeps Team for up to 14 days after its period ends while the card is retried, then moves to Free. If you were charged by mistake, or ask within 14 days of your first payment, we'll refund it in full: email us.</p>
 <h2>The source code</h2>
 <p>The software behind ${PRODUCT} is published under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>, which covers the code itself. These terms cover the hosted service.</p>
 <h2>The service</h2>
@@ -699,7 +736,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 <li>See <a href="/privacy">Privacy</a> for what's stored, who handles it and for how long.</li>
 </ul>
 <h2>Subprocessors</h2>
-<p>Cloudflare, Inc. (hosting, storage, email, headless browser, analytics, logs). Notification services you add yourself (Pushover, ntfy, webhook targets, browser push services) receive the notifications you route to them.</p>`,
+<p>Cloudflare, Inc. (hosting, storage, email, headless browser, analytics, logs).${paid ? " Creem (payments: merchant of record for paid plans)." : ""} Notification services you add yourself (Pushover, ntfy, webhook targets, browser push services) receive the notifications you route to them.</p>`,
     },
   };
   const { title, body } = sections[kind];
@@ -713,7 +750,31 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string): Res
 }
 
 /** Links to the policies, at the bottom of public pages. */
-export const POLICY_FOOTER = `<footer class="site-foot muted"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>`;
+export const POLICY_FOOTER = `<footer class="site-foot muted"><a href="/help">Help</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>`;
+
+/** Help: the guides, how to reach us, and how to report something. */
+export function helpPage(brand: Brand, contact: string): Response {
+  const mail = contact ? `<a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a>` : "the operator";
+  return page(
+    `Help · ${PRODUCT}`,
+    `${topBar(brand)}<main class="content policy"><h1 class="page-title">Help</h1>
+<h2>Getting started</h2>
+<p>Make a workspace from <a href="/workspaces">your workspaces</a>, connect your agent from its settings, then ask the agent for an artifact. The <a href="${REPO}/blob/main/docs/guide.md">agent guide</a> covers what agents can build, and <a href="${REPO}/blob/main/src/kit/CATALOG.md">the components</a> lists what's built in.</p>
+<h2>Common questions</h2>
+<ul>
+<li><strong>Do people I share with need an account or a plan?</strong> No. They sign in with a code we email them, and guests are always free.</li>
+<li><strong>My agent can't connect.</strong> Settings shows the steps for each client. If the sign-in window doesn't open, an agent token from settings works in any client.</li>
+<li><strong>I didn't get the sign-in email.</strong> Check spam for a message from ${PRODUCT}; codes last 10 minutes. You can also save a passkey in <a href="/me">your account</a> to skip the code.</li>
+<li><strong>Billing.</strong> Team is billed per workspace by Creem, who handles tax. Change the card, get invoices or cancel from workspace settings → Manage billing. Canceling keeps Team until the end of the period you paid for.</li>
+<li><strong>Leaving or deleting.</strong> Leave a workspace from its Notifications page (your avatar menu inside the workspace); delete your account from <a href="/me">your account</a>. Admins can download everything from workspace settings first.</li>
+</ul>
+<h2>Contact us</h2>
+<p>Email ${mail}. We usually answer within a day.</p>
+<h2>Report something</h2>
+<p>If a page made with ${PRODUCT} is phishing, malware or abusive, <a href="/report">report it</a>.</p>
+</main>${POLICY_FOOTER}`,
+  );
+}
 
 /** A presigned link for someone other than whoever is signed in here: switch only if they say so. */
 export function linkSwitchPage(url: URL, current: string, linked: string, brand: Brand): Response {
@@ -734,11 +795,36 @@ export function messagePage(title: string, message: string, status: number, acti
   );
 }
 
-export function shellPage(boot: ShellBoot, brand: Brand): Response {
+export const REPORT_REASONS: [string, string][] = [
+  ["phishing", "Phishing or a scam"],
+  ["malware", "Malware or a harmful download"],
+  ["illegal", "Illegal content"],
+  ["abuse", "Harassment or hate"],
+  ["other", "Something else"],
+];
+
+/** Report an artifact to us: what's wrong, optionally how to reach you. */
+export function reportPage(brand: Brand, s: { url?: string; reason?: string; details?: string; email?: string; error?: string; done?: boolean }, status = 200): Response {
+  const body = s.done
+    ? `<section class="empty"><h1>Thanks, we'll look at it</h1><p class="muted">We review every report and take down what breaks our <a href="/terms">terms</a>. You can close this tab.</p><p><a class="button secondary" href="/">${PRODUCT}</a></p></section>`
+    : `<section class="card-section create-workspace"><h1 class="page-title">Report an artifact</h1>
+<p class="muted">Tell us about a page made with ${PRODUCT} that's phishing, malware, illegal or abusive. Its workspace isn't told who reported it.</p>
+${s.error ? `<p class="notice error" role="alert">${escapeHtml(s.error)}</p>` : ""}
+<form method="post" action="/report" class="create-form">
+<label class="field"><span>Link</span><input class="input" name="url" type="url" required maxlength="500" value="${escapeHtml(s.url ?? "")}" placeholder="https://…/a/…"></label>
+<label class="field"><span>What's wrong</span><select class="input" name="reason" required><option value="">Choose…</option>${REPORT_REASONS.map(([k, label]) => `<option value="${k}"${s.reason === k ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>
+<label class="field"><span>Details <span class="muted">(optional)</span></span><textarea class="input" name="details" rows="4" maxlength="2000">${escapeHtml(s.details ?? "")}</textarea></label>
+<label class="field"><span>Your email <span class="muted">(optional, if we may follow up)</span></span><input class="input" name="email" type="email" maxlength="200" value="${escapeHtml(s.email ?? "")}"></label>
+<button class="button" type="submit">Send report</button>
+</form></section>`;
+  return page(`Report an artifact · ${PRODUCT}`, `${topBar(brand)}<main class="content">${body}</main>${POLICY_FOOTER}`, { status });
+}
+
+export function shellPage(boot: ShellBoot, brand: Brand, reportUrl?: string): Response {
   return page(
     boot.title,
     `<div class="shell">
-<header class="bar"><span class="lead"><a class="mark" href="/" title="${escapeHtml(brand.name)}" aria-label="${escapeHtml(brand.name)}">${GHOST}</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status"></span><span id="presence" class="presence"></span>${
+<header class="bar"><span class="lead"><a class="mark" href="/" title="${escapeHtml(brand.name)}" aria-label="${escapeHtml(brand.name)}">${GHOST}</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status"></span><span id="presence" class="presence"></span>${reportUrl ? `<a class="bar-link report-link" href="${escapeHtml(reportUrl)}" target="_blank" rel="noopener">Report</a>` : ""}${
       boot.viewer.email ? avatar(boot.viewer.email, brand, "workspace", { member: boot.member, scoped: boot.scoped }) : ""
     }</header>
 <div id="since" class="since" hidden></div>

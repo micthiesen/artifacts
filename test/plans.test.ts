@@ -175,8 +175,12 @@ test("one self-serve workspace per person, however they tag their address", asyn
   expect(h.directory.workspace("pat-two")).toBeNull();
 });
 
+/** Make the workspace look a few days old, past the first-day holds. */
+const settle = () => h.ctx.storage.sql.exec(`UPDATE settings SET value = ? WHERE key = 'created_at'`, new Date(Date.now() - 3 * 86_400_000).toISOString());
+
 test("Free sends at most 50 emails a day; Team keeps the workspace-wide 1,000", async () => {
   await h.hub.setPlan("free");
+  settle();
   let sent = 0;
   while (h.hub.allowMail(1) && sent < 2000) sent++;
   expect(sent).toBe(PLANS.free.limits.emailsPerDay);
@@ -186,6 +190,7 @@ test("Free sends at most 50 emails a day; Team keeps the workspace-wide 1,000", 
 
 test("notifications can't use up the emails a Free workspace keeps for invitations and shares", async () => {
   await h.hub.setPlan("free");
+  settle();
   const { emailsPerDay, inviteEmailsPerDay } = PLANS.free.limits;
   let notes = 0;
   while (h.hub.allowMail(1, undefined, "notify") && notes < 2000) notes++;
@@ -203,8 +208,8 @@ test("limit messages say who can fix it and tell agents not to delete anything",
   try {
     await h.hub.create({ title: "One", files, owner: ADMIN });
     const err = await h.hub.create({ title: "Two", files, owner: ADMIN }).catch((e: Error) => e.message);
-    expect(err).toContain("A workspace admin can delete artifacts nobody needs or move the workspace to Team");
-    expect(err).toContain("don't delete anything");
+    expect(err).toContain("A workspace admin can delete artifacts nobody needs, or move the workspace to Team in its settings");
+    expect(err).toContain("rather than deleting anything");
   } finally {
     limits.artifacts = real;
   }
@@ -225,4 +230,23 @@ test("over the storage limit, a file can still be replaced with one no bigger", 
   } finally {
     limits.bytes = real;
   }
+});
+
+test("a Free workspace's first day: no public links and only a handful of invitation emails", async () => {
+  await h.hub.setPlan("free");
+  const r = await h.hub.create({ title: "Login", files, owner: ADMIN });
+  if (!r.ok) throw new Error("create");
+  expect(() => h.hub.share(r.id, { public: true })).toThrow("first day");
+  let invites = 0;
+  while (h.hub.allowMail(1) && invites < 100) invites++;
+  expect(invites).toBe(10);
+  // Notifications aren't held back.
+  expect(h.hub.allowMail(1, undefined, "notify")).toBe(true);
+  // A day on, or on Team, both work.
+  settle();
+  expect(() => h.hub.share(r.id, { public: true })).not.toThrow();
+  await h.hub.setPlan("team");
+  h.ctx.storage.sql.exec(`UPDATE settings SET value = ? WHERE key = 'created_at'`, new Date().toISOString());
+  expect(() => h.hub.share(r.id, { public: false })).not.toThrow();
+  expect(() => h.hub.share(r.id, { public: true })).not.toThrow();
 });
