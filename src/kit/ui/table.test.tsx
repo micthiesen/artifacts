@@ -64,3 +64,16 @@ test("as cards, each row is a card titled by its first column, with the rest as 
   expect(container.querySelector("table")).toBeNull();
   root.unmount();
 });
+
+test("money: only US dollars are a bare $; several links in one cell are each links", async () => {
+  const { money } = await import("./table.tsx");
+  expect(money(10, "CAD")).toContain("CA$");
+  expect(money(10, "USD")).not.toContain("US");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const rows = [{ name: "PR", links: [{ label: "#966", url: "https://github.com/x/pull/966" }, { label: "#1171", url: "https://github.com/x/pull/1171" }] }];
+  await act(async () => root.render(<Table data={rows} cards="never" />));
+  expect([...container.querySelectorAll("tbody a")].map((a) => a.textContent)).toEqual(["#966", "#1171"]);
+  root.unmount();
+});

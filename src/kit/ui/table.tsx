@@ -44,7 +44,7 @@ function linkOf(v: unknown): { label: string; url: string } | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const o = v as Record<string, unknown>;
   const url = typeof o.url === "string" ? o.url : typeof o.href === "string" ? o.href : null;
-  if (!url || !(url.startsWith("/") || isUrl(url))) return null;
+  if (!url || !(url.startsWith("/") || url.startsWith("#") || isUrl(url))) return null;
   return { label: typeof o.label === "string" ? o.label : typeof o.title === "string" ? o.title : url, url };
 }
 
@@ -64,6 +64,16 @@ function inferFormat(key: string, rows: Row[]): Format {
 }
 
 const numberFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+
+/**
+ * Money in the reader's number style. A bare "$" is only ever US dollars: Canadian, Australian and other dollars
+ * read as CA$, A$ and so on (where the reader's locale would write just "$" for its own).
+ */
+export function money(v: number, currency: string): string {
+  const parts = new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).formatToParts(v);
+  const prefix = currency === "USD" ? null : (new Intl.NumberFormat("en-US", { style: "currency", currency }).formatToParts(0).find((p) => p.type === "currency")?.value ?? currency);
+  return parts.map((p) => (p.type === "currency" && p.value === "$" && prefix ? prefix : p.value)).join("");
+}
 
 export function formatValue(v: unknown, format: Format, row: Row): React.ReactNode {
   if (typeof format === "function") return format(v, row);
@@ -94,7 +104,7 @@ export function formatValue(v: unknown, format: Format, row: Row): React.ReactNo
       if (!link) return String(v);
       // A link to another artifact here reads as its title, and opens in this tab.
       const title = linkTitle(link.url);
-      const internal = link.url.startsWith("/") || title !== null;
+      const internal = link.url.startsWith("/") || link.url.startsWith("#") || title !== null;
       return (
         <a
           href={link.url}
@@ -108,7 +118,16 @@ export function formatValue(v: unknown, format: Format, row: Row): React.ReactNo
     default:
       if (typeof format === "string" && format.startsWith("currency")) {
         const currency = format.split(":")[1] ?? "USD";
-        return typeof v === "number" ? new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).format(v) : String(v);
+        return typeof v === "number" ? money(v, currency) : String(v);
+      }
+      // Several links in one cell: each as a link.
+      if (Array.isArray(v) && v.length && v.every((x) => linkOf(x) || isUrl(x))) {
+        return v.map((x, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && ", "}
+            {formatValue(x, "url", row)}
+          </React.Fragment>
+        ));
       }
       if (Array.isArray(v)) return v.join(", ");
       if (linkOf(v)) return formatValue(v, "url", row);
@@ -120,7 +139,16 @@ export function formatValue(v: unknown, format: Format, row: Row): React.ReactNo
   }
 }
 
-function compare(a: unknown, b: unknown): number {
+/** What a cell sorts by: a link's label, a list's text, otherwise the value. */
+function sortValue(v: unknown): unknown {
+  const link = linkOf(v);
+  if (link) return link.label;
+  return Array.isArray(v) ? v.map((x) => linkOf(x)?.label ?? String(x)).join(", ") : v;
+}
+
+function compare(x: unknown, y: unknown): number {
+  const a = sortValue(x);
+  const b = sortValue(y);
   const an = a === null || a === undefined || a === "";
   const bn = b === null || b === undefined || b === "";
   if (an || bn) return an && bn ? 0 : an ? 1 : -1;

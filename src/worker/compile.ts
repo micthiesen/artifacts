@@ -354,8 +354,10 @@ export function dataWarnings(code: Record<string, string>, data: Record<string, 
   for (const [path, value] of Object.entries(data)) {
     const name = path.slice("data/".length);
     const json = JSON.stringify(value);
-    if (/"__(YES|NO)__"/.test(json)) out.push(`${path} has Notion's "__YES__"/"__NO__" placeholders, shown literally: use true/false`);
-    if (/"[^"]*\*\*[^"*]+\*\*[^"]*"/.test(json)) out.push(`${path} has **markdown** inside values, which a Table shows literally: keep values plain if a Table shows them`);
+    // Only what a Table shows: raw records kept for reference may hold anything.
+    const tabled = new RegExp(`<Table\\b[^>]*\\bdata=["'](data/)?${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(source);
+    if (tabled && /"__(YES|NO)__"/.test(json)) out.push(`${path} has Notion's "__YES__"/"__NO__" placeholders, shown literally: use true/false`);
+    if (tabled && /"[^"]*\*\*[^"*]+\*\*[^"]*"/.test(json)) out.push(`${path} has **markdown** inside values, which a Table shows literally: keep values plain`);
     // Only when every useData() names its file literally; a computed name could be using this one.
     if (!source.includes(name) && !source.includes(path) && !dynamicData) out.push(`${path} isn't used by any page file: show it (say, in a Table) or delete it`);
   }
