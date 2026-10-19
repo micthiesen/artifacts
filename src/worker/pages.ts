@@ -102,7 +102,6 @@ function avatar(email: string, brand: Brand, context: "account" | "workspace", f
     `data-email="${escapeHtml(email)}"`,
     `data-apex="${escapeHtml(brand.apex)}"`,
     `data-context="${context}"`,
-    ...(context === "workspace" ? [`data-workspace="${escapeHtml(brand.name)}"`] : []),
     ...(flags.member ? ['data-member="1"'] : []),
     ...(flags.scoped ? ['data-scoped="1"'] : []),
     ...(flags.operator ? ['data-operator="1"'] : []),
@@ -513,7 +512,7 @@ export function workspacesPage(
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
   return page(
     `Your workspaces · ${PRODUCT}`,
-    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${notice ? `<p class="notice ok" role="status">${/ in your inbox\.$/.test(notice) ? `<a href="/inbox">${escapeHtml(notice)}</a>` : escapeHtml(notice)}</p>` : ""}${body}${create ? createForm(create) : ""}${admin}</main>${POLICY_FOOTER}`,
+    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${notice ? `<p class="notice ok" role="status">${escapeHtml(notice)}</p>` : ""}${body}${create ? createForm(create) : ""}${admin}</main>${POLICY_FOOTER}`,
   );
 }
 
@@ -545,7 +544,7 @@ ${c.error ? `<p class="notice error" role="alert" id="create-error">${escapeHtml
 export function profilePage(email: string, context: "account" | "workspace", brand: Brand, webPush: boolean, pushover: boolean): Response {
   return page(
     context === "account" ? `Account · ${PRODUCT}` : `Notifications · ${brand.name}`,
-    `${topBar(brand, avatar(email, brand, context))}<main class="content profile" id="profile" data-context="${context}" data-webpush="${webPush ? "1" : ""}" data-pushover="${pushover ? "1" : ""}"><h1 class="page-title">${context === "account" ? "Account" : `Notifications in ${escapeHtml(brand.name)}`}</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/me.js")}"></script>`,
+    `${topBar(brand, avatar(email, brand, context))}<main class="content profile" id="profile" data-context="${context}" data-webpush="${webPush ? "1" : ""}" data-pushover="${pushover ? "1" : ""}"><h1 class="page-title">${context === "account" ? "Account" : `Notification settings in ${escapeHtml(brand.name)}`}</h1><p class="muted">Loading…</p></main>${ACCOUNT_SCRIPT}<script type="module" src="${asset("/static/me.js")}"></script>`,
   );
 }
 
@@ -908,13 +907,14 @@ export function inboxPage(
   brand: Brand,
   viewer: { email: string; operator: boolean },
   items: { id: number; at: string; kind: string; title: string; body: string | null; url: string | null; read: boolean; sent?: boolean }[],
+  unread: number,
   notice?: string,
 ): Response {
   const draftOf = (url: string | null) => (url && /#(d[0-9a-f]{16})$/.exec(url)?.[1]) || null;
   const rows = items
     .map((i) => {
       const draft = i.kind === "approve-announcement" ? draftOf(i.url) : null;
-      const open = i.url && !draft ? `<a href="${escapeHtml(i.url)}">${escapeHtml(i.title)}</a>` : escapeHtml(i.title);
+      const open = i.url && !draft ? `<a href="/inbox/${i.id}">${escapeHtml(i.title)}</a>` : escapeHtml(i.title);
       const approve = !draft
         ? ""
         : i.sent
@@ -928,6 +928,8 @@ export function inboxPage(
     `${topBar(brand, `${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}`)}<main class="content"><h1 class="page-title">Inbox</h1>${
       notice ? `<p class="notice ok" role="status">${escapeHtml(notice)}</p>` : ""
     }<p class="muted page-lede">What needs you, from every workspace: replies, mentions, approvals and your requests to us. Where notifications also go is set in <a href="/me">your account</a>.</p>${
+      unread ? `<form method="post" action="/inbox" class="inline-form"><input type="hidden" name="read" value="all"><button class="button small secondary" type="submit">Mark all read</button></form>` : ""
+    }${
       rows ? `<ul class="inbox">${rows}</ul>` : `<p class="muted">Nothing yet.</p>`
     }</main>${POLICY_FOOTER}`,
   );

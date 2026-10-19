@@ -1,9 +1,10 @@
-// The signed-in viewer's avatar in the top bar opens a small menu: Manage
-// artifact… (owners, on an artifact), Copy my link, Print, notification level
-// for this artifact, then links: in a workspace its notifications, settings
-// (members) and list; everywhere your account and workspaces on the apex; Sign out.
+// The signed-in viewer's inbox bell (with its unread count) and avatar in the
+// top bar. The avatar opens a small menu: Manage artifact… (owners, on an
+// artifact), Copy my link, Print, notification level for this artifact, then
+// links: in a workspace its notification settings, settings (members) and list;
+// everywhere your account and workspaces on the apex; Sign out.
 // The slot's data attributes pick the links: data-apex, data-context
-// ("account" | "workspace"), data-member, data-workspace (its name), data-operator
+// ("account" | "workspace"), data-member, data-operator
 // (apex) and data-scoped (a presigned-link session that opens one artifact only,
 // so it gets a way to sign in properly instead of links it can't open).
 import type { WatchLevel } from "../shared/protocol.ts";
@@ -29,7 +30,46 @@ export type AccountMenuOptions = {
   archive?: { archived: () => boolean; toggle: () => Promise<void> };
   /** On an artifact page: pin it to the top of your own list, or unpin it. */
   pin?: { pinned: () => boolean; toggle: () => Promise<void> };
+  /** On an artifact page: its id, so opening it reads what the inbox said about it. */
+  seen?: string;
 };
+
+const BELL = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`;
+
+/** The inbox link with its unread count, refreshed whenever the page comes back into view. */
+function mountInboxBell(slot: HTMLElement, href: string, seen?: string) {
+  const bell = document.createElement("a");
+  bell.className = "bar-button inbox-bell";
+  bell.href = href;
+  bell.innerHTML = `${BELL}<span class="count"></span>`;
+  const paint = (unread: number) => {
+    bell.querySelector(".count")!.textContent = unread ? (unread > 99 ? "99+" : String(unread)) : "";
+    bell.classList.toggle("has-unread", unread > 0);
+    const label = unread ? `Inbox, ${unread} unread` : "Inbox";
+    bell.setAttribute("aria-label", label);
+    bell.title = label;
+  };
+  paint(0);
+  // Coming back to the tab refreshes it, at most every half minute. While an artifact is open, what
+  // arrives about it counts as read.
+  let last = 0;
+  const refresh = async () => {
+    if (Date.now() - last < 30_000) return;
+    last = Date.now();
+    try {
+      const res = await fetch("/api/me/inbox", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(seen ? { seen } : {}) });
+      if (!res.ok) return;
+      paint(((await res.json()) as { unread: number }).unread);
+    } catch {
+      // Offline: the count stays as it was.
+    }
+  };
+  void refresh();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void refresh();
+  });
+  slot.append(bell);
+}
 
 export function mountAccountMenu(slot: HTMLElement, email: string, options: AccountMenuOptions = {}): HTMLButtonElement {
   const button = document.createElement("button");
@@ -166,19 +206,17 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     menu.append(a);
   };
   const apex = slot.dataset.apex || location.origin;
-  const { context, member, scoped, operator, workspace } = slot.dataset;
+  const { context, member, scoped, operator } = slot.dataset;
   if (context === "workspace" && scoped) {
     link(`/login?return=${encodeURIComponent(location.pathname + location.search)}`, "Sign in for full access");
   } else if (context === "workspace") {
-    link("/me", workspace ? `Notifications in ${workspace}` : "Notifications");
+    link("/me", "Notification settings");
     if (member) link("/settings", "Workspace settings");
     link("/", "All artifacts");
-    link(`${apex}/inbox`, "Inbox");
     link(`${apex}/me`, "Account");
     link(`${apex}/workspaces`, "Your workspaces");
     link(`${apex}/support?from=${encodeURIComponent(location.href.split("#")[0])}`, "Help & feedback");
   } else {
-    link("/inbox", "Inbox");
     link("/me", "Account");
     link("/workspaces", "Your workspaces");
     link(`/support?from=${encodeURIComponent(location.href.split("#")[0])}`, "Help & feedback");
@@ -240,6 +278,7 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     const to = e.relatedTarget as Node | null;
     if (to && !menu.contains(to) && to !== button) setOpen(false);
   });
+  if (!scoped) mountInboxBell(slot, `${apex}/inbox`, options.seen);
   slot.append(button, menu);
   return button;
 }

@@ -115,7 +115,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "forgetTestPeople" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetInbox" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "slugForSubscription" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "forgetTestPeople" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetInbox" | "inbox" | "unreadCount" | "markInboxRead" | "markInboxReadFor" | "openInbox" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "slugForSubscription" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -825,6 +825,21 @@ export class Directory extends DurableObject {
     let n = 0;
     for (const id of ids.slice(0, 200)) n += this.sql.exec(`UPDATE inbox SET read_at = ? WHERE email = ? AND id = ? AND read_at IS NULL`, now, email, id).rowsWritten;
     return n;
+  }
+
+  /** Opening an artifact reads what the inbox said about it (its own comment and update marks take over there). */
+  markInboxReadFor(email: string, slug: string, artifactId: string): number {
+    const now = new Date().toISOString();
+    let n = this.sql.exec(`UPDATE inbox SET read_at = ? WHERE email = ? AND slug = ? AND artifact_id = ? AND read_at IS NULL`, now, email, slug, artifactId).rowsWritten;
+    // Rows from before inbox entries named their workspace and artifact go by address.
+    n += this.sql.exec(`UPDATE inbox SET read_at = ? WHERE email = ? AND slug IS NULL AND read_at IS NULL AND url LIKE ? || '/a/' || ? || '%'`, now, email, `https://${slug}.%`, artifactId).rowsWritten;
+    return n;
+  }
+
+  /** One item, for following it from the inbox: its link (null when it isn't theirs), now read. */
+  openInbox(email: string, id: number): string | null {
+    const row = this.sql.exec(`UPDATE inbox SET read_at = COALESCE(read_at, ?) WHERE email = ? AND id = ? RETURNING url`, new Date().toISOString(), email, id).toArray()[0];
+    return row ? ((row.url as string | null) ?? null) : null;
   }
 
   /** Every workspace's subscription, for the operator console in one call. */

@@ -121,7 +121,15 @@ a.title:hover { text-decoration: none; }
 }
 .bar .presence .avatar:first-child { margin-left: 0; }
 /* Your own avatar: opens the Manage panel (owner) or the account menu. */
-.me { position: relative; flex: none; display: flex; }
+.me { position: relative; flex: none; display: flex; align-items: center; gap: .35rem; }
+/* The inbox bell: its count turns into a badge while anything is unread. */
+.inbox-bell { text-decoration: none; }
+.inbox-bell:hover { text-decoration: none; }
+.inbox-bell.has-unread { color: var(--fg); }
+.inbox-bell.has-unread .count {
+  min-width: 1.15rem; padding: 0 .3rem; border-radius: 999px; background: var(--caution); color: var(--bg);
+  font-size: 11px; line-height: 1.15rem; text-align: center;
+}
 .me .avatar-button {
   position: relative; width: 2rem; height: 2rem; padding: 0; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 650;
   transition: transform .12s ease;

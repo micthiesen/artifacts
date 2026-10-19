@@ -55,7 +55,7 @@ if (meSlot && boot.viewer.email) {
             pinned = (await setPinned(boot.artifactId, !pinned)).pinned;
           },
         };
-  const common = { print: printArtifact, watch: { level: boot.watch ?? "participating", set: setWatch }, ...(pin ? { pin } : {}) };
+  const common = { seen: boot.artifactId, print: printArtifact, watch: { level: boot.watch ?? "participating", set: setWatch }, ...(pin ? { pin } : {}) };
   if (boot.viewer.role === "owner") {
     let panel: ReturnType<typeof initOwnerMenu> | null = null;
     let archivedAt = boot.archivedAt ?? null;

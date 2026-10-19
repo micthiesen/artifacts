@@ -91,3 +91,15 @@ test("guessing from many networks doesn't lock the owner out of their own", asyn
   expect(await h.directory.verifyLogin("dana@corp.com", mine, "7.7.7.7")).toBe(false);
   expect(await h.directory.verifyLogin("dana@corp.com", mine, "10.0.0.1")).toBe(true);
 });
+
+test("opening an artifact reads its inbox items, older rows by address, and nothing else", () => {
+  const me = "dana@corp.com";
+  h.directory.addInbox(me, { kind: "notification", title: "New", url: "https://acme.artifacts.test/a/abc#thread=t1", slug: "acme", artifact: "abc" });
+  h.directory.addInbox(me, { kind: "notification", title: "Old", url: "https://acme.artifacts.test/a/abc" });
+  h.directory.addInbox(me, { kind: "notification", title: "Other", url: "https://acme.artifacts.test/a/xyz", slug: "acme", artifact: "xyz" });
+  h.directory.addInbox(me, { kind: "notification", title: "Elsewhere", url: "https://beta.artifacts.test/a/abc", slug: "beta", artifact: "abc" });
+  h.directory.addInbox("sam@corp.com", { kind: "notification", title: "Theirs", url: "https://acme.artifacts.test/a/abc", slug: "acme", artifact: "abc" });
+  expect(h.directory.markInboxReadFor(me, "acme", "abc")).toBe(2);
+  expect(h.directory.inbox(me).items.filter((i) => !i.read).map((i) => i.title)).toEqual(["Elsewhere", "Other"]);
+  expect(h.directory.unreadCount("sam@corp.com")).toBe(1);
+});

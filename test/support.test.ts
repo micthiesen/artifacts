@@ -191,14 +191,55 @@ test("five requests a day per person; the web form sends one too, and lists your
   expect(page).toContain("Dark mode toggle");
 });
 
-test("notifications land in the inbox even with no channels, and the inbox page marks them read", async () => {
+test("notifications land in the inbox even with no channels, and stay unread until followed or their artifact is opened", async () => {
   const r = await h.hub.create({ title: "Plan", files: { "index.mdx": "# Plan\n" }, owner: ADMIN });
-  if (!r.ok) throw new Error("create");
-  h.hub.share(r.id, { add: [{ email: ANA, role: "edit" }] });
-  h.hub.addComment(r.id, ANA, { text: "Looks good" }, "https://acme.artifacts.test", undefined, "edit");
+  const r2 = await h.hub.create({ title: "Budget", files: { "index.mdx": "# Budget\n" }, owner: ADMIN });
+  if (!r.ok || !r2.ok) throw new Error("create");
+  for (const id of [r.id, r2.id]) {
+    h.hub.share(id, { add: [{ email: ANA, role: "edit" }] });
+    h.hub.addComment(id, ANA, { text: "Looks good" }, "https://acme.artifacts.test", undefined, "edit");
+  }
   await h.hub.deliverDue(Date.now() + 3_600_000);
   expect(h.directory.inbox(ADMIN).items[0]).toMatchObject({ kind: "notification", read: false });
-  expect(h.directory.unreadCount(ADMIN)).toBe(1);
-  h.directory.markInboxRead(ADMIN);
-  expect(h.directory.unreadCount(ADMIN)).toBe(0);
+  expect(h.directory.unreadCount(ADMIN)).toBe(2);
+  const cookieFor = async (host: string) => {
+    const res = await worker.fetch(
+      new Request(`${APEX}/api/admin/session`, { method: "POST", headers: { Authorization: "Bearer op-token", "Content-Type": "application/json" }, body: JSON.stringify({ email: ADMIN, host }) }),
+      env as never,
+      ctx,
+    );
+    return ((await res.json()) as { cookie: string }).cookie;
+  };
+  const apex = await cookieFor("artifacts.test");
+  const get = (url: string, cookie: string) => worker.fetch(new Request(url, { headers: { Cookie: cookie } }), env as never, ctx);
+  const unread = async (origin: string, cookie: string, body: Record<string, unknown> = {}) => {
+    const res = await worker.fetch(
+      new Request(`${origin}/api/me/inbox`, { method: "POST", headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+      env as never,
+      ctx,
+    );
+    return ((await res.json()) as { unread: number }).unread;
+  };
+  // Looking at the inbox doesn't read it; the bell's count says what's left.
+  expect(await (await get(`${APEX}/inbox`, apex)).text()).toContain("Mark all read");
+  expect(await unread(APEX, apex)).toBe(2);
+  // Opening an artifact reads what the inbox said about it, and only that.
+  const ws = "https://acme.artifacts.test";
+  const wsCookie = await cookieFor("acme.artifacts.test");
+  expect(await unread(ws, wsCookie, { seen: r.id })).toBe(1);
+  // Someone else's item goes to their own inbox and reads nothing.
+  const item = h.directory.inbox(ADMIN).items.find((i) => !i.read)!;
+  const theirs = await worker.fetch(
+    new Request(`${APEX}/api/admin/session`, { method: "POST", headers: { Authorization: "Bearer op-token", "Content-Type": "application/json" }, body: JSON.stringify({ email: "bo@example.com", host: "artifacts.test" }) }),
+    env as never,
+    ctx,
+  );
+  const elsewhere = await get(`${APEX}/inbox/${item.id}`, ((await theirs.json()) as { cookie: string }).cookie);
+  expect(elsewhere.headers.get("Location")).toBe(`${APEX}/inbox`);
+  expect(await unread(APEX, apex)).toBe(1);
+  // Following an item from the inbox reads it and goes where it points.
+  const go = await get(`${APEX}/inbox/${item.id}`, apex);
+  expect(go.status).toBe(302);
+  expect(go.headers.get("Location")).toBe(item.url);
+  expect(await unread(APEX, apex)).toBe(0);
 });

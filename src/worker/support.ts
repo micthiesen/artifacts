@@ -259,7 +259,7 @@ export async function updateCase(env: SupportEnv, u: CaseUpdate): Promise<Suppor
   if (tell) {
     const url = caseUrl(env, before);
     // Once per change (the same status later, after something else, is a new change).
-    const fresh = await d.addInbox(before.reporter, { kind: "support", title: `${tell} (#${u.n})`, body: before.title, url, dedupe: `case:${u.n}:${status}:${history.length}` });
+    const fresh = await d.addInbox(before.reporter, { kind: "support", title: `${tell} (#${u.n})`, body: before.title, url, dedupe: `case:${u.n}:${status}:${history.length}`, slug: SUPPORT_SLUG, artifact: before.artifactId });
     if (fresh) {
       await sendSupportUpdate(env, before.reporter, { subject: `${tell}: ${before.title}`, lines: [`Your request #${u.n}: ${tell.toLowerCase()}.`], url }).catch((err) =>
         console.error("support email failed", err),

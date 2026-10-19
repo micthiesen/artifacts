@@ -1,6 +1,6 @@
 // /me. On the apex ("Account"): your display name and notification channels,
 // which follow you into every workspace, and links to each workspace's own
-// settings. In a workspace ("Notifications in <name>"): how much you hear about
+// settings. In a workspace ("Notification settings in <name>"): how much you hear about
 // each artifact there. Everything goes through that host's /api/me. A failed
 // action only shows its notice, so what you typed stays put.
 import { browserSupportsWebAuthn, startRegistration } from "@simplewebauthn/browser";
@@ -131,7 +131,7 @@ async function act(fn: () => Promise<unknown>, ok?: string) {
   }
 }
 
-const title = () => (profile.watches ? (profile.workspace ? `Notifications in ${profile.workspace.name}` : "Notifications") : "Account");
+const title = () => (profile.watches ? (profile.workspace ? `Notification settings in ${profile.workspace.name}` : "Notification settings") : "Account");
 
 function render() {
   // Keep the server's " · <brand>" suffix.

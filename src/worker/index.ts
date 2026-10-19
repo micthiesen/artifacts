@@ -269,7 +269,7 @@ async function supportRoute(request: Request, url: URL, env: Env, viewer: { emai
   }
 }
 
-/** The Notification Centre: what needs you, newest first; opening it marks it read. The operator approves announcements here. */
+/** The inbox: what needs you, newest first, unread until you follow it (or open its artifact) or mark everything read. The operator approves announcements here. */
 async function inboxRoute(request: Request, url: URL, env: Env, viewer: { email: string; operator: boolean } | null, brand: Brand): Promise<Response> {
   if (!viewer) return Response.redirect(`${url.origin}/login?return=/inbox`, 302);
   const dir = directory(env);
@@ -278,17 +278,21 @@ async function inboxRoute(request: Request, url: URL, env: Env, viewer: { email:
     if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
     const form = await request.formData().catch(() => new FormData());
     const draft = String(form.get("approve") ?? "");
-    if (/^d[0-9a-f]{16}$/.test(draft)) {
+    if (form.get("read") === "all") await dir.markInboxRead(viewer.email);
+    else if (/^d[0-9a-f]{16}$/.test(draft)) {
       try {
         const r = await approveAnnouncement(env, draft, viewer.email);
         notice = r.sent ? `Sent to ${r.sent} ${r.sent === 1 ? "request" : "requests"}.` : "That one was already sent.";
+        // It has no link to follow, so approving it is what reads it.
+        const asked = (await dir.inbox(viewer.email, 100)).items.filter((i) => i.kind === "approve-announcement" && i.url?.endsWith(`#${draft}`));
+        if (asked.length) await dir.markInboxRead(viewer.email, asked.map((i) => i.id));
       } catch (err) {
         if (!(err instanceof SupportError)) throw err;
         notice = err.message;
       }
     }
   }
-  const { items } = await dir.inbox(viewer.email, 100);
+  const { items, unread } = await dir.inbox(viewer.email, 100);
   // An announcement to approve shows all of it, and everyone it goes to, from the draft itself.
   const shown = await Promise.all(
     items.map(async (i) => {
@@ -297,8 +301,7 @@ async function inboxRoute(request: Request, url: URL, env: Env, viewer: { email:
       return draft ? { ...i, body: `${draft.message}\n\nGoes to requests ${draft.cases.map((n) => `#${n}`).join(", ")}.`, sent: Boolean(draft.sentAt) } : i;
     }),
   );
-  await dir.markInboxRead(viewer.email);
-  return inboxPage(brand, viewer, shown, notice);
+  return inboxPage(brand, viewer, shown, unread, notice);
 }
 
 /** An error in one of our own pages (never an artifact's): grouped with the same ones, a few per network an hour. */
@@ -755,8 +758,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
     }
     const deleted = url.searchParams.get("deleted");
     const left = url.searchParams.get("left");
-    const unread = await directory(env).unreadCount(viewer.email);
-    const note = deleted ? `Deleted ${deleted.slice(0, 80)}.` : left ? `You left ${left.slice(0, 80)}.` : unread ? `${unread} new in your inbox.` : undefined;
+    const note = deleted ? `Deleted ${deleted.slice(0, 80)}.` : left ? `You left ${left.slice(0, 80)}.` : undefined;
     return workspacesPage(viewer.email, await list(), operator, brand, await create(), note, billingOn(env));
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
@@ -771,6 +773,14 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   if (path === "/report") return reportRoute(request, url, env, brand);
   if (path === "/help") return indexable(helpPage(brand, contactEmail(env)));
   if (path === "/support") return supportRoute(request, url, env, viewer.email ? { email: viewer.email, operator } : null, brand);
+  const item = /^\/inbox\/(\d{1,15})$/.exec(path);
+  if (item) {
+    if (!viewer.email) return Response.redirect(`${url.origin}/login?return=/inbox`, 302);
+    // From another site (a planted link or image), go to the inbox without reading anything.
+    if (request.headers.get("Sec-Fetch-Site") === "cross-site") return Response.redirect(`${url.origin}/inbox`, 302);
+    const to = await directory(env).openInbox(viewer.email, Number(item[1]));
+    return Response.redirect(to ?? `${url.origin}/inbox`, 302);
+  }
   if (path === "/inbox") return inboxRoute(request, url, env, viewer.email ? { email: viewer.email, operator } : null, brand);
   if (path === "/api/client-error" && request.method === "POST") return clientError(request, env);
   // Billing: the pricing page and the payment provider's webhook, only while billing is on.
@@ -1627,6 +1637,7 @@ async function ownerApi(request: Request, url: URL, env: Env, hub: HubApi, viewe
  * Per-artifact notification levels in this workspace (session cookie, same-origin JSON):
  * - GET  /api/me                     your levels here
  * - POST /api/me/watch {id, level}   set one (null resets to the default)
+ * - POST /api/me/inbox {seen?}        your unread inbox count; `seen` (an artifact you opened) reads its items first
  */
 async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer): Promise<Response> {
   const email = viewer.email;
@@ -1673,6 +1684,12 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
       await hub.setMember(email, null, null);
       return Response.json({ location: `${apexOrigin(env)}/workspaces?left=${encodeURIComponent((await hub.access(null)).name)}` });
     }
+    if (url.pathname === "/api/me/inbox" && request.method === "POST") {
+      const seen = String((await jsonBody(request)).seen ?? "");
+      const dir = directory(env);
+      if (seen && (await hub.roleFor(seen, email))) await dir.markInboxReadFor(email, (await hub.info()).slug, seen);
+      return Response.json({ unread: await dir.unreadCount(email) });
+    }
     if (url.pathname === "/api/me/watch-default" && request.method === "POST") {
       const body = await jsonBody(request);
       const level = body.level === null ? null : (String(body.level) as "all" | "participating" | "mute");
@@ -1695,6 +1712,7 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
  * Your account, on the apex (session cookie, same-origin JSON):
  * - GET    /api/me                     profile, channels, workspaces
  * - POST   /api/me {name}              display name
+ * - POST   /api/me/inbox               your unread inbox count
  * - POST   /api/me/channels {type,...} add a channel (validated; may reveal a secret once)
  * - DELETE /api/me/channels/<id>       remove one
  * - POST   /api/me/channels/<id>/test  send a test notification
@@ -1720,6 +1738,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
         pushover: Boolean(env.PUSHOVER_TOKEN),
       });
     }
+    if (url.pathname === "/api/me/inbox" && request.method === "POST") return Response.json({ unread: await dir.unreadCount(email) });
     // Deleting your account: GET says what would happen (and what's in the way), POST {confirm: "delete"} does it.
     if (url.pathname === "/api/me/delete") {
       const plan = await accountDeletion(env, email);
