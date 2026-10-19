@@ -107,7 +107,7 @@ check(
   polled.body.result?.events?.length === 1 && polled.body.result.events[0].data.decision === "changes" && polled.body.result.events[0].data.by === editor,
   polled.body,
 );
-check("activity shows the decision", /requested changes in approval "go": “Cheaper plan first”/.test(decided.content[0].text), decided.content[0].text);
+check("activity shows the decision", /requested changes in approval "go": "Cheaper plan first"/.test(decided.content[0].text), decided.content[0].text);
 const agentDecides = await call("artifact_state", { id, set: { [`approve/go/${owner}`]: { decision: "approve" } } });
 check("an agent can't decide for its person", agentDecides.isError === true && /only be made by people/.test(agentDecides.content[0].text), agentDecides.content);
 
