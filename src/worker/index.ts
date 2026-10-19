@@ -1825,10 +1825,13 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
     }
     const done = action ? await snapshotAction(hub, action, request.method, url, body) : null;
     if (done) return done;
+    // Agent tokens for test addresses (the end-to-end checks), or for an operator's own services (say, the
+    // events adapter that relays this workspace's MCP events): never for anyone else.
     if (action === "tokens" && request.method === "POST") {
       const email = String(body.email ?? "").toLowerCase();
-      if (!isTestAddress(email)) return Response.json({ error: "only test addresses" }, { status: 400 });
-      return Response.json(await hub.createToken(email, "End-to-end check"));
+      const label = typeof body.label === "string" && body.label.trim() ? body.label.trim().slice(0, 60) : "End-to-end check";
+      if (!isTestAddress(email) && !operatorEmails(env).has(email)) return Response.json({ error: "only test addresses or operators" }, { status: 400 });
+      return Response.json(await hub.createToken(email, label));
     }
   } catch (err) {
     return await failure(err, env, request);
