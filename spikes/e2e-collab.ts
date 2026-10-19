@@ -50,7 +50,7 @@ check("view role can't write shared state", Boolean(await v.next((m) => m.t === 
 // ---- agent loop through MCP ---------------------------------------------------------
 const activity = await call("artifact_activity", { id });
 const text = activity.content[0].text as string;
-check("artifact_activity shows the thread with its quote", text.includes(threadId) && text.includes("$10") && text.includes("block costs-1"), text);
+check("artifact_activity shows the thread with its quote", text.includes(threadId) && text.includes("$10") && text.includes('block "costs-1"'), text);
 const cursor = activity.structuredContent.cursor as number;
 const threads = await call("artifact_threads", { id });
 check("artifact_threads lists the open thread", threads.structuredContent.threads.length === 1, threads.content);
@@ -68,7 +68,7 @@ check("viewer gets a live version notice", Boolean(await v.next((m) => m.t === "
 const reply = await call("artifact_comment", { id, thread: threadId, text: "Yes, per seat. Updated the page." });
 check("agent reply", !reply.isError && reply.structuredContent.thread.comments.at(-1).by === "agent", reply.content);
 const later = await call("artifact_activity", { id, since: cursor });
-check("activity since cursor has version, resolve and reply", /saved v2: Clarified/.test(later.content[0].text) && /replied/.test(later.content[0].text), later.content[0].text);
+check("activity since cursor has version, resolve and reply", /saved v2: "Clarified/.test(later.content[0].text) && /replied/.test(later.content[0].text), later.content[0].text);
 
 // ---- changed since your last visit ---------------------------------------------------
 const again = await (await fetch(`${origin}/a/${id}`, { headers: { Cookie: viewerCookie } })).text();

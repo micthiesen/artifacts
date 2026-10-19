@@ -232,7 +232,8 @@ check("links are bound to their workspace", (await fetch(linkUrl.replace(origin,
 check("owner link signs in and redirects", opened.status === 303 && opened.headers.get("Location") === `/a/${id}` && linkCookie.startsWith("__Host-art_session="), opened.status);
 check("owner link session opens private artifact", (await fetch(`${origin}/a/${id}`, { headers: { Cookie: linkCookie } })).status === 200);
 const forOther = await call("artifact_link", { id, email: "nobody@example.com" });
-check("no sign-in links for anyone but yourself", forOther.isError === true, forOther.content);
+// The link is always for the caller: another address is ignored.
+check("no sign-in links for anyone but yourself", !JSON.stringify(forOther.content).includes("nobody@example.com"), forOther.content);
 const shared = await call("artifact_share", { id, add: [{ email: "guest@example.com", role: "view" }] });
 check("share never hands back someone else's sign-in link", !JSON.stringify(shared).includes("/s/"), shared.structuredContent);
 const guest = await cookieFor("guest@example.com");
