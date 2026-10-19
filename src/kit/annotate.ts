@@ -364,6 +364,8 @@ function onPointerMove(e: PointerEvent) {
   if (target?.closest(".art-block-comment")) return;
   const block = target?.closest?.("[data-b]") ?? null;
   if (block === hoveredBlock) return;
+  // Leaving a block toward its button crosses the gutter, which is no block; keep the button.
+  if (!block && hoveredBlock && inButtonCorridor(e, hoveredBlock)) return;
   hoveredBlock = block;
   if (!block) {
     blockButton?.remove();
@@ -388,6 +390,20 @@ function onPointerMove(e: PointerEvent) {
   const column = (root.querySelector(".art-page") ?? root.firstElementChild ?? root).getBoundingClientRect();
   blockButton.style.top = `${rect.top + window.scrollY + 2}px`;
   blockButton.style.left = `${Math.max(4, column.left - 30)}px`;
+}
+
+/** The band from the block's button across the gutter to the block, at the block's height. */
+function inButtonCorridor(e: PointerEvent, block: Element): boolean {
+  if (!blockButton) return false;
+  const rect = block.getBoundingClientRect();
+  const button = blockButton.getBoundingClientRect();
+  const slack = 8;
+  return (
+    e.clientX >= button.left - slack &&
+    e.clientX <= rect.right &&
+    e.clientY >= Math.min(rect.top, button.top) - slack &&
+    e.clientY <= Math.max(rect.bottom, button.bottom) + slack
+  );
 }
 
 function blockAnchor(block: Element): Anchor {
