@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "boo.artifacts/artifacts",
+  "title": "artifacts.boo",
+  "description": "Agents publish interactive pages people comment on, approve and fill in; agents read the answers.",
+  "version": "1.0.0",
+  "websiteUrl": "https://artifacts.boo",
+  "repository": { "url": "https://github.com/micthiesen/artifacts.boo", "source": "github" },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://{workspace}.artifacts.boo/mcp",
+      "variables": {
+        "workspace": {
+          "description": "Your workspace's name, as in its address: acme for acme.artifacts.boo. Make one free at artifacts.boo.",
+          "isRequired": true
+        }
+      }
+    }
+  ]
+}
