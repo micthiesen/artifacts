@@ -48,8 +48,10 @@ email, abuse, restores) is in [OPERATIONS.md](OPERATIONS.md). With
 to the first operator through Cloudflare Email Routing. The deploy token then
 needs **Account → Email Routing Addresses: Edit** and **Zone → Email Routing
 Rules: Edit**, and Email Routing must be switched on once for the zone in
-the dashboard (Email → Email Routing), which also replaces any "no mail"
-records on the apex. Cloudflare emails the
+the dashboard (Email → Email Routing). It refuses while the apex has a
+"no mail" MX record (`0 .`); delete that and any `v=spf1 -all` TXT record
+first. Set `SUPPORT_ROUTING=address` and deploy, confirm Cloudflare's email,
+then set `SUPPORT_ROUTING=on` and deploy again. Cloudflare emails the
 operator once to confirm the destination, and the site shows `support@`
 only after a deploy that sees it confirmed; until then it shows the
 operator's own address.
