@@ -45,19 +45,23 @@ export default Alchemy.Stack(
     // support@<domain> forwards to the first operator (prod only): the address the site gives for help.
     // Cloudflare emails that operator once to confirm the forwarding destination; until it's confirmed (and
     // the next deploy sees that), the site keeps giving the operator's own address.
-    // Off until SUPPORT_ROUTING=on: the deploy token then also needs Email Routing permissions (docs/DEPLOY.md).
+    // SUPPORT_ROUTING: unset, off; "address" registers the destination (Cloudflare emails the operator to confirm
+    // it); "on" also adds the forwarding rule, which Cloudflare refuses until the address is confirmed. Email Routing
+    // itself is switched on once in the dashboard, which also replaces the apex's "no mail" records (docs/DEPLOY.md).
     let supportEmail: Output.Output<string> | undefined;
-    if (prod && (yield* optional("SUPPORT_ROUTING")) === "on") {
+    const supportRouting = yield* optional("SUPPORT_ROUTING");
+    if (prod && (supportRouting === "address" || supportRouting === "on")) {
       const operator = operators.split(",")[0].trim();
-      yield* Cloudflare.Email.Routing("MailRouting", { zone: zone.id });
       const inbox = yield* Cloudflare.Email.Address("SupportInbox", { email: operator });
-      yield* Cloudflare.Email.Rule("SupportForward", {
-        zone: zone.id,
-        name: "support",
-        matchers: [{ type: "literal", field: "to", value: `support@${domain}` }],
-        actions: [{ type: "forward", value: [operator] }],
-      });
-      supportEmail = Output.map(inbox.verified, (verified: boolean) => (verified ? `support@${domain}` : ""));
+      if (supportRouting === "on") {
+        yield* Cloudflare.Email.Rule("SupportForward", {
+          zone: zone.id,
+          name: "support",
+          matchers: [{ type: "literal", field: "to", value: `support@${domain}` }],
+          actions: [{ type: "forward", value: [operator] }],
+        });
+        supportEmail = Output.map(inbox.verified, (verified: boolean) => (verified ? `support@${domain}` : ""));
+      }
 
     }
 
