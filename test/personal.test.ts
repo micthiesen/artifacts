@@ -210,3 +210,21 @@ test("links already in artifacts are filled in by the backfill, a batch at a tim
   expect(h.ctx.storage.sql.exec(`SELECT artifact_id, to_id FROM links`).toArray()).toEqual([{ artifact_id: a.id, to_id: b.id }]);
   expect(h.ctx.storage.sql.exec(`SELECT value FROM settings WHERE key = 'links_backfill'`).toArray()).toEqual([]);
 });
+
+test("ledger entries: stamped with who added them; only they (or an owner) change or remove them", async () => {
+  const r = await h.hub.create({ title: "Log", files: { "index.mdx": "# Log\n" }, owner: ADMIN });
+  if (!r.ok) throw new Error("create");
+  const DANA = "dana@corp.com";
+  h.hub.share(r.id, { add: [{ email: DANA, role: "edit" }] });
+  h.hub.setState(r.id, { "ledger/pay/k1": { values: { amount: 5 }, by: "forged@x.com" } as never }, DANA, undefined, { role: "edit" });
+  const read = () => JSON.parse(h.ctx.storage.sql.exec(`SELECT value FROM state WHERE key = 'ledger/pay/k1'`).one().value as string);
+  expect(read()).toMatchObject({ values: { amount: 5 }, by: DANA });
+  expect(() => h.hub.setState(r.id, { "ledger/pay/k1": { values: { amount: 6 } } as never }, "eve@corp.com", undefined, { role: "edit" })).toThrow("entries you added");
+  // The owner corrects it; Dana still owns the entry and can change it again.
+  h.hub.setState(r.id, { "ledger/pay/k1": { ...read(), values: { amount: 7 } } }, ADMIN, undefined, { role: "owner" });
+  expect(read()).toMatchObject({ values: { amount: 7 }, by: DANA, editedBy: ADMIN });
+  h.hub.setState(r.id, { "ledger/pay/k1": { ...read(), values: { amount: 8 } } }, DANA, undefined, { role: "edit" });
+  expect(read()).toMatchObject({ values: { amount: 8 }, by: DANA, editedBy: DANA });
+  expect(() => h.hub.setState(r.id, { "ledger/pay/k1": { values: { x: { nested: 1 } } } as never }, DANA, undefined, { role: "edit" })).toThrow("text, a number or true/false");
+  expect(() => h.hub.setState(r.id, { "ledger/pay": { values: {} } as never }, DANA, undefined, { role: "edit" })).toThrow("ledger/<id>/<entry>");
+});

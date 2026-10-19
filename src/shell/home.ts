@@ -47,6 +47,15 @@ function adjustCount(delta: number) {
   el.closest<HTMLElement>(".archived-link")!.hidden = n === 0;
 }
 
+/** While searching, the "N matches" line follows rows leaving (archived) or coming back (undo). */
+function adjustMatches(delta: number) {
+  const el = document.querySelector<HTMLElement>(".list-count");
+  const m = el?.textContent && /^(\d+) (match|matches) (for .*)$/.exec(el.textContent);
+  if (!el || !m) return;
+  const n = Math.max(0, Number(m[1]) + delta);
+  el.textContent = `${n} ${n === 1 ? "match" : "matches"} ${m[3]}`;
+}
+
 /** Show the list's empty note when its last row has gone, hide it otherwise. */
 function syncEmpty(list: HTMLUListElement) {
   // Paged or searched: an emptied page isn't an empty list, so fetch the page again (the server moves to the last one if need be).
@@ -87,6 +96,7 @@ function undo(li: HTMLLIElement, list: HTMLUListElement, id: string, archive: bo
   setArchived(id, !archive).then(
     () => {
       restoreRow(li, list);
+      adjustMatches(1);
       if (archive) adjustCount(-1);
     },
     (err: Error) => toast(`Couldn't undo: ${err.message}`, { label: "Retry", run: () => undo(li, list, id, archive) }),
@@ -150,6 +160,7 @@ document.addEventListener("click", (e) => {
     () => {
       const list = removeRow(li);
       if (archive) adjustCount(1);
+      adjustMatches(-1);
       toast(archive ? `Archived “${title}”` : `Restored “${title}” to the main list`, { label: "Undo", run: () => undo(li, list, id, archive) });
     },
     (err: Error) => {

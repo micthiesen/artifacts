@@ -4,7 +4,7 @@
 // own alarm for render checks, notifications, live data refreshes and backups.
 import { DurableObject } from "cloudflare:workers";
 import { BUILD_STAMP, buildArtifact, type Build, type CompileError } from "./compile.ts";
-import { renderCheck, type CheckEnv, type CheckOutcome, type RenderCheck } from "./check.ts";
+import { isDefaultView, renderCheck, type CheckEnv, type CheckOutcome, type CheckView, type RenderCheck } from "./check.ts";
 import { domainOf, isValidPrincipal, sharePrincipal, WORKSPACE_PRINCIPAL } from "./principal.ts";
 import { applyJsonPatch, applyTextEdits, EditError, grepFiles, type JsonPatchOp, type TextEdit } from "./edit.ts";
 import { diffBlocks, type BlockInfo } from "./blocks.ts";
@@ -1143,9 +1143,13 @@ export class Workspace extends DurableObject {
       if (on !== undefined) this.sql.exec(`UPDATE artifacts SET public = ?, public_until = ? WHERE id = ?`, on ? 1 : 0, until, id);
     });
     this.markDirty();
-    // Every open page reconnects and is checked against the new sharing; working
-    // out exactly who lost access (public, domain, workspace, role changes) isn't worth the risk.
-    this.closeSockets(id);
+    // Open pages whose access changed (lost, or a different role) reconnect and are checked again; everyone
+    // else, the person sharing included, carries on. Any doubt closes, as before.
+    for (const ws of this.ctx.getWebSockets(id)) {
+      const tag = ws.deserializeAttachment() as SocketTag;
+      const now = tag.email ? this.roleFor(id, tag.email) : isPublic(this.sql.exec(`SELECT public, public_until FROM artifacts WHERE id = ?`, id).one()) ? "view" : null;
+      if (now === null || now !== tag.role) ws.close(4003, "access changed");
+    }
     return this.meta(id);
   }
 
@@ -1191,10 +1195,17 @@ export class Workspace extends DurableObject {
     this.ctx.storage.transactionSync(() => {
       for (const [key, raw] of Object.entries(changes)) {
         if (key.length === 0 || key.length > 200) throw new HubError(`state key "${key.slice(0, 40)}" must be 1-200 chars`);
-        const existing = this.sql.exec(`SELECT by FROM state WHERE artifact_id = ? AND key = ?`, id, key).toArray()[0];
+        const existing = this.sql.exec(`SELECT by, value FROM state WHERE artifact_id = ? AND key = ?`, id, key).toArray()[0];
+        // A ledger entry belongs to whoever added it, even after an owner edits it.
+        const prior = existing && key.startsWith("ledger/") ? (JSON.parse(existing.value as string) as { by?: unknown; at?: unknown }) : null;
+        const owner = prior ? (prior.by ?? existing!.by) : existing?.by;
         // A decision or form response is the person's own act on the page; their agent can read it but not make it.
         if (opts.agent && RESPONSE_KEY.test(key)) throw new HubError(`${key.split("/")[0] === "approve" ? "decisions" : "form responses"} can only be made by people on the page`);
-        const value = by ? stampCollab(key, raw, by, Boolean(existing), (existing?.by as string | null) ?? null, opts.role, version) : raw;
+        // A support case's status is the service's to set (through the support tools), never a person's or an agent's.
+        if (key.startsWith("case/") && by !== null) throw new HubError("a support case's status is set through the support tools");
+        // Ledger entries say who added them, so agents can't add or change one; they may remove one (after folding it into a data file).
+        if (opts.agent && key.startsWith("ledger/") && raw !== null) throw new HubError("ledger entries are added by people on the page; keep your own rows in the Ledger's data file");
+        const value = by ? stampCollab(key, raw, by, Boolean(existing), (owner as string | null | undefined) ?? null, opts.role, version, typeof prior?.at === "number" ? prior.at : undefined) : raw;
         seq = this.sql.exec(`UPDATE artifacts SET state_seq = state_seq + 1 WHERE id = ? RETURNING state_seq`, id).one().state_seq as number;
         if (value === null) {
           this.sql.exec(`DELETE FROM state WHERE artifact_id = ? AND key = ?`, id, key);
@@ -1284,8 +1295,19 @@ export class Workspace extends DurableObject {
    * free within a few seconds; otherwise queues it on the alarm. Reuses a stored
    * result for the same version. The screenshot comes back base64 for MCP.
    */
-  async runRenderCheck(id: string, origin: string, force = false): Promise<CheckOutcome & { version: number }> {
+  async runRenderCheck(id: string, origin: string, force = false, view?: CheckView): Promise<CheckOutcome & { version: number }> {
     const version = this.requireArtifact(id).version as number;
+    // Another way of looking (phone, whole page, a section): run now, on its own, and keep nothing.
+    if (!isDefaultView(view)) {
+      const now = Date.now();
+      const slot = Math.max(now, this.nextCheckAt);
+      if (slot - now > CHECK_INLINE_WAIT_MS) return { check: { status: "skipped", reason: "the headless browser is busy; try again in a few seconds" }, version };
+      this.nextCheckAt = slot + CHECK_SPACING_MS;
+      if (slot > now) await new Promise((r) => setTimeout(r, slot - now));
+      const result = await renderCheck(this.hubEnv, origin, id, version, this.info().slug, view);
+      if ("rateLimited" in result) return { check: { status: "skipped", reason: "the headless browser is rate-limited; try again in a few seconds" }, version };
+      return { ...result, version };
+    }
     const stored = this.sql.exec(`SELECT version, status, result, screenshot FROM checks WHERE artifact_id = ?`, id).toArray()[0];
     if (!force && stored && stored.version === version && stored.status === "done") {
       const previous = JSON.parse(stored.result as string) as RenderCheck;
@@ -2081,6 +2103,10 @@ export class Workspace extends DurableObject {
         this.deleteComment(tag.id, tag.email, msg.comment, tag.role, cid);
       } else if (msg.t === "set") {
         if (tag.role === "view") throw new HubError("this viewer has read-only access");
+        // On a support request, the person who sent it comments and says whether a fix helped; nothing else.
+        if (this.info().slug === "support" && tag.role !== "owner" && msg.key !== `approve/fixed/${tag.email}`) {
+          throw new HubError("on a support request you can comment, and say whether a fix helped");
+        }
         this.setState(tag.id, { [msg.key]: msg.value }, tag.email, msg.cid, { role: tag.role, origin: tag.origin });
       }
     } catch (err) {
@@ -2640,6 +2666,7 @@ export class Workspace extends DurableObject {
     const names = await directory.names(actors);
     let sends = 0;
     const results: { id: string; result: { ok: boolean; error?: string; gone?: boolean } }[] = [];
+    const inbox: { email: string; kind: string; title: string; body: string; url: string }[] = [];
     for (const group of groups.values()) {
       const email = group[0].email as string;
       const id = group[0].artifact_id as string;
@@ -2652,10 +2679,13 @@ export class Workspace extends DurableObject {
         .toArray();
       if (!rows.length) continue;
       const art = this.sql.exec(`SELECT title FROM artifacts WHERE id = ?`, id).toArray()[0];
-      if (!art || !mine.length || this.isViewing(id, email) || !this.canOpen(id, email)) continue;
+      if (!art || this.isViewing(id, email) || !this.canOpen(id, email)) continue;
       const items: OutboxItem[] = rows.map((r) => ({ kind: r.kind as OutboxItem["kind"], data: JSON.parse(r.data as string) }));
       const origin = items.map((i) => i.data.origin).find((o): o is string => typeof o === "string" && o !== "") ?? this.setting("origin") ?? "";
       const msg = composeMessage({ title: art.title as string, artifactId: id, origin, items, nameOf: (e) => names[e] ?? null });
+      // Every notification also lands in the person's inbox, whatever channels they have (or none).
+      inbox.push({ email, kind: "notification", title: msg.title, body: msg.body, url: msg.url });
+      if (!mine.length) continue;
       for (const c of mine) {
         // Notification emails share the workspace's daily email allowance.
         // Over today's email allowance, other channels (push, webhooks) still carry it.
@@ -2666,6 +2696,11 @@ export class Workspace extends DurableObject {
       }
     }
     if (results.length) await directory.recordChannelResults(results);
+    if (inbox.length) {
+      await Promise.resolve()
+        .then(() => directory.addInboxMany(inbox))
+        .catch((err: unknown) => console.error(JSON.stringify({ ops: "inbox_failed", slug: this.info().slug, message: (err as Error).message })));
+    }
     return sends;
   }
 
@@ -3318,6 +3353,7 @@ function stampCollab(
   existingBy: string | null,
   role: Role | undefined,
   version: number,
+  existingAt?: number,
 ): JsonValue | null {
   const poll = /^poll\/[^/]+\/(.+)$/.exec(key);
   if (poll) {
@@ -3350,6 +3386,27 @@ function stampCollab(
       if (typeof v === "string" && v.length > COMMENT_MAX_CHARS) throw new HubError(`form field "${name.slice(0, 40)}" is limited to ${COMMENT_MAX_CHARS} characters`);
     }
     return { values, by, at: Date.now(), version: seenVersion(value.version, version) };
+  }
+  // A Ledger entry: added by anyone who can edit, changed or removed only by whoever added it (or an owner),
+  // stamped with who and when like a form response.
+  const ledger = /^ledger\/([\w.-]{1,64})\/([\w-]{1,64})$/.exec(key);
+  if (key.startsWith("ledger/")) {
+    if (!ledger) throw new HubError("a ledger entry's key is ledger/<id>/<entry>");
+    if (exists && existingBy !== null && existingBy !== by && role !== "owner") throw new HubError("you can only change entries you added");
+    if (value === null) return null;
+    if (typeof value !== "object" || Array.isArray(value)) throw new HubError("a ledger entry must be an object");
+    const values = value.values;
+    if (!values || typeof values !== "object" || Array.isArray(values)) throw new HubError("a ledger entry needs values");
+    const entries = Object.entries(values);
+    if (entries.length > FORM_FIELDS_MAX) throw new HubError(`a ledger entry has at most ${FORM_FIELDS_MAX} fields`);
+    for (const [name, v] of entries) {
+      if (name.length > 100) throw new HubError("field names are limited to 100 characters");
+      if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") throw new HubError(`field "${name.slice(0, 40)}" must be text, a number or true/false`);
+      if (typeof v === "string" && v.length > COMMENT_MAX_CHARS) throw new HubError(`field "${name.slice(0, 40)}" is limited to ${COMMENT_MAX_CHARS} characters`);
+    }
+    // The first author and time stay; an edit adds who changed it and when.
+    if (!exists) return { values, by, at: Date.now() };
+    return { values, by: existingBy ?? by, at: existingAt ?? Date.now(), editedBy: by, editedAt: Date.now() };
   }
   if (key.startsWith("comments/")) {
     if (exists && existingBy !== null && existingBy !== by && role !== "owner") {

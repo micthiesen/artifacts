@@ -113,3 +113,34 @@ test("create with public: true on a new Free workspace saves the artifact, share
   expect(h.hub.list(OLU).map((a) => a.title)).toEqual(["Day one"]);
   expect(h.hub.meta(r.data.id)!.public).toBe(false);
 });
+
+test("agents see uploaded images, and can check a page on a phone, whole, or at a section", async () => {
+  const created = await call(MIA, "artifact_create", { title: "Pics", files });
+  const id = created.data.id as string;
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  h.hub.putAsset(id, "assets/a.png", "image/png", png);
+  const res = await handleMcp(
+    new Request("https://acme.artifacts.test/mcp", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "artifact_read", arguments: { id, path: "assets/a.png" } } }) }),
+    ctx(MIA),
+  );
+  const body = (await res.json()) as { result: { content: { type: string; mimeType?: string; data?: string }[] } };
+  expect(body.result.content[1]).toMatchObject({ type: "image", mimeType: "image/png", data: btoa(String.fromCharCode(...png)) });
+  expect((await call(MIA, "artifact_read", { id, path: "assets/missing.png" })).error).toBe(true);
+  // No browser in tests: the view still reaches the check, which says why it was skipped.
+  const seen: unknown[] = [];
+  const real = h.hub.runRenderCheck.bind(h.hub);
+  h.hub.runRenderCheck = ((...a: unknown[]) => (seen.push(a[3]), real(...(a as Parameters<typeof real>)))) as never;
+  const phone = await call(MIA, "artifact_check", { id, phone: true, section: "#bread" });
+  expect(seen.at(-1)).toEqual({ phone: true, section: "bread" });
+  expect(phone.text).toContain("skipped");
+});
+
+test("agents can't add or change ledger entries (they say who added them), only remove one", async () => {
+  const created = await call(MIA, "artifact_create", { title: "Log", files });
+  const id = created.data.id as string;
+  const add = await call(MIA, "artifact_state", { id, set: { "ledger/pay/k1": { values: { amount: 5 }, by: OLU } } });
+  expect(add.error).toBe(true);
+  expect(add.text).toContain("added by people on the page");
+  h.hub.setState(id, { "ledger/pay/k1": { values: { amount: 5 } } }, MIA, undefined, { role: "owner" });
+  expect((await call(MIA, "artifact_state", { id, set: { "ledger/pay/k1": null } })).error).toBe(false);
+});

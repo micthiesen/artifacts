@@ -342,6 +342,9 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     }, 150);
   }
   if (check) {
+    // A check of one section (#slug in the frame URL) scrolls there, so the screenshot shows it.
+    const section = new URLSearchParams(location.search).get("section");
+    if (section) whenRendered(() => scrollToSection(section, 10));
     // Let effects and lazy chunks (charts) settle before declaring success.
     setTimeout(() => emitCheck(checkErrors.length ? "error" : "rendered", checkErrors, rootEl), 600);
   }

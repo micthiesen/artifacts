@@ -27,6 +27,8 @@ import {
   POLICY_UPDATED,
   pricingPage,
   helpPage,
+  inboxPage,
+  supportPage,
   REPORT_REASONS,
   reportPage,
   type Brand,
@@ -34,6 +36,7 @@ import {
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { ops } from "./ops.ts";
+import { approveAnnouncement, browserOf, caseUrl, openCase, placeOf, recordProductError, supportHub, SupportError, type CaseKind } from "./support.ts";
 import { publicMessage } from "./errors.ts";
 import { isPlan } from "./plans.ts";
 import { BillingError, billingOn, billingReady, planFor, portalLink, readEvent, startCheckout, subscriptionLive, TEAM_PRICE, verifyWebhook } from "./billing.ts";
@@ -133,6 +136,7 @@ export default {
       url.hostname = env.APEX_HOST;
       return Response.redirect(url.toString(), 301);
     }
+    try {
     if (url.hostname === env.APEX_HOST) response = await apex(request, env, ctx);
     else {
       // Unknown hosts stop here, so a random subdomain never wakes a Durable Object.
@@ -142,6 +146,13 @@ export default {
       response = record
         ? await providerFor(url.origin).fetch(request, env, ctx)
         : messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: PRODUCT }, apexBrand(env));
+    }
+    } catch (err) {
+      // Something we didn't expect: recorded as a product error, and the person gets its code and a way to report it.
+      console.error(err);
+      const code = await recordProductError(env, { kind: "server", place: url.pathname, message: err instanceof Error ? err.message : String(err), browser: browserOf(request.headers.get("User-Agent")) });
+      if (url.pathname.startsWith("/api/") || url.pathname === "/mcp") return Response.json({ error: `Something went wrong on our side (error ${code}).`, errorId: code }, { status: 500 });
+      return messagePage("Something went wrong", `That failed on our side (error ${code}). Trying again often works; if it doesn't, tell us and we'll look into it.`, 500, { href: `${apexOrigin(env)}/support?error=${code}`, label: "Report this" }, apexBrand(env));
     }
     await renewSession(request, env, response);
     if (response.status !== 101) {
@@ -208,6 +219,95 @@ async function reportRoute(request: Request, url: URL, env: Env, brand: Brand): 
   });
   if (!stored) return reportPage(brand, { ...state, error: `We couldn't take the report just now. Email ${contactEmail(env)} instead.` }, 503);
   return reportPage(brand, { done: true });
+}
+
+/**
+ * Help & feedback (apex): send us a problem, idea or question, and see your requests. `from` is the page the
+ * person came from (included only if they leave it ticked), `error` an error code from an error page.
+ */
+async function supportRoute(request: Request, url: URL, env: Env, viewer: { email: string; operator: boolean } | null, brand: Brand): Promise<Response> {
+  const dir = directory(env);
+  const ours = (raw: string | null) => {
+    try {
+      const u = new URL(raw ?? "");
+      return u.protocol === "https:" && (u.hostname === env.APEX_HOST || u.hostname.endsWith(env.WORKSPACE_SUFFIX)) ? u : null;
+    } catch {
+      return null;
+    }
+  };
+  const requests = async () =>
+    viewer ? (await dir.supportCases({ reporter: viewer.email, limit: 50 })).filter((c) => c.artifactId).map((c) => ({ n: c.n, title: c.title, status: c.status, url: caseUrl(env, c), updatedAt: c.updatedAt })) : [];
+  const from = ours(url.searchParams.get("from"));
+  const errorCode = /^e[0-9a-f]{10}$/.test(url.searchParams.get("error") ?? "") ? url.searchParams.get("error")! : undefined;
+  if (request.method !== "POST") {
+    return supportPage(brand, viewer, { requests: await requests(), contact: contactEmail(env), ...(from ? { page: from.href } : {}), ...(errorCode ? { error: errorCode } : {}) });
+  }
+  if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
+  if (!viewer) return Response.redirect(`${url.origin}/login?return=/support`, 302);
+  const form = await request.formData().catch(() => new FormData());
+  const field = (k: string) => String(form.get(k) ?? "");
+  const page = ours(form.get("page") ? field("page") : null);
+  const state = { kind: field("kind"), title: field("title"), details: field("details"), ...(page ? { page: page.href } : {}), ...(/^e[0-9a-f]{10}$/.test(field("error")) ? { error: field("error") } : {}) };
+  try {
+    const made = await openCase(env, {
+      reporter: viewer.email,
+      viaAgent: false,
+      kind: state.kind as CaseKind,
+      title: state.title,
+      details: state.details,
+      context: {
+        ...(page ? { page: `${page.hostname}${placeOf(page.pathname)}`, ...(slugOf(page.hostname, env) ? { workspace: slugOf(page.hostname, env)! } : {}) } : {}),
+        ...(page || form.get("browser") ? { browser: browserOf(request.headers.get("User-Agent")) } : {}),
+      },
+      ...(state.error ? { errorId: state.error } : {}),
+    });
+    return continuePage(made.url);
+  } catch (err) {
+    if (!(err instanceof SupportError)) throw err;
+    return supportPage(brand, viewer, { requests: await requests(), contact: contactEmail(env), ...state, problem: err.message }, 400);
+  }
+}
+
+/** The Notification Centre: what needs you, newest first; opening it marks it read. The operator approves announcements here. */
+async function inboxRoute(request: Request, url: URL, env: Env, viewer: { email: string; operator: boolean } | null, brand: Brand): Promise<Response> {
+  if (!viewer) return Response.redirect(`${url.origin}/login?return=/inbox`, 302);
+  const dir = directory(env);
+  let notice: string | undefined;
+  if (request.method === "POST") {
+    if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
+    const form = await request.formData().catch(() => new FormData());
+    const draft = String(form.get("approve") ?? "");
+    if (/^d[0-9a-f]{16}$/.test(draft)) {
+      try {
+        const r = await approveAnnouncement(env, draft, viewer.email);
+        notice = r.sent ? `Sent to ${r.sent} ${r.sent === 1 ? "request" : "requests"}.` : "That one was already sent.";
+      } catch (err) {
+        if (!(err instanceof SupportError)) throw err;
+        notice = err.message;
+      }
+    }
+  }
+  const { items } = await dir.inbox(viewer.email, 100);
+  // An announcement to approve shows all of it, and everyone it goes to, from the draft itself.
+  const shown = await Promise.all(
+    items.map(async (i) => {
+      const id = i.kind === "approve-announcement" ? /#(d[0-9a-f]{16})$/.exec(i.url ?? "")?.[1] : undefined;
+      const draft = id ? await dir.draft(id) : null;
+      return draft ? { ...i, body: `${draft.message}\n\nGoes to requests ${draft.cases.map((n) => `#${n}`).join(", ")}.`, sent: Boolean(draft.sentAt) } : i;
+    }),
+  );
+  await dir.markInboxRead(viewer.email);
+  return inboxPage(brand, viewer, shown, notice);
+}
+
+/** An error in one of our own pages (never an artifact's): grouped with the same ones, a few per network an hour. */
+async function clientError(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json().catch(() => null)) as { message?: unknown; place?: unknown } | null;
+  if (!body || typeof body.message !== "string" || !body.message.trim()) return new Response(null, { status: 204 });
+  if (!(await directory(env).allowReport(request.headers.get("CF-Connecting-IP") ?? "unknown", "client-error"))) return new Response(null, { status: 204 });
+  const place = typeof body.place === "string" ? body.place : "/";
+  await recordProductError(env, { kind: "client", place, message: body.message.slice(0, 1000), browser: browserOf(request.headers.get("User-Agent")) });
+  return new Response(null, { status: 204 });
 }
 
 /** An artifact link on one of our workspaces, normalized; null for anything else. */
@@ -362,6 +462,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   }
   if (path === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n", { headers: { "Content-Type": "text/plain" } });
   if (path === "/privacy" || path === "/terms" || path === "/security" || path === "/help") return Response.redirect(`${apexOrigin(env)}${path}`, 301);
+  if (path === "/support") return Response.redirect(`${apexOrigin(env)}/support${url.search}`, 302);
+  if (path === "/api/client-error" && request.method === "POST") return clientError(request, env);
   const record = await workspaceRecord(env, slug);
   const brand: Brand = { name: record?.name ?? slug, home: "/", apex: apexOrigin(env) };
   if (!record) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: PRODUCT }, apexBrand(env));
@@ -627,7 +729,8 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
     }
     const deleted = url.searchParams.get("deleted");
     const left = url.searchParams.get("left");
-    const note = deleted ? `Deleted ${deleted.slice(0, 80)}.` : left ? `You left ${left.slice(0, 80)}.` : undefined;
+    const unread = await directory(env).unreadCount(viewer.email);
+    const note = deleted ? `Deleted ${deleted.slice(0, 80)}.` : left ? `You left ${left.slice(0, 80)}.` : unread ? `${unread} new in your inbox.` : undefined;
     return workspacesPage(viewer.email, await list(), operator, brand, await create(), note);
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
@@ -641,6 +744,9 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   }
   if (path === "/report") return reportRoute(request, url, env, brand);
   if (path === "/help") return indexable(helpPage(brand, contactEmail(env)));
+  if (path === "/support") return supportRoute(request, url, env, viewer.email ? { email: viewer.email, operator } : null, brand);
+  if (path === "/inbox") return inboxRoute(request, url, env, viewer.email ? { email: viewer.email, operator } : null, brand);
+  if (path === "/api/client-error" && request.method === "POST") return clientError(request, env);
   // Billing: the pricing page and the payment provider's webhook, only while billing is on.
   if (path === "/pricing" && billingOn(env)) return indexable(pricingPage(brand, env.SELF_SERVE === "on", viewer.email ? { email: viewer.email, operator } : undefined));
   if (path === "/api/billing/webhook" && request.method === "POST") return billingWebhook(request, env);
@@ -1080,9 +1186,12 @@ async function jsonBody(request: Request): Promise<Record<string, unknown>> {
 }
 
 /** Validation errors from a Durable Object arrive as plain Errors over RPC, so every failure is shown as its message. */
-function failure(err: unknown): Response {
+/** A failed API call: the person's own mistake (400), or ours, recorded as a product error (500, with its code). */
+async function failure(err: unknown, env: Env, request: Request): Promise<Response> {
   const { message, internal } = publicMessage(err);
-  return Response.json({ error: message }, { status: internal ? 500 : 400 });
+  if (!internal) return Response.json({ error: message }, { status: 400 });
+  const code = await recordProductError(env, { kind: "server", place: new URL(request.url).pathname, message: err instanceof Error ? err.message : String(err), browser: browserOf(request.headers.get("User-Agent")) });
+  return Response.json({ error: `${message} (error ${code})`, errorId: code }, { status: 500 });
 }
 
 // ---- OAuth consent ---------------------------------------------------------------------
@@ -1337,7 +1446,7 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       return Response.json({ joinDomains: await hub.setJoinDomain(String(body.domain ?? ""), body.allowed !== false, email) });
     }
   } catch (err) {
-    return failure(err);
+    return await failure(err, env, request);
   }
   return Response.json({ error: "not found" }, { status: 404 });
 }
@@ -1357,7 +1466,7 @@ async function ownerApi(request: Request, url: URL, env: Env, hub: HubApi, viewe
     try {
       return Response.json({ hosts: await hub.setHostAllowed(String(body.host ?? ""), body.allowed !== false) });
     } catch (err) {
-      return failure(err);
+      return await failure(err, env, request);
     }
   }
   const m = /^\/api\/a\/([a-z0-9]+)(?:\/([a-z_]+))?$/.exec(url.pathname);
@@ -1443,7 +1552,7 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
       return Response.json({ level: await hub.setWatch(email, id, level) });
     }
   } catch (err) {
-    return failure(err);
+    return await failure(err, env, request);
   }
   return Response.json({ error: "not found" }, { status: 404 });
 }
@@ -1537,7 +1646,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
       return result.ok ? Response.json({ ok: true }) : Response.json({ error: result.error }, { status: 400 });
     }
   } catch (err) {
-    return failure(err);
+    return await failure(err, env, request);
   }
   return Response.json({ error: "not found" }, { status: 404 });
 }
@@ -1611,6 +1720,11 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       // Jobs come from the directory, which each workspace reports to, so this wakes no workspace.
       const billing = await dir.billingAll();
       return Response.json({ workspaces: (await dir.workspaces()).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug), billing: billing[w.slug] ?? null })) });
+    }
+    // Make the support workspace now (it's otherwise made by the first request), so the assistant can connect first.
+    if (path === "/api/admin/support" && request.method === "POST") {
+      await supportHub(env);
+      return Response.json({ url: workspaceOrigin(env, "support") });
     }
     // What happened lately: signups, billing changes, reports and failures (the ops log, see ops.ts).
     if (path === "/api/admin/ops" && request.method === "GET") {
@@ -1717,7 +1831,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       return Response.json(await hub.createToken(email, "End-to-end check"));
     }
   } catch (err) {
-    return failure(err);
+    return await failure(err, env, request);
   }
   return Response.json({ error: "not found" }, { status: 404 });
 }

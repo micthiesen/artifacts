@@ -798,3 +798,12 @@ div.thread-anchor { cursor: default; }
 /* Signed in on a phone, the front page's top bar keeps the brand readable: GitHub moves to the footer only. */
 @media (max-width: 480px) { .bar .bar-link[href*="github.com"] { display: none; } }
 .list > li[hidden] { display: none; }
+.kind-row { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: .25rem 1rem; }
+.kind-row legend { font-weight: 550; font-size: 14px; margin-bottom: .3rem; }
+.inbox { list-style: none; padding: 0; margin: 0; display: grid; gap: .5rem; }
+.inbox-item { border: 1px solid var(--border); border-radius: .75rem; padding: .7rem .9rem; background: var(--card); min-width: 0; }
+.inbox-item.unread { border-color: color-mix(in oklch, var(--primary) 45%, var(--border)); }
+.inbox-item.unread .inbox-title::before { content: ""; display: inline-block; width: .45rem; height: .45rem; border-radius: 50%; background: var(--primary); margin-right: .45rem; vertical-align: middle; }
+.inbox-title { font-weight: 550; overflow-wrap: anywhere; }
+.inbox-body { margin-top: .2rem; overflow-wrap: anywhere; white-space: pre-line; }
+.inline-form { margin-top: .5rem; }

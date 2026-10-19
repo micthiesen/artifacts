@@ -216,7 +216,8 @@ test("a retry heals a plan change that failed the first time", async () => {
     return real(plan);
   }) as never;
   const paid = checkoutCompleted();
-  await expect(webhook(paid)).rejects.toThrow("hub overloaded");
+  // A 500 (with an error code), which Creem retries.
+  expect((await webhook(paid)).status).toBe(500);
   expect(h.hub.plan().id).toBe("free");
   fail = false;
   // Creem delivers the same event again.

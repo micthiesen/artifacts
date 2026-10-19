@@ -7,6 +7,7 @@
 // (apex) and data-scoped (a presigned-link session that opens one artifact only,
 // so it gets a way to sign in properly instead of links it can't open).
 import type { WatchLevel } from "../shared/protocol.ts";
+import "./report-errors.ts";
 
 const LEVELS: [WatchLevel, string][] = [
   ["all", "All activity"],
@@ -172,11 +173,15 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     link("/me", workspace ? `Notifications in ${workspace}` : "Notifications");
     if (member) link("/settings", "Workspace settings");
     link("/", "All artifacts");
+    link(`${apex}/inbox`, "Inbox");
     link(`${apex}/me`, "Account");
     link(`${apex}/workspaces`, "Your workspaces");
+    link(`${apex}/support?from=${encodeURIComponent(location.href.split("#")[0])}`, "Help & feedback");
   } else {
+    link("/inbox", "Inbox");
     link("/me", "Account");
     link("/workspaces", "Your workspaces");
+    link(`/support?from=${encodeURIComponent(location.href.split("#")[0])}`, "Help & feedback");
     if (operator) link("/admin", "Operator console");
   }
   const form = document.createElement("form");

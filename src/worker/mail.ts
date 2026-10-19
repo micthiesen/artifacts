@@ -175,3 +175,14 @@ export async function sendOperatorNote(env: MailEnv & { OPERATOR_EMAILS?: string
     console.error("operator note failed", subject, err);
   }
 }
+
+/** About someone's support request: received, or its status changed. */
+export function sendSupportUpdate(env: MailEnv, to: string, input: { subject: string; lines: string[]; url: string }) {
+  return simple(env, to, {
+    subject: input.subject,
+    preheader: input.lines[0] ?? input.subject,
+    lines: input.lines,
+    link: { href: input.url, label: "Open your request" },
+    footer: "You get these about requests you sent us. Reply in the request's conversation, not to this email.",
+  });
+}

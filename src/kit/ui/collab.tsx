@@ -17,7 +17,7 @@ function ReadOnlyNote({ email }: { email: string | null }) {
   );
 }
 
-function rand(n = 6) {
+export function rand(n = 6) {
   return Math.random().toString(36).slice(2, 2 + n);
 }
 
@@ -521,11 +521,100 @@ export type FormField = {
   placeholder?: string;
   hint?: string;
 };
-type FormValue = string | number | boolean;
+export type FormValue = string | number | boolean;
 type FormResponse = { values: Record<string, FormValue>; by?: string; at?: number; version?: number };
 
-function emptyValue(f: FormField): FormValue {
+export function emptyValue(f: FormField): FormValue {
   return f.type === "checkbox" ? false : "";
+}
+
+/** One labelled form control (Form and Ledger). */
+export function FieldControl({
+  field: f,
+  fid,
+  value,
+  onChange,
+  onEnter,
+  invalid,
+  errorId,
+}: {
+  field: FormField;
+  fid: string;
+  value: FormValue;
+  onChange: (v: FormValue) => void;
+  onEnter: (e: React.SyntheticEvent) => void;
+  invalid: boolean;
+  errorId: string;
+}) {
+  const label = f.label ?? f.name;
+  const describedBy = [f.hint ? `${fid}-hint` : "", invalid ? errorId : ""].filter(Boolean).join(" ") || undefined;
+  const required = f.required ? <span className="text-muted-foreground">*</span> : null;
+  const control =
+    f.type === "checkbox" ? (
+      <Checkbox
+        id={fid}
+        checked={value === true}
+        onCheckedChange={(c) => onChange(c === true)}
+        label={<>{label}{required}</>}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
+      />
+    ) : f.type === "select" ? (
+      <Select options={f.options ?? []} value={typeof value === "string" && value ? value : null} onValueChange={(v) => onChange(String(v ?? ""))} placeholder={f.placeholder} aria-label={label} />
+    ) : f.type === "textarea" ? (
+      <Textarea id={fid} value={String(value)} onChange={(e) => onChange(e.target.value)} placeholder={f.placeholder} rows={3} aria-describedby={describedBy} aria-invalid={invalid || undefined} />
+    ) : (
+      <Input
+        id={fid}
+        type={f.type === "number" ? "text" : (f.type ?? "text")}
+        inputMode={f.type === "number" ? "decimal" : undefined}
+        value={String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) onEnter(e);
+        }}
+        placeholder={f.placeholder}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
+      />
+    );
+  return (
+    <div className="flex flex-col gap-1.5">
+      {f.type === "select" ? (
+        <span className="text-sm leading-none font-medium">
+          {label}
+          {required}
+        </span>
+      ) : f.type !== "checkbox" ? (
+        <Label htmlFor={fid}>
+          {label}
+          {required}
+        </Label>
+      ) : null}
+      {control}
+      {f.hint && (
+        <span id={`${fid}-hint`} className="text-[13px] text-muted-foreground">
+          {f.hint}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Checks and converts what was typed into a field: an error message, or the value to store (undefined: left empty). */
+export function readField(f: FormField, raw: FormValue | undefined): { error: string } | { value: FormValue | undefined } {
+  const v = typeof raw === "string" ? raw.trim() : raw;
+  const label = f.label ?? f.name;
+  if (f.required && (v === "" || v === false || v === undefined)) return { error: `${label} is required.` };
+  if (v === "" || v === undefined) return { value: undefined };
+  if (f.type === "number") {
+    // Decimal numbers only, with a comma accepted as the decimal point.
+    const text = String(v).replace(/\s/g, "");
+    if (!/^[-+]?(\d+([.,]\d*)?|[.,]\d+)$/.test(text)) return { error: `${label} must be a number.` };
+    return { value: Number(text.replace(",", ".")) };
+  }
+  if (f.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v))) return { error: `${label} must be an email address.` };
+  return { value: v };
 }
 
 /**
@@ -582,19 +671,9 @@ export function Form({
     if (!viewer.canWrite || !viewer.email) return;
     const out: Record<string, FormValue> = {};
     for (const f of fields) {
-      const raw = values[f.name];
-      const v = typeof raw === "string" ? raw.trim() : raw;
-      const label = f.label ?? f.name;
-      if (f.required && (v === "" || v === false || v === undefined)) return fail(f, `${label} is required.`);
-      if (v === "" || v === undefined) continue;
-      if (f.type === "number") {
-        // Decimal numbers only, with a comma accepted as the decimal point.
-        const text = String(v).replace(/\s/g, "");
-        if (!/^[-+]?(\d+([.,]\d*)?|[.,]\d+)$/.test(text)) return fail(f, `${label} must be a number.`);
-        out[f.name] = Number(text.replace(",", "."));
-      } else if (f.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v))) {
-        return fail(f, `${label} must be an email address.`);
-      } else out[f.name] = v;
+      const r = readField(f, values[f.name]);
+      if ("error" in r) return fail(f, r.error);
+      if (r.value !== undefined) out[f.name] = r.value;
     }
     const version = getBoot()?.version;
     map.set(viewer.email, { values: out, ...(version ? { version } : {}) });
@@ -602,61 +681,17 @@ export function Form({
   }
 
   function field(f: FormField) {
-    const fid = `form-${id}-${f.name}`;
-    const label = f.label ?? f.name;
-    const value = values[f.name] ?? emptyValue(f);
-    const invalid = error?.field === f.name;
-    const describedBy = [f.hint ? `${fid}-hint` : "", invalid ? errorId : ""].filter(Boolean).join(" ") || undefined;
-    const required = f.required ? <span className="text-muted-foreground">*</span> : null;
-    const control =
-      f.type === "checkbox" ? (
-        <Checkbox
-          id={fid}
-          checked={value === true}
-          onCheckedChange={(c) => set(f.name, c === true)}
-          label={<>{label}{required}</>}
-          aria-describedby={describedBy}
-          aria-invalid={invalid || undefined}
-        />
-      ) : f.type === "select" ? (
-        <Select options={f.options ?? []} value={typeof value === "string" && value ? value : null} onValueChange={(v) => set(f.name, String(v ?? ""))} placeholder={f.placeholder} aria-label={label} />
-      ) : f.type === "textarea" ? (
-        <Textarea id={fid} value={String(value)} onChange={(e) => set(f.name, e.target.value)} placeholder={f.placeholder} rows={3} aria-describedby={describedBy} aria-invalid={invalid || undefined} />
-      ) : (
-        <Input
-          id={fid}
-          type={f.type === "number" ? "text" : (f.type ?? "text")}
-          inputMode={f.type === "number" ? "decimal" : undefined}
-          value={String(value)}
-          onChange={(e) => set(f.name, e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing) submit(e);
-          }}
-          placeholder={f.placeholder}
-          aria-describedby={describedBy}
-          aria-invalid={invalid || undefined}
-        />
-      );
     return (
-      <div key={f.name} className="flex flex-col gap-1.5">
-        {f.type === "select" ? (
-          <span className="text-sm leading-none font-medium">
-            {label}
-            {required}
-          </span>
-        ) : f.type !== "checkbox" ? (
-          <Label htmlFor={fid}>
-            {label}
-            {required}
-          </Label>
-        ) : null}
-        {control}
-        {f.hint && (
-          <span id={`${fid}-hint`} className="text-[13px] text-muted-foreground">
-            {f.hint}
-          </span>
-        )}
-      </div>
+      <FieldControl
+        key={f.name}
+        field={f}
+        fid={`form-${id}-${f.name}`}
+        value={values[f.name] ?? emptyValue(f)}
+        onChange={(v) => set(f.name, v)}
+        onEnter={submit}
+        invalid={error?.field === f.name}
+        errorId={errorId}
+      />
     );
   }
 

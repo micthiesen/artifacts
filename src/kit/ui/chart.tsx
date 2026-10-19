@@ -13,7 +13,7 @@ export type ChartProps = {
   data: string | unknown[];
   /** Category / x-axis key (the slice name for pie). */
   x: string;
-  /** One or more numeric series keys: "users" or ["users", "teams"] or "users teams". */
+  /** One or more numeric series keys: "users", ["users", "teams"], "users teams" or "Daily median, Weekly median". */
   y: string | string[];
   height?: number;
   stacked?: boolean;
@@ -33,7 +33,8 @@ export function Chart(props: ChartProps) {
 
 function ChartInner({ type = "line", data, x, y, height = 280, stacked, legend, colors, title, className }: ChartProps) {
   const rows = useRows(data);
-  const ys = Array.isArray(y) ? y : y.split(/[\s,]+/).filter(Boolean);
+  // "users teams" is two series; a key that itself has spaces ("Daily median") is one; commas always separate.
+  const ys = Array.isArray(y) ? y : y.includes(",") ? y.split(",").map((k) => k.trim()).filter(Boolean) : rows.some((r) => y in r) ? [y] : y.split(/\s+/).filter(Boolean);
   return (
     <figure className={cn("my-6 rounded-xl border border-border bg-card px-4 pt-4 pb-3 shadow-card", className)}>
       {title && <figcaption className="mb-3 px-1 text-sm font-medium">{title}</figcaption>}

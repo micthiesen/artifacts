@@ -11,6 +11,7 @@ export { default as CircleCheck } from "lucide-react/dist/esm/icons/circle-check
 export { default as Info } from "lucide-react/dist/esm/icons/info.mjs";
 export { default as Minus } from "lucide-react/dist/esm/icons/minus.mjs";
 export { default as OctagonAlert } from "lucide-react/dist/esm/icons/octagon-alert.mjs";
+export { default as Pencil } from "lucide-react/dist/esm/icons/pencil.mjs";
 export { default as Plus } from "lucide-react/dist/esm/icons/plus.mjs";
 export { default as Search } from "lucide-react/dist/esm/icons/search.mjs";
 export { default as Send } from "lucide-react/dist/esm/icons/send.mjs";

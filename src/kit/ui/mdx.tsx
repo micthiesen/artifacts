@@ -7,6 +7,39 @@ import { cn } from "./utils.ts";
 
 type P<T extends keyof React.JSX.IntrinsicElements> = React.ComponentProps<T>;
 
+/**
+ * A markdown table. On phones, one with more than three columns reads as cards, like a Table: each cell is
+ * labelled with its column (set here from the header row) and the CSS lays rows out as label: value.
+ */
+function MarkdownTable({ className, ...p }: P<"table">) {
+  const ref = React.useRef<HTMLTableElement>(null);
+  const [cards, setCards] = React.useState(false);
+  // Before paint, so phones don't see the table flash first. Roles keep it a table to screen readers as cards.
+  React.useLayoutEffect(() => {
+    const table = ref.current;
+    if (!table) return;
+    const heads = [...table.querySelectorAll(":scope > thead th")].map((th) => th.textContent?.trim() ?? "");
+    const wide = heads.length > 3;
+    table.setAttribute("role", "table");
+    for (const tr of table.querySelectorAll(":scope > tbody > tr")) {
+      tr.setAttribute("role", "row");
+      [...tr.children].forEach((td, i) => {
+        td.setAttribute("role", "cell");
+        if (wide) td.setAttribute("data-label", heads[i] ?? "");
+        else td.removeAttribute("data-label");
+      });
+    }
+    setCards(wide);
+  }, [p.children]);
+  return (
+    <div className={cn("my-6 overflow-hidden rounded-xl border border-border bg-card shadow-card", cards && "md-cards")}>
+      <ScrollX>
+        <table ref={ref} className={cn("w-full border-collapse text-[14px] leading-snug", className)} {...p} />
+      </ScrollX>
+    </div>
+  );
+}
+
 export const markdownComponents = {
   // A long page lists its sections under the (first) title.
   h1: ({ className, ...p }: P<"h1">) => (
@@ -64,13 +97,7 @@ export const markdownComponents = {
       {...p}
     />
   ),
-  table: ({ className, ...p }: P<"table">) => (
-    <div className="my-6 overflow-hidden rounded-xl border border-border bg-card shadow-card">
-      <ScrollX>
-        <table className={cn("w-full border-collapse text-[14px] leading-snug", className)} {...p} />
-      </ScrollX>
-    </div>
-  ),
+  table: (p: P<"table">) => <MarkdownTable {...p} />,
   thead: ({ className, ...p }: P<"thead">) => <thead className={cn("border-b border-border bg-muted/50", className)} {...p} />,
   tbody: ({ className, ...p }: P<"tbody">) => <tbody className={className} {...p} />,
   tr: ({ className, ...p }: P<"tr">) => <tr className={cn("border-b border-border/70 last:border-0", className)} {...p} />,

@@ -130,3 +130,58 @@
     display: none !important;
   }
 }
+
+/* Markdown tables with more than three columns read as cards on phones (labels come from the header row). */
+@media (max-width: 639px) {
+  .md-cards {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
+  .md-cards table,
+  .md-cards tbody,
+  .md-cards tr,
+  .md-cards td {
+    display: block;
+    width: 100%;
+  }
+  .md-cards thead {
+    display: none;
+  }
+  .md-cards tr {
+    margin-bottom: 0.625rem;
+    border: 1px solid var(--border) !important;
+    border-radius: 0.75rem;
+    background: var(--card);
+    padding: 0.75rem 1rem;
+  }
+  /* Label in a left column, the cell's content (text, links, code, several of them) flowing beside it. */
+  .md-cards td {
+    position: relative;
+    min-width: 0 !important;
+    padding: 0.15rem 0 0.15rem 40% !important;
+    overflow-wrap: anywhere;
+  }
+  .md-cards td::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 0;
+    width: calc(40% - 0.75rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted-foreground);
+  }
+  .md-cards td:first-child {
+    margin-bottom: 0.35rem;
+    padding-left: 0 !important;
+    font-weight: 500;
+  }
+  .md-cards td:first-child::before {
+    content: none;
+  }
+  .md-cards td:empty {
+    display: none;
+  }
+}

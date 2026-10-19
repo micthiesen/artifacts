@@ -21,6 +21,16 @@ type BrowserRunBinding = {
 export type CheckEnv = { BROWSER?: BrowserRunBinding; SESSION_SECRET: string };
 
 export const SCREENSHOT_VIEWPORT = { width: 1024, height: 768 };
+/** A phone, for checks of how a page reads there. */
+export const PHONE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true };
+
+/** How to look at the page: the stored check is the default (desktop, first screen); the rest are on demand. */
+export type CheckView = { phone?: boolean; fullPage?: boolean; section?: string };
+export const isDefaultView = (v?: CheckView) => !v || (!v.phone && !v.fullPage && !v.section);
+export function describeView(v?: CheckView): string {
+  const size = v?.phone ? "390×844 (phone)" : "1024×768";
+  return v?.fullPage ? `the whole page at ${v.phone ? "phone width (390)" : "1024 wide"}` : v?.section ? `the screen at #${v.section}, ${size}` : `the first screen (${size})`;
+}
 
 /** One Browser Run call; the workspace queues checks when Browser Run rate-limits. */
 export async function renderCheck(
@@ -29,24 +39,28 @@ export async function renderCheck(
   id: string,
   version: number,
   workspace: string,
+  view?: CheckView,
 ): Promise<CheckOutcome | { rateLimited: true }> {
   if (!env.BROWSER) return { check: { status: "skipped", reason: "no browser binding" } };
   const token = await signToken(env.SESSION_SECRET, "frame", 120, { id, w: workspace, c: true });
-  const url = `${origin}/frame/${id}?v=${version}&check=1&t=${encodeURIComponent(token)}`;
+  // A query parameter, not a #fragment: Browser Run doesn't keep fragments.
+  const section = view?.section ? `&section=${encodeURIComponent(view.section)}` : "";
+  const url = `${origin}/frame/${id}?v=${version}&check=1&t=${encodeURIComponent(token)}${section}`;
   const started = Date.now();
   let res: Response;
   try {
     res = await env.BROWSER.quickAction("snapshot", {
       url,
       formats: ["content", "screenshot"],
-      screenshotOptions: { type: "jpeg", quality: 60 },
+      // Whole pages can be very tall: lower quality keeps the image a sensible size (Chrome caps the height).
+      screenshotOptions: { type: "jpeg", quality: view?.fullPage ? 45 : 60, ...(view?.fullPage ? { fullPage: true } : {}) },
       waitForSelector: { selector: "#art-check", timeout: 15000 },
       // Browser Run doesn't reliably honour waitForSelector, and the result
       // element appears ~600 ms after first render, so also wait for the network
       // to settle and then a fixed delay.
       gotoOptions: { waitUntil: "networkidle0", timeout: 20000 },
       waitForTimeout: 1500,
-      viewport: SCREENSHOT_VIEWPORT,
+      viewport: view?.phone ? PHONE_VIEWPORT : SCREENSHOT_VIEWPORT,
       cacheTTL: 0,
     });
   } catch (err) {

@@ -5,7 +5,8 @@ import * as React from "react";
 import { useSyncExternalStore } from "react";
 import * as store from "../store.ts";
 import { useSharedMap, useViewer } from "../hooks.ts";
-import { cn, displayName, slugify } from "./utils.ts";
+import { cn, displayName, humanize, slugify } from "./utils.ts";
+import { formatValue, useRows } from "./table.tsx";
 
 /** A page with at least this many sections gets a contents list under its title. */
 const CONTENTS_MIN_SECTIONS = 4;
@@ -146,5 +147,65 @@ export function LinkedFrom() {
         ))}
       </ul>
     </footer>
+  );
+}
+
+type SourceRecord = Record<string, unknown>;
+const RECORD_TITLE = ["title", "name", "sourceTitle", "label"];
+const RECORD_URL = ["url", "sourceUrl", "href", "link"];
+
+/**
+ * Records kept with a page for reference (say, what a page was imported from), closed until opened, so they
+ * cost the reader nothing: each record's title and link, then its fields. Nothing renders until it's opened.
+ */
+export function SourceRecords({ data, title = "Source records", className }: { data: string | unknown[]; title?: React.ReactNode; className?: string }) {
+  const rows = useRows(data) as SourceRecord[];
+  const [open, setOpen] = React.useState(false);
+  if (!rows.length) return null;
+  const pick = (r: SourceRecord, keys: string[]) => keys.map((k) => r[k]).find((v) => typeof v === "string" && v) as string | undefined;
+  return (
+    <details className={cn("art-sources my-8 rounded-xl border border-border bg-card/60 text-[14px]", className)} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="cursor-pointer list-none px-4 py-3 font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
+        {title} · {rows.length}
+      </summary>
+      {open && (
+        <ul className="divide-y divide-border/70 border-t border-border">
+          {rows.map((r, i) => {
+            const name = pick(r, RECORD_TITLE) ?? `Record ${i + 1}`;
+            const url = pick(r, RECORD_URL);
+            const rest = Object.entries(r).filter(([k, v]) => !RECORD_TITLE.includes(k) && !RECORD_URL.includes(k) && v !== null && v !== undefined && v !== "");
+            return (
+              <li key={i} className="px-4 py-3">
+                <div className="font-medium">
+                  {url ? (
+                    <a href={url} target="_blank" rel="noopener noreferrer" className="text-primary underline decoration-primary/30 underline-offset-2">
+                      {name}
+                    </a>
+                  ) : (
+                    name
+                  )}
+                </div>
+                {rest.length > 0 && (
+                  <dl className="mt-1.5 grid grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] gap-x-3 gap-y-1 text-[13px]">
+                    {rest.map(([k, v]) => (
+                      <React.Fragment key={k}>
+                        <dt className="truncate text-muted-foreground">{humanize(k)}</dt>
+                        <dd className="min-w-0 break-words">
+                          {v !== null && typeof v === "object" && !Array.isArray(v) ? (
+                            <pre className="overflow-x-auto font-mono text-[12px] whitespace-pre-wrap">{JSON.stringify(v, null, 2)}</pre>
+                          ) : (
+                            formatValue(v, typeof v === "string" && /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/.test(v) ? "date" : "text", r)
+                          )}
+                        </dd>
+                      </React.Fragment>
+                    ))}
+                  </dl>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </details>
   );
 }

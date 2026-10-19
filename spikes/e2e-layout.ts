@@ -27,6 +27,8 @@ const pages: [string, string, string | undefined][] = [
   ["report", `${apex}/report?url=${encodeURIComponent(`${origin}/a/${id}`)}`, undefined],
   ["your workspaces", `${apex}/workspaces`, ownerApex],
   ["account", `${apex}/me`, ownerApex],
+  ["help & feedback", `${apex}/support`, ownerApex],
+  ["inbox", `${apex}/inbox`, ownerApex],
   ["artifact list", `${origin}/`, ownerHere],
   ["archived list", `${origin}/archived`, ownerHere],
   ["workspace settings", `${origin}/settings`, ownerHere],

@@ -26,6 +26,11 @@ API with `OPERATOR_TOKEN`.
   `bun scripts/spend-alert.ts`, or in the dashboard under Notifications)
   emails when the month's spend passes $20, catching a cost surprise early.
 
+## Support
+
+Requests from people and their agents, product errors and the operator's
+assistant's workflow are described in [SUPPORT.md](SUPPORT.md).
+
 ## Payments aren't moving workspaces
 
 1. Recent events, filtered to Billing: look for `billing apply failed`,

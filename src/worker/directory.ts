@@ -62,6 +62,48 @@ export type ChannelRow = { id: string; type: ChannelType; config: Record<string,
 
 export class DirectoryError extends Error {}
 
+export type SupportCase = {
+  n: number;
+  artifactId: string;
+  notesId: string | null;
+  reporter: string;
+  viaAgent: boolean;
+  workspace: string | null;
+  kind: string;
+  title: string;
+  status: string;
+  errorGroup: string | null;
+  duplicateOf: number | null;
+  fix: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+  reopened: number;
+};
+export type ErrorGroup = { fp: string; kind: string; place: string; message: string; count: number; firstAt: string; lastAt: string; versions: string[]; browsers: string[]; cases: number[] };
+export type InboxItem = { id: number; at: string; kind: string; title: string; body: string | null; url: string | null; read: boolean };
+
+function toCase(r: Record<string, SqlStorageValue>): SupportCase {
+  return {
+    n: r.n as number,
+    artifactId: r.artifact_id as string,
+    notesId: (r.notes_id as string | null) ?? null,
+    reporter: r.reporter as string,
+    viaAgent: Boolean(r.via_agent),
+    workspace: (r.workspace as string | null) ?? null,
+    kind: r.kind as string,
+    title: r.title as string,
+    status: r.status as string,
+    errorGroup: (r.error_group as string | null) ?? null,
+    duplicateOf: (r.duplicate_of as number | null) ?? null,
+    fix: r.fix ? (JSON.parse(r.fix as string) as Record<string, unknown>) : null,
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+    resolvedAt: (r.resolved_at as string | null) ?? null,
+    reopened: r.reopened as number,
+  };
+}
+
 // Typed view of the RPC stub (see HubApi in hub.ts for why).
 type AsyncMethods<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never;
@@ -69,7 +111,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "billing" | "applyBilling" | "billingPlan" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "inbox" | "unreadCount" | "markInboxRead" | "billing" | "applyBilling" | "billingPlan" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -94,6 +136,15 @@ export function validSlug(slug: string): boolean {
 
 /** Self-serve workspaces: how many one person may make, and how many everyone may make a day. */
 const SELF_SERVE_PER_PERSON = 1;
+/** Workspaces the service itself uses; nobody can make them through self-serve. */
+export const SYSTEM_SLUGS = new Set(["support"]);
+/** Support cases one person may open a day, and everyone together. */
+const CASES_PER_PERSON_DAY = 5;
+const CASES_PER_DAY = 200;
+/** Inbox items kept per person. */
+const INBOX_KEEP = 200;
+/** Error groups kept. */
+const ERROR_GROUPS_KEEP = 500;
 /** Ops events kept for the operator console. */
 const OPS_KEEP = 500;
 /** Deleting one and making another is fine now and then, not on a loop. */
@@ -206,6 +257,29 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX ops_events_by_slug ON ops_events (slug, id);
       CREATE TABLE ops_alerts (key TEXT PRIMARY KEY, at INTEGER NOT NULL, repeats INTEGER NOT NULL DEFAULT 0);
     `),
+  // Support: one row per case (its page lives in the support workspace), grouped product errors, each person's
+  // inbox (the Notification Centre), and announcements already sent (so approving one twice sends it once).
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE support_cases (
+        n INTEGER PRIMARY KEY AUTOINCREMENT, artifact_id TEXT NOT NULL, notes_id TEXT, reporter TEXT NOT NULL, via_agent INTEGER NOT NULL DEFAULT 0,
+        workspace TEXT, kind TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, error_group TEXT, duplicate_of INTEGER, fix TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT, reopened INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX support_by_reporter ON support_cases (reporter, n);
+      CREATE INDEX support_by_status ON support_cases (status, n);
+      CREATE TABLE error_groups (
+        fp TEXT PRIMARY KEY, kind TEXT NOT NULL, place TEXT NOT NULL, message TEXT NOT NULL, count INTEGER NOT NULL,
+        first_at TEXT NOT NULL, last_at TEXT NOT NULL, versions TEXT NOT NULL, browsers TEXT NOT NULL);
+      CREATE INDEX error_groups_by_last ON error_groups (last_at);
+      CREATE TABLE inbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, at TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+        body TEXT, url TEXT, read_at TEXT, dedupe TEXT);
+      CREATE INDEX inbox_by_email ON inbox (email, id);
+      CREATE UNIQUE INDEX inbox_dedupe ON inbox (email, dedupe);
+      CREATE TABLE support_drafts (
+        id TEXT PRIMARY KEY, n INTEGER NOT NULL, message TEXT NOT NULL, cases TEXT NOT NULL, created_at TEXT NOT NULL,
+        approved_by TEXT, approved_at TEXT, sent_at TEXT);
+    `),
 ];
 
 export class Directory extends DurableObject {
@@ -265,6 +339,7 @@ export class Directory extends DurableObject {
 
   async createOwnWorkspace(email: string, slug: string, name: string, terms: string, contact = ""): Promise<WorkspaceRecord> {
     const person = personKey(email);
+    if (SYSTEM_SLUGS.has(slug)) throw new DirectoryError(`"${slug}" is taken; pick another address`);
     if (this.selfServeFullToday()) throw new DirectoryError("We can't make more workspaces today. Try again tomorrow.");
     if (!this.canMakeWorkspace(email)) {
       throw new DirectoryError(`You already made a workspace. Add people to it from its settings${contact ? `, or email ${contact} for another` : ""}.`);
@@ -423,6 +498,260 @@ export class Directory extends DurableObject {
     return { alert };
   }
 
+  // ---- support ---------------------------------------------------------------------
+
+  /** Room for one more case from this person today (and from everyone). */
+  allowCase(reporter: string): boolean {
+    const day = new Date(Date.now() - 86_400_000).toISOString();
+    const mine = this.sql.exec(`SELECT COUNT(*) AS n FROM support_cases WHERE reporter = ? AND created_at > ?`, reporter, day).one().n as number;
+    const all = this.sql.exec(`SELECT COUNT(*) AS n FROM support_cases WHERE created_at > ?`, day).one().n as number;
+    return mine < CASES_PER_PERSON_DAY && all < CASES_PER_DAY;
+  }
+
+  addCase(c: { artifactId: string; notesId: string | null; reporter: string; viaAgent: boolean; workspace: string | null; kind: string; title: string; errorGroup: string | null }): number {
+    const now = new Date().toISOString();
+    const n = this.sql
+      .exec(
+        `INSERT INTO support_cases (artifact_id, notes_id, reporter, via_agent, workspace, kind, title, status, error_group, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?) RETURNING n`,
+        c.artifactId,
+        c.notesId,
+        c.reporter,
+        c.viaAgent ? 1 : 0,
+        c.workspace,
+        c.kind,
+        c.title,
+        c.errorGroup,
+        now,
+        now,
+      )
+      .one().n as number;
+    this.markDirty();
+    return n;
+  }
+
+  /** Change a case's status or links; returns it as it is now. Moving back from resolved counts as reopened. */
+  updateCase(n: number, patch: { status?: string; duplicateOf?: number | null; fix?: Record<string, unknown> | null; errorGroup?: string | null; title?: string; notesId?: string }): SupportCase | null {
+    const before = this.supportCase(n);
+    if (!before) return null;
+    const now = new Date().toISOString();
+    const closed = (s: string) => ["resolved", "wont_fix", "duplicate"].includes(s);
+    const status = patch.status ?? before.status;
+    this.sql.exec(
+      `UPDATE support_cases SET status = ?, duplicate_of = ?, fix = ?, error_group = ?, title = ?, notes_id = ?, updated_at = ?,
+         resolved_at = ?, reopened = reopened + ? WHERE n = ?`,
+      status,
+      patch.duplicateOf === undefined ? before.duplicateOf : patch.duplicateOf,
+      patch.fix === undefined ? (before.fix ? JSON.stringify(before.fix) : null) : patch.fix ? JSON.stringify(patch.fix) : null,
+      patch.errorGroup === undefined ? before.errorGroup : patch.errorGroup,
+      patch.title ?? before.title,
+      patch.notesId ?? before.notesId,
+      now,
+      closed(status) ? (before.resolvedAt ?? now) : null,
+      closed(before.status) && !closed(status) ? 1 : 0,
+      n,
+    );
+    this.markDirty();
+    return this.supportCase(n);
+  }
+
+  supportCase(n: number): SupportCase | null {
+    const r = this.sql.exec(`SELECT * FROM support_cases WHERE n = ?`, n).toArray()[0];
+    return r ? toCase(r) : null;
+  }
+
+  supportCaseByArtifact(artifactId: string): SupportCase | null {
+    const r = this.sql.exec(`SELECT * FROM support_cases WHERE artifact_id = ?`, artifactId).toArray()[0];
+    return r ? toCase(r) : null;
+  }
+
+  /** Cases, newest first: one person's, or (operator) by status, error group or duplicates of a case. */
+  supportCases(filter: { reporter?: string; status?: string; errorGroup?: string; duplicateOf?: number; limit?: number } = {}): SupportCase[] {
+    const where: string[] = [];
+    const args: SqlStorageValue[] = [];
+    if (filter.reporter) (where.push("reporter = ?"), args.push(filter.reporter));
+    if (filter.status) (where.push("status = ?"), args.push(filter.status));
+    if (filter.errorGroup) (where.push("error_group = ?"), args.push(filter.errorGroup));
+    if (filter.duplicateOf !== undefined) (where.push("duplicate_of = ?"), args.push(filter.duplicateOf));
+    return this.sql
+      .exec(`SELECT * FROM support_cases ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY n DESC LIMIT ?`, ...args, Math.min(filter.limit ?? 50, 200))
+      .toArray()
+      .map(toCase);
+  }
+
+  /** What the support loop has been doing: open work, what keeps coming up, how long fixes take, and what came back. */
+  supportStats(days = 90) {
+    const since = new Date(Date.now() - days * 86_400_000).toISOString();
+    const rows = this.sql.exec(`SELECT * FROM support_cases WHERE created_at > ?`, since).toArray().map(toCase);
+    const byStatus: Record<string, number> = {};
+    const byKind: Record<string, number> = {};
+    for (const c of rows) {
+      byStatus[c.status] = (byStatus[c.status] ?? 0) + 1;
+      byKind[c.kind] = (byKind[c.kind] ?? 0) + 1;
+    }
+    const hours = rows
+      .filter((c) => c.resolvedAt && c.status === "resolved")
+      .map((c) => (Date.parse(c.resolvedAt!) - Date.parse(c.createdAt)) / 3_600_000)
+      .sort((a, b) => a - b);
+    const mid = Math.floor(hours.length / 2);
+    const median = hours.length ? Math.round((hours.length % 2 ? hours[mid] : (hours[mid - 1] + hours[mid]) / 2) * 10) / 10 : null;
+    const duplicates = new Map<number, number>();
+    for (const c of rows) if (c.duplicateOf) duplicates.set(c.duplicateOf, (duplicates.get(c.duplicateOf) ?? 0) + 1);
+    const mostDuplicated = [...duplicates.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([n, count]) => ({ case: n, title: this.supportCase(n)?.title ?? "", kind: this.supportCase(n)?.kind ?? "", duplicates: count }));
+    return {
+      days,
+      cases: rows.length,
+      byStatus,
+      byKind,
+      medianHoursToResolve: median,
+      reopened: rows.filter((c) => c.reopened > 0).map((c) => ({ case: c.n, title: c.title, reopened: c.reopened })),
+      mostDuplicated,
+      topErrors: this.errorGroups({ limit: 10 }),
+    };
+  }
+
+  /** An announcement waiting for the operator's approval: the message, and every case it goes to. */
+  addDraft(d: { id: string; n: number; message: string; cases: number[] }) {
+    this.sql.exec(`INSERT INTO support_drafts (id, n, message, cases, created_at) VALUES (?, ?, ?, ?, ?)`, d.id, d.n, d.message, JSON.stringify(d.cases), new Date().toISOString());
+  }
+
+  draft(id: string): { id: string; n: number; message: string; cases: number[]; approvedBy: string | null; sentAt: string | null } | null {
+    const r = this.sql.exec(`SELECT * FROM support_drafts WHERE id = ?`, id).toArray()[0];
+    return r
+      ? { id, n: r.n as number, message: r.message as string, cases: JSON.parse(r.cases as string) as number[], approvedBy: (r.approved_by as string | null) ?? null, sentAt: (r.sent_at as string | null) ?? null }
+      : null;
+  }
+
+  /** Approve a draft and claim its sending: true only the first time, so approving twice sends once. */
+  approveDraft(id: string, by: string): boolean {
+    const now = new Date().toISOString();
+    // A draft left a fortnight is stale: draft it again.
+    const fresh = new Date(Date.now() - 14 * 86_400_000).toISOString();
+    return this.sql.exec(`UPDATE support_drafts SET approved_by = ?, approved_at = ?, sent_at = ? WHERE id = ? AND sent_at IS NULL AND created_at > ?`, by, now, now, id, fresh).rowsWritten > 0;
+  }
+
+  /** Point a case at its pages, once they exist. */
+  attachCase(n: number, artifactId: string, notesId: string | null) {
+    this.sql.exec(`UPDATE support_cases SET artifact_id = ?, notes_id = ? WHERE n = ?`, artifactId, notesId, n);
+    this.markDirty();
+  }
+
+  /** A case whose pages couldn't be made: forget it, so it doesn't count or show. */
+  dropCase(n: number) {
+    this.sql.exec(`DELETE FROM support_cases WHERE n = ?`, n);
+  }
+
+  // ---- error groups ------------------------------------------------------------------
+
+  /** One more occurrence of a product error: counted under its fingerprint, with the versions and browsers it's seen on. */
+  recordErrorGroup(e: { fp: string; kind: string; place: string; message: string; version: string; browser: string }): { fp: string; count: number; first: boolean } {
+    const now = new Date().toISOString();
+    const row = this.sql.exec(`SELECT count, versions, browsers FROM error_groups WHERE fp = ?`, e.fp).toArray()[0];
+    const add = (json: string | undefined, v: string) => {
+      const list = json ? (JSON.parse(json) as string[]) : [];
+      return JSON.stringify(list.includes(v) ? list : [...list, v].slice(-10));
+    };
+    if (row) {
+      this.sql.exec(
+        `UPDATE error_groups SET count = count + 1, last_at = ?, versions = ?, browsers = ? WHERE fp = ?`,
+        now,
+        add(row.versions as string, e.version),
+        add(row.browsers as string, e.browser),
+        e.fp,
+      );
+      return { fp: e.fp, count: (row.count as number) + 1, first: false };
+    }
+    this.sql.exec(
+      `INSERT INTO error_groups (fp, kind, place, message, count, first_at, last_at, versions, browsers) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+      e.fp,
+      e.kind,
+      e.place.slice(0, 200),
+      e.message.slice(0, 500),
+      now,
+      now,
+      JSON.stringify([e.version]),
+      JSON.stringify([e.browser]),
+    );
+    this.sql.exec(`DELETE FROM error_groups WHERE fp IN (SELECT fp FROM error_groups ORDER BY last_at DESC LIMIT -1 OFFSET ?)`, ERROR_GROUPS_KEEP);
+    return { fp: e.fp, count: 1, first: true };
+  }
+
+  errorGroups(filter: { fp?: string; limit?: number; since?: string } = {}): ErrorGroup[] {
+    const rows = filter.fp
+      ? this.sql.exec(`SELECT * FROM error_groups WHERE fp = ?`, filter.fp).toArray()
+      : this.sql.exec(`SELECT * FROM error_groups WHERE last_at > ? ORDER BY count DESC, last_at DESC LIMIT ?`, filter.since ?? "", Math.min(filter.limit ?? 50, 200)).toArray();
+    return rows.map((r) => ({
+      fp: r.fp as string,
+      kind: r.kind as string,
+      place: r.place as string,
+      message: r.message as string,
+      count: r.count as number,
+      firstAt: r.first_at as string,
+      lastAt: r.last_at as string,
+      versions: JSON.parse(r.versions as string) as string[],
+      browsers: JSON.parse(r.browsers as string) as string[],
+      cases: this.sql.exec(`SELECT n FROM support_cases WHERE error_group = ?`, r.fp).toArray().map((c) => c.n as number),
+    }));
+  }
+
+  // ---- inbox (the Notification Centre) ----------------------------------------------
+
+  /** Something that needs this person: kept (the latest INBOX_KEEP) until they've seen it; `dedupe` makes it once only. */
+  addInbox(email: string, item: { kind: string; title: string; body?: string; url?: string; dedupe?: string }): boolean {
+    const added = this.sql
+      .exec(
+        `INSERT INTO inbox (email, at, kind, title, body, url, dedupe) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (email, dedupe) DO NOTHING RETURNING id`,
+        email,
+        new Date().toISOString(),
+        item.kind,
+        item.title.slice(0, 200),
+        item.body ? item.body.slice(0, 500) : null,
+        item.url ?? null,
+        item.dedupe ?? null,
+      )
+      .toArray().length > 0;
+    // This person's latest INBOX_KEEP (ids are shared by everyone, so count theirs).
+    if (added) this.sql.exec(`DELETE FROM inbox WHERE email = ? AND id <= (SELECT id FROM inbox WHERE email = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, email, email, INBOX_KEEP);
+    return added;
+  }
+
+  /** Several at once (a workspace's notification run). */
+  addInboxMany(items: { email: string; kind: string; title: string; body?: string; url?: string; dedupe?: string }[]) {
+    for (const { email, ...item } of items.slice(0, 500)) this.addInbox(email, item);
+  }
+
+  inbox(email: string, limit = 50): { items: InboxItem[]; unread: number } {
+    const items = this.sql
+      .exec(`SELECT * FROM inbox WHERE email = ? ORDER BY id DESC LIMIT ?`, email, Math.min(limit, INBOX_KEEP))
+      .toArray()
+      .map((r) => ({
+        id: r.id as number,
+        at: r.at as string,
+        kind: r.kind as string,
+        title: r.title as string,
+        body: (r.body as string | null) ?? null,
+        url: (r.url as string | null) ?? null,
+        read: r.read_at !== null,
+      }));
+    return { items, unread: this.unreadCount(email) };
+  }
+
+  unreadCount(email: string): number {
+    return this.sql.exec(`SELECT COUNT(*) AS n FROM inbox WHERE email = ? AND read_at IS NULL`, email).one().n as number;
+  }
+
+  /** Mark items (or, without ids, everything) read. */
+  markInboxRead(email: string, ids?: number[]): number {
+    const now = new Date().toISOString();
+    if (!ids) return this.sql.exec(`UPDATE inbox SET read_at = ? WHERE email = ? AND read_at IS NULL`, now, email).rowsWritten;
+    let n = 0;
+    for (const id of ids.slice(0, 200)) n += this.sql.exec(`UPDATE inbox SET read_at = ? WHERE email = ? AND id = ? AND read_at IS NULL`, now, email, id).rowsWritten;
+    return n;
+  }
+
   /** Every workspace's subscription, for the operator console in one call. */
   billingAll(): Record<string, { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null }> {
     const out: Record<string, { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null }> = {};
@@ -457,9 +786,9 @@ export class Directory extends DurableObject {
   }
 
   /** Room for one more abuse report from this network: a few an hour, and a cap for everyone. */
-  allowReport(ip: string): boolean {
+  allowReport(ip: string, scope = "report"): boolean {
     // An IPv6 network hands out a /64, so count the network, not the address.
-    const network = ip.includes(":") ? ip.split(":").slice(0, 4).join(":") : ip;
+    const network = `${scope}|${ip.includes(":") ? ip.split(":").slice(0, 4).join(":") : ip}`;
     this.sql.exec(`DELETE FROM reports WHERE at < ?`, Date.now() - 3_600_000);
     if ((this.sql.exec(`SELECT COUNT(*) AS n FROM reports WHERE ip = ?`, network).one().n as number) >= 5) return false;
     this.sql.exec(`INSERT INTO reports (ip, at) VALUES (?, ?)`, network, Date.now());
@@ -472,7 +801,7 @@ export class Directory extends DurableObject {
    */
   forgetPerson(email: string) {
     this.ctx.storage.transactionSync(() => {
-      for (const table of ["users", "channels", "login_codes", "login_sends", "login_fails", "visits", "channel_tests", "passkeys", "memberships"]) {
+      for (const table of ["users", "channels", "login_codes", "login_sends", "login_fails", "visits", "channel_tests", "passkeys", "memberships", "inbox"]) {
         this.sql.exec(`DELETE FROM ${table} WHERE email = ?`, email);
       }
     });

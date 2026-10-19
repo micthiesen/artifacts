@@ -14,6 +14,8 @@ import demoLinks from "../../demo/links.json";
 const KIT = "/kit/v1";
 declare const __ASSET_VERSION__: string;
 const ASSET_VERSION = typeof __ASSET_VERSION__ === "string" ? __ASSET_VERSION__ : "dev";
+/** This deployment's build, as support cases and error reports record it. */
+export const APP_VERSION = ASSET_VERSION;
 const kit = (file: string, version = ASSET_VERSION) => `${KIT}/${file}?v=${version}`;
 const asset = (path: string) => `${path}?v=${ASSET_VERSION}`;
 
@@ -480,7 +482,7 @@ export function workspacesPage(
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
   return page(
     `Your workspaces · ${PRODUCT}`,
-    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${notice ? `<p class="notice ok" role="status">${escapeHtml(notice)}</p>` : ""}${body}${create ? createForm(create) : ""}${admin}</main>${POLICY_FOOTER}`,
+    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${notice ? `<p class="notice ok" role="status">${/ in your inbox\.$/.test(notice) ? `<a href="/inbox">${escapeHtml(notice)}</a>` : escapeHtml(notice)}</p>` : ""}${body}${create ? createForm(create) : ""}${admin}</main>${POLICY_FOOTER}`,
   );
 }
 
@@ -644,6 +646,9 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
 <li><strong>Render checks</strong>: after each change a headless browser renders the artifact; we keep the result, a screenshot and any errors. Viewers' browsers also report runtime errors (the latest 30 per artifact).</li>
 <li><strong>Sign-in records</strong>: when codes were sent and checked, with your IP address or network, to limit abuse. Kept for an hour.</li>
+<li><strong>Your inbox</strong>: a copy of each notification for you (what happened, on which artifact, and the start of any comment), your latest 200, until you delete your account.</li>
+<li><strong>Support requests</strong>: what you send us from Help &amp; feedback (or your agent sends for you), and what you chose to include with it (the page you came from, your browser and an error code), kept as a page in our support workspace that only you and we can open, with our replies. We never include what's in your artifacts. You can ask us to delete a request.</li>
+<li><strong>Errors</strong>: when something fails on our side or in our own pages, we keep where (with ids removed), a message with addresses and links taken out, the version and your browser family, counted together with the same errors. Errors inside artifacts go to their owners, not to us.</li>
 <li><strong>Reports</strong>: if you report an artifact, what you wrote and, if you give it, your email go to us by email and into our operations log; your network address is kept for an hour to limit repeat reports. The workspace isn't told who reported it.</li>
 <li><strong>Request logs</strong>: Cloudflare keeps logs of requests to this service for debugging, for a limited period.</li>
 </ul>
@@ -769,7 +774,7 @@ export function helpPage(brand: Brand, contact: string): Response {
 <li><strong>Leaving or deleting.</strong> Leave a workspace from its Notifications page (your avatar menu inside the workspace); delete your account from <a href="/me">your account</a>. Admins can download everything from workspace settings first.</li>
 </ul>
 <h2>Contact us</h2>
-<p>Email ${mail}. We usually answer within a day.</p>
+<p>Send a problem, idea or question from <a href="/support">Help &amp; feedback</a> (your agent can too, with its support_report tool), and follow it there. Or email ${mail}. We usually answer within a day.</p>
 <h2>Report something</h2>
 <p>If a page made with ${PRODUCT} is phishing, malware or abusive, <a href="/report">report it</a>.</p>
 </main>${POLICY_FOOTER}`,
@@ -792,6 +797,86 @@ export function messagePage(title: string, message: string, status: number, acti
     title,
     `${topBar(b)}<main class="content"><section class="empty"><h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p><p><a class="button" href="${escapeHtml(act.href)}">${escapeHtml(act.label)}</a></p></section></main>`,
     { status },
+  );
+}
+
+/**
+ * Help & feedback: send a problem, idea or question about artifacts.boo itself, and see the requests you've
+ * sent and where each stands. Signed out, it says how to reach us instead.
+ */
+export function supportPage(
+  brand: Brand,
+  viewer: { email: string; operator: boolean } | null,
+  s: { requests: { n: number; title: string; status: string; url: string; updatedAt: string }[]; kind?: string; title?: string; details?: string; page?: string; error?: string; problem?: string; contact: string },
+  status = 200,
+): Response {
+  const mail = s.contact ? `<a href="mailto:${escapeHtml(s.contact)}">${escapeHtml(s.contact)}</a>` : "us";
+  const label: Record<string, string> = {
+    new: "Received", triaged: "Looking into it", investigating: "Looking into it", needs_info: "Waiting for you", fix_proposed: "Fix in progress",
+    fix_deployed: "Fix released", resolved: "Resolved", wont_fix: "Closed", duplicate: "With another report",
+  };
+  const kinds: [string, string][] = [["bug", "Something's wrong"], ["feature", "An idea"], ["question", "A question"]];
+  const right = viewer ? `${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}` : `<a class="button small secondary" href="/login?return=/support">Sign in</a>`;
+  const form = viewer
+    ? `<section class="card-section create-workspace"><h2>Tell us</h2>
+<p class="muted">About artifacts.boo itself. For something in an artifact, comment on it instead, so its owner sees it.</p>
+${s.problem ? `<p class="notice error" role="alert">${escapeHtml(s.problem)}</p>` : ""}
+<form method="post" action="/support" class="create-form">
+<fieldset class="kind-row"><legend>What is it?</legend>${kinds.map(([k, l]) => `<label class="check"><input type="radio" name="kind" value="${k}"${(s.kind ?? "bug") === k ? " checked" : ""}> <span>${l}</span></label>`).join("")}</fieldset>
+<label class="field"><span>Title</span><input class="input" name="title" required maxlength="120" value="${escapeHtml(s.title ?? "")}" placeholder="One line"></label>
+<label class="field"><span>Details</span><textarea class="input" name="details" required rows="6" maxlength="5000" placeholder="What happened, and what you expected (or what you'd like)">${escapeHtml(s.details ?? "")}</textarea></label>
+${s.page ? `<label class="check"><input type="checkbox" name="page" value="${escapeHtml(s.page)}" checked> <span>Include the page I came from (${escapeHtml(s.page)}) and my browser</span></label>` : `<label class="check"><input type="checkbox" name="browser" value="1" checked> <span>Include my browser</span></label>`}
+${s.error ? `<input type="hidden" name="error" value="${escapeHtml(s.error)}"><p class="muted small">The error code ${escapeHtml(s.error)} goes with it.</p>` : ""}
+<p class="muted small">We never include what's in your artifacts. Replies come to the request's own page, and we'll let you know.</p>
+<button class="button" type="submit">Send</button>
+</form></section>`
+    : `<section class="card-section"><h2>Tell us</h2><p class="muted"><a href="/login?return=/support">Sign in</a> to send a request and follow it here, or email ${mail}.</p></section>`;
+  const list = viewer
+    ? `<section class="card-section"><h2>Your requests</h2>${
+        s.requests.length
+          ? `<ul class="channels">${s.requests
+              .map(
+                (r) =>
+                  `<li><a class="channel-label" href="${escapeHtml(r.url)}">#${r.n} ${escapeHtml(r.title)}</a><span class="chip${r.status === "needs_info" ? " caution" : ["resolved", "fix_deployed"].includes(r.status) ? " positive" : ""}">${escapeHtml(label[r.status] ?? r.status)}</span></li>`,
+              )
+              .join("")}</ul>`
+          : `<p class="muted">None yet.</p>`
+      }</section>`
+    : "";
+  return page(
+    `Help & feedback · ${PRODUCT}`,
+    `${topBar(brand, right)}<main class="content"><h1 class="page-title">Help &amp; feedback</h1><p class="muted page-lede">Something not working, an idea, or a question: it comes straight to us. Guides are on the <a href="/help">help page</a>.</p>${form}${list}</main>${POLICY_FOOTER}`,
+    { status },
+  );
+}
+
+/** Your inbox: what needs you across workspaces, newest first. The operator approves announcements here. */
+export function inboxPage(
+  brand: Brand,
+  viewer: { email: string; operator: boolean },
+  items: { id: number; at: string; kind: string; title: string; body: string | null; url: string | null; read: boolean; sent?: boolean }[],
+  notice?: string,
+): Response {
+  const draftOf = (url: string | null) => (url && /#(d[0-9a-f]{16})$/.exec(url)?.[1]) || null;
+  const rows = items
+    .map((i) => {
+      const draft = i.kind === "approve-announcement" ? draftOf(i.url) : null;
+      const open = i.url && !draft ? `<a href="${escapeHtml(i.url)}">${escapeHtml(i.title)}</a>` : escapeHtml(i.title);
+      const approve = !draft
+        ? ""
+        : i.sent
+          ? `<p class="muted small inline-form">Sent.</p>`
+          : `<form method="post" action="/inbox" class="inline-form"><input type="hidden" name="approve" value="${draft}"><button class="button small" type="submit">Approve and send</button></form>`;
+      return `<li id="${draft ?? `i${i.id}`}" class="inbox-item${i.read ? "" : " unread"}"><div class="inbox-title">${open}</div>${i.body ? `<div class="muted small inbox-body">${escapeHtml(i.body)}</div>` : ""}<div class="muted small">${relativeTime(i.at)}</div>${approve}</li>`;
+    })
+    .join("");
+  return page(
+    `Inbox · ${PRODUCT}`,
+    `${topBar(brand, `${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}`)}<main class="content"><h1 class="page-title">Inbox</h1>${
+      notice ? `<p class="notice ok" role="status">${escapeHtml(notice)}</p>` : ""
+    }<p class="muted page-lede">What needs you, from every workspace: replies, mentions, approvals and your requests to us. Where notifications also go is set in <a href="/me">your account</a>.</p>${
+      rows ? `<ul class="inbox">${rows}</ul>` : `<p class="muted">Nothing yet.</p>`
+    }</main>${POLICY_FOOTER}`,
   );
 }
 

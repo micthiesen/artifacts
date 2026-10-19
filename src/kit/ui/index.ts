@@ -7,6 +7,9 @@ import { Callout, Grid, Link, Page, Section, Stack, Stat, Stats, Step, Steps, Su
 import { markdownComponents } from "./mdx.tsx";
 import * as primitives from "./primitives.tsx";
 import { Table } from "./table.tsx";
+import { Ledger } from "./ledger.tsx";
+import { SourceRecords } from "./page-extras.tsx";
+import { SupportCase } from "./support.tsx";
 
 export * from "./primitives.tsx";
 export * from "./controls.tsx";
@@ -18,6 +21,8 @@ export type { ChartProps } from "./chart.tsx";
 export { Diagram } from "./diagram.tsx";
 export type { DiagramProps } from "./diagram.tsx";
 export { Poll, Checklist, Comments, Notes, Approval, Form } from "./collab.tsx";
+export { Ledger } from "./ledger.tsx";
+export { SourceRecords } from "./page-extras.tsx";
 export type { FormField } from "./collab.tsx";
 export { ErrorBoundary, ErrorPanel } from "./error.tsx";
 export { cn, displayName, relativeTime } from "./utils.ts";
@@ -48,6 +53,9 @@ const kitComponents = {
   Notes,
   Approval,
   Form,
+  Ledger,
+  SourceRecords,
+  SupportCase,
 };
 
 const allComponents = { ...kitComponents, ...markdownComponents };

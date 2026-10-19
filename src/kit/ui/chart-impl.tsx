@@ -36,6 +36,30 @@ const palette = Array.from({ length: 6 }, (_, i) => `var(--chart-${i + 1})`);
 const numberFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, notation: "compact" });
 const fullFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/**
+ * For an x-axis of ISO dates or times: "Oct 4" (with the year when the data spans more than one), or the time of
+ * day when timestamps fall within two days. Anything else stays as written.
+ */
+function dateLabels(rows: Row[], x: string): ((v: unknown) => string) | null {
+  const values = rows.map((r) => r[x]);
+  if (!values.length || !values.every((v) => typeof v === "string" && ISO_DATE.test(v) && !Number.isNaN(Date.parse(v)))) return null;
+  const strings = values as string[];
+  const times = strings.some((v) => v.length > 10);
+  const ms = strings.map((v) => Date.parse(v));
+  const spanDays = (Math.max(...ms) - Math.min(...ms)) / 86_400_000;
+  const years = new Set(strings.map((v) => v.slice(0, 4)));
+  return (v) => {
+    if (typeof v !== "string" || !ISO_DATE.test(v) || Number.isNaN(Date.parse(v))) return String(v ?? "");
+    const d = new Date(v);
+    if (times && v.length > 10 && spanDays < 2) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    // A bare date is that calendar day wherever the reader is.
+    const day = d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(years.size > 1 ? { year: "numeric" } : {}), ...(v.length === 10 ? { timeZone: "UTC" } : {}) });
+    return times && v.length > 10 && spanDays < 14 ? `${day}, ${d.toLocaleTimeString(undefined, { hour: "numeric" })}` : day;
+  };
+}
+
 const axis = {
   stroke: "var(--muted-foreground)",
   tick: { fill: "var(--muted-foreground)", fontSize: 12 },
@@ -43,11 +67,21 @@ const axis = {
   axisLine: false,
 } as const;
 
-function TooltipBox({ active, payload, label }: { active?: boolean; payload?: { name?: string; value?: unknown; color?: string; payload?: Row }[]; label?: unknown }) {
+function TooltipBox({
+  active,
+  payload,
+  label,
+  formatLabel,
+}: {
+  active?: boolean;
+  payload?: { name?: string; value?: unknown; color?: string; payload?: Row }[];
+  label?: unknown;
+  formatLabel?: ((v: unknown) => string) | null;
+}) {
   if (!active || !payload?.length) return null;
   return (
     <div className="min-w-32 rounded-lg border border-input/70 bg-popover px-3 py-2 text-[13px] text-popover-foreground shadow-pop">
-      {label != null && label !== "" && <div className="mb-1 font-medium">{String(label)}</div>}
+      {label != null && label !== "" && <div className="mb-1 font-medium">{formatLabel ? formatLabel(label) : String(label)}</div>}
       {payload.map((p, i) => (
         <div key={i} className="flex items-center justify-between gap-4">
           <span className="inline-flex items-center gap-1.5 text-muted-foreground">
@@ -70,9 +104,10 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
   ) : null;
   const common = { data: rows, margin: { top: 8, right: 8, bottom: 0, left: 0 } };
   const grid = <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />;
-  const xAxis = <XAxis dataKey={x} {...axis} tickMargin={8} minTickGap={16} />;
+  const dates = dateLabels(rows, x);
+  const xAxis = <XAxis dataKey={x} {...axis} tickMargin={8} minTickGap={16} {...(dates ? { tickFormatter: dates } : {})} />;
   const yAxis = <YAxis {...axis} width={44} tickFormatter={(v: number) => numberFmt.format(v)} />;
-  const tooltip = <Tooltip content={<TooltipBox />} cursor={type === "bar" ? { fill: "var(--muted)", opacity: 0.7 } : { stroke: "var(--input)" }} />;
+  const tooltip = <Tooltip content={<TooltipBox formatLabel={dates} />} cursor={type === "bar" ? { fill: "var(--muted)", opacity: 0.7 } : { stroke: "var(--input)" }} />;
 
   let chart: React.ReactElement;
   if (type === "pie") {

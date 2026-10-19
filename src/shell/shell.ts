@@ -1,3 +1,4 @@
+import "./report-errors.ts";
 // Shell page client: hosts the sandboxed frame and bridges it to browser storage
 // and the live sync socket. The frame never touches the network or this
 // origin's storage directly.
