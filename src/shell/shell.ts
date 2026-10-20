@@ -16,7 +16,7 @@ import { mountAccountMenu } from "./account.ts";
 import { initOwnerMenu } from "./owner-menu.ts";
 import { createDrawer } from "./threads.ts";
 import { showSince } from "./since.ts";
-import { mountArchiveBar, setArchived } from "./archive.ts";
+import { mountArchiveBar } from "./archive.ts";
 import { setPinned } from "./pins.ts";
 import { cue, move, shown } from "../shared/motion.ts";
 import { readSoundsCookie, setSoundsEnabled, soundsEnabled, soundsScopeOf } from "../shared/sound.ts";
@@ -69,35 +69,15 @@ if (meSlot && boot.viewer.email) {
   };
   if (boot.viewer.role === "owner") {
     let panel: ReturnType<typeof initOwnerMenu> | null = null;
-    let archivedAt = boot.archivedAt ?? null;
-    const archivedChanged = (at: string | null) => {
-      archivedAt = at;
-      bar.set(at);
-      panel?.reload();
-    };
     const avatar = mountAccountMenu(meSlot, boot.viewer.email, {
       ...common,
       manage: () => panel?.show(),
       copyLink: async () => location.href,
       copyLabel: "Copy page link",
-      archive: {
-        archived: () => archivedAt !== null,
-        toggle: async () => archivedChanged(await setArchived(boot.artifactId, archivedAt === null)),
-      },
     });
-    const bar = mountArchiveBar(boot.artifactId, archivedAt, true, (at) => {
-      archivedAt = at;
-      panel?.reload();
-    });
-    panel = initOwnerMenu(
-      boot,
-      avatar,
-      (at) => {
-        archivedAt = at;
-        bar.set(at);
-      },
-      { isAdmin: boot.admin },
-    );
+    // Archive and unarchive from the Manage panel or the archived bar; each tells the other.
+    const bar = mountArchiveBar(boot.artifactId, boot.archivedAt ?? null, true, () => panel?.reload());
+    panel = initOwnerMenu(boot, avatar, (at) => bar.set(at), { isAdmin: boot.admin });
   } else {
     mountAccountMenu(meSlot, boot.viewer.email, { ...common, copyLink: async () => location.href, copyLabel: "Copy page link" });
   }

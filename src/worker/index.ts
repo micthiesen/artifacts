@@ -270,6 +270,25 @@ async function supportRoute(request: Request, url: URL, env: Env, viewer: { emai
   }
 }
 
+/** The bell's answer, from any host: the unread count and, for its panel, the latest items. Each item links to
+ * the apex's /inbox/<id>, which reads it as you follow it; approvals have no link and are done on the inbox page. */
+async function inboxReply(dir: ReturnType<typeof directory>, email: string, body: Record<string, unknown>) {
+  if (body.read === "all") await dir.markInboxRead(email);
+  if (body.items !== true) return { unread: await dir.unreadCount(email) };
+  const { items, unread } = await dir.inbox(email, 15);
+  return {
+    unread,
+    items: items.map((i) => ({
+      id: i.id,
+      at: i.at,
+      title: i.title,
+      body: i.body && i.body.length > 200 ? `${i.body.slice(0, 199)}…` : i.body,
+      read: i.read,
+      href: i.url && i.kind !== "approve-announcement" ? `/inbox/${i.id}` : null,
+    })),
+  };
+}
+
 /** The inbox: what needs you, newest first, unread until you follow it (or open its artifact) or mark everything read. The operator approves announcements here. */
 async function inboxRoute(request: Request, url: URL, env: Env, viewer: { email: string; operator: boolean } | null, brand: Brand): Promise<Response> {
   if (!viewer) return Response.redirect(`${url.origin}/login?return=/inbox`, 302);
@@ -1638,7 +1657,8 @@ async function ownerApi(request: Request, url: URL, env: Env, hub: HubApi, viewe
  * Per-artifact notification levels in this workspace (session cookie, same-origin JSON):
  * - GET  /api/me                     your levels here
  * - POST /api/me/watch {id, level}   set one (null resets to the default)
- * - POST /api/me/inbox {seen?}        your unread inbox count; `seen` (an artifact you opened) reads its items first
+ * - POST /api/me/inbox {seen?, items?, read?}  your unread inbox count; `seen` (an artifact you opened) reads its items first;
+ *                                     `items` adds the latest few (the bell's panel), `read: "all"` marks everything read
  */
 async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi, viewer: Viewer): Promise<Response> {
   const email = viewer.email;
@@ -1686,10 +1706,11 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
       return Response.json({ location: `${apexOrigin(env)}/workspaces?left=${encodeURIComponent((await hub.access(null)).name)}` });
     }
     if (url.pathname === "/api/me/inbox" && request.method === "POST") {
-      const seen = String((await jsonBody(request)).seen ?? "");
+      const body = await jsonBody(request);
+      const seen = String(body.seen ?? "");
       const dir = directory(env);
       if (seen && (await hub.roleFor(seen, email))) await dir.markInboxReadFor(email, (await hub.info()).slug, seen);
-      return Response.json({ unread: await dir.unreadCount(email) });
+      return Response.json(await inboxReply(dir, email, body));
     }
     if (url.pathname === "/api/me/watch-default" && request.method === "POST") {
       const body = await jsonBody(request);
@@ -1713,7 +1734,7 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
  * Your account, on the apex (session cookie, same-origin JSON):
  * - GET    /api/me                     profile, channels, workspaces
  * - POST   /api/me {name}              display name
- * - POST   /api/me/inbox               your unread inbox count
+ * - POST   /api/me/inbox {items?, read?}  your unread inbox count, as in a workspace
  * - POST   /api/me/channels {type,...} add a channel (validated; may reveal a secret once)
  * - DELETE /api/me/channels/<id>       remove one
  * - POST   /api/me/channels/<id>/test  send a test notification
@@ -1739,7 +1760,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
         pushover: Boolean(env.PUSHOVER_TOKEN),
       });
     }
-    if (url.pathname === "/api/me/inbox" && request.method === "POST") return Response.json({ unread: await dir.unreadCount(email) });
+    if (url.pathname === "/api/me/inbox" && request.method === "POST") return Response.json(await inboxReply(dir, email, body));
     // Deleting your account: GET says what would happen (and what's in the way), POST {confirm: "delete"} does it.
     if (url.pathname === "/api/me/delete") {
       const plan = await accountDeletion(env, email);

@@ -18,6 +18,11 @@ function ReadOnlyNote({ email }: { email: string | null }) {
   );
 }
 
+/** A tooltip can't scroll: the first few names, then how many more. */
+function namesList(names: string[], max = 8): string {
+  return names.length > max ? `${names.slice(0, max - 1).join(", ")} and ${names.length - max + 1} more` : names.join(", ");
+}
+
 /** The element inside `root` whose `data-<attr>` is `value`. */
 function byData(root: HTMLElement, attr: string, value: string): Element | null {
   for (const el of root.querySelectorAll(`[data-${attr}]`)) if (el.getAttribute(`data-${attr}`) === value) return el;
@@ -92,7 +97,7 @@ export function Poll({ id, options, multiple = false, question, className }: { i
               </span>
               <span className="relative min-w-0 flex-1 font-medium">{o}</span>
               {who.length > 0 && (
-                <Tooltip content={who.map(displayName).join(", ")}>
+                <Tooltip content={namesList(who.map(displayName))}>
                   <span className="relative">
                     <AvatarGroup emails={who} max={3} />
                   </span>

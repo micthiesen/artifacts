@@ -66,16 +66,16 @@ export function Select({
       </BaseSelect.Trigger>
       <BaseSelect.Portal>
         <BaseSelect.Positioner sideOffset={6} alignItemWithTrigger={false} className="z-50 outline-none">
-          <BaseSelect.Popup className={cn(surface, popupMotion, "max-h-[min(24rem,var(--available-height))] min-w-[var(--anchor-width)] overflow-y-auto p-1")}>
+          <BaseSelect.Popup className={cn(surface, popupMotion, "max-h-[min(24rem,var(--available-height))] min-w-[var(--anchor-width)] max-w-[var(--available-width)] overflow-y-auto p-1")}>
             <BaseSelect.List>
               {items.map((it) => (
                 <BaseSelect.Item
                   key={String(it.value)}
                   value={it.value}
                   disabled={it.disabled}
-                  className="grid cursor-default grid-cols-[1fr_1rem] items-center gap-3 rounded-md py-1.5 pr-2 pl-2.5 text-sm outline-none select-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground data-selected:font-medium"
+                  className="grid cursor-default grid-cols-[minmax(0,1fr)_1rem] items-center gap-3 rounded-md py-1.5 pr-2 pl-2.5 text-sm outline-none select-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground data-selected:font-medium"
                 >
-                  <BaseSelect.ItemText>{it.label}</BaseSelect.ItemText>
+                  <BaseSelect.ItemText className="[overflow-wrap:anywhere]">{it.label}</BaseSelect.ItemText>
                   <BaseSelect.ItemIndicator className="text-primary">
                     <Check className="size-4" />
                   </BaseSelect.ItemIndicator>
@@ -305,7 +305,7 @@ export function PopoverContent({
   return (
     <BasePopover.Portal>
       <BasePopover.Positioner side={side} align={align} sideOffset={sideOffset} className="z-50">
-        <BasePopover.Popup className={cn(surface, popupMotion, "w-72 p-4 text-sm outline-none", className as string)} {...props} />
+        <BasePopover.Popup className={cn(surface, popupMotion, "max-h-[var(--available-height)] w-72 max-w-[var(--available-width)] overflow-y-auto overscroll-contain p-4 text-sm outline-none", className as string)} {...props} />
       </BasePopover.Positioner>
     </BasePopover.Portal>
   );

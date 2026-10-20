@@ -35,6 +35,7 @@ export type ChartImplProps = {
 const palette = Array.from({ length: 6 }, (_, i) => `var(--chart-${i + 1})`);
 const numberFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, notation: "compact" });
 const fullFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+const TOOLTIP_ROWS = 8;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/;
 
@@ -79,18 +80,21 @@ function TooltipBox({
   formatLabel?: ((v: unknown) => string) | null;
 }) {
   if (!active || !payload?.length) return null;
+  // A tooltip can't scroll, so many series stop at a count of the rest.
+  const shown = payload.length > TOOLTIP_ROWS ? payload.slice(0, TOOLTIP_ROWS - 1) : payload;
   return (
-    <div className="min-w-32 rounded-lg border border-input/70 bg-popover px-3 py-2 text-[13px] text-popover-foreground shadow-pop">
+    <div className="max-w-[min(20rem,calc(100vw-2rem))] min-w-32 rounded-lg border border-input/70 bg-popover px-3 py-2 text-[13px] text-popover-foreground shadow-pop">
       {label != null && label !== "" && <div className="mb-1 font-medium">{formatLabel ? formatLabel(label) : String(label)}</div>}
-      {payload.map((p, i) => (
+      {shown.map((p, i) => (
         <div key={i} className="flex items-center justify-between gap-4">
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <span className="size-2 rounded-full" style={{ background: p.color }} />
-            {humanize(String(p.name ?? ""))}
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-muted-foreground">
+            <span className="size-2 shrink-0 rounded-full" style={{ background: p.color }} />
+            <span className="truncate">{humanize(String(p.name ?? ""))}</span>
           </span>
-          <span className="font-medium tabular-nums">{typeof p.value === "number" ? fullFmt.format(p.value) : String(p.value)}</span>
+          <span className="shrink-0 font-medium tabular-nums">{typeof p.value === "number" ? fullFmt.format(p.value) : String(p.value)}</span>
         </div>
       ))}
+      {shown.length < payload.length && <div className="mt-0.5 text-muted-foreground">and {payload.length - shown.length} more</div>}
     </div>
   );
 }
@@ -100,7 +104,14 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
   const gid = React.useId().replace(/:/g, "");
   const showLegend = legend ?? (y.length > 1 || type === "pie");
   const legendEl = showLegend ? (
-    <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 13, color: "var(--muted-foreground)" }} formatter={(v) => humanize(String(v))} />
+    // Recharts takes the legend's height out of the plot, so on a phone many series would leave no plot at all:
+    // the legend gets at most a third of the chart and scrolls past that.
+    <Legend
+      iconType="circle"
+      iconSize={8}
+      wrapperStyle={{ fontSize: 13, color: "var(--muted-foreground)", maxHeight: Math.round(height / 3), overflowY: "auto", overscrollBehavior: "contain" }}
+      formatter={(v) => humanize(String(v))}
+    />
   ) : null;
   const common = { data: rows, margin: { top: 8, right: 8, bottom: 0, left: 0 } };
   const grid = <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />;

@@ -116,7 +116,7 @@ function showErrorToast(message: string) {
     title.textContent = "Something went wrong";
     title.appendChild(close);
     const body = document.createElement("div");
-    body.className = "mt-1 font-mono text-xs break-words text-muted-foreground";
+    body.className = "mt-1 max-h-40 overflow-y-auto font-mono text-xs break-words text-muted-foreground";
     el.append(title, body);
   }
   (el.lastChild as HTMLElement).textContent = message;

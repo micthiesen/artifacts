@@ -227,6 +227,21 @@ test("notifications land in the inbox even with no channels, and stay unread unt
   const ws = "https://acme.artifacts.test";
   const wsCookie = await cookieFor("acme.artifacts.test");
   expect(await unread(ws, wsCookie, { seen: r.id })).toBe(1);
+  // The bell's panel, from a workspace: the latest items, each linking to the apex's /inbox/<id>; looking reads nothing.
+  const panel = async (body: Record<string, unknown>) =>
+    (await (
+      await worker.fetch(
+        new Request(`${ws}/api/me/inbox`, { method: "POST", headers: { Cookie: wsCookie, Origin: ws, "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+        env as never,
+        ctx,
+      )
+    ).json()) as { unread: number; items: { id: number; read: boolean; href: string | null }[] };
+  const listed = await panel({ items: true });
+  expect(listed.unread).toBe(1);
+  expect(listed.items.length).toBe(2);
+  expect(listed.items.filter((i) => !i.read).length).toBe(1);
+  expect(listed.items.every((i) => i.href === `/inbox/${i.id}`)).toBe(true);
+  expect((await panel({})).items).toBeUndefined();
   // Someone else's item goes to their own inbox and reads nothing.
   const item = h.directory.inbox(ADMIN).items.find((i) => !i.read)!;
   const theirs = await worker.fetch(
@@ -242,4 +257,9 @@ test("notifications land in the inbox even with no channels, and stay unread unt
   expect(go.status).toBe(302);
   expect(go.headers.get("Location")).toBe(item.url);
   expect(await unread(APEX, apex)).toBe(0);
+  // Mark all read, from the panel.
+  h.hub.addComment(r.id, ANA, { text: "One more" }, ws, undefined, "edit");
+  await h.hub.deliverDue(Date.now() + 7_200_000);
+  expect(await unread(APEX, apex)).toBe(1);
+  expect(await unread(APEX, apex, { read: "all" })).toBe(0);
 });
