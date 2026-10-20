@@ -55,6 +55,24 @@
   :focus-visible {
     outline-color: var(--ring);
   }
+  /* Headings break into even lines; running text avoids a one-word last line.
+     Utilities (truncate, whitespace-nowrap, text-wrap) still win. */
+  :where(h1, h2, h3, h4, h5, h6) {
+    text-wrap: balance;
+  }
+  :where(p, li, blockquote, dd, figcaption) {
+    text-wrap: pretty;
+  }
+  /* iOS Safari zooms into any focused field under 16px and stays zoomed, so the
+     page then scrolls sideways. Important so it beats text-sm and friends;
+     1em keeps a field that inherits a larger size at that size. */
+  @media (pointer: coarse) {
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
+    select,
+    textarea {
+      font-size: max(16px, 1em) !important;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -93,7 +111,7 @@
   --pele-line: var(--muted-foreground);
   --pele-surface: var(--secondary);
   --pele-surface-alt: var(--muted);
-  --pele-border: var(--input);
+  --pele-border: color-mix(in oklab, var(--input) 55%, var(--card));
   --pele-accent: var(--primary);
   --pele-critical: var(--negative);
   --pele-error: var(--negative);

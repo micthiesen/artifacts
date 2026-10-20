@@ -34,7 +34,7 @@ function MarkdownTable({ className, ...p }: P<"table">) {
   return (
     <div className={cn("my-6 overflow-hidden rounded-xl border border-border bg-card shadow-card", cards && "md-cards")}>
       <ScrollX>
-        <table ref={ref} className={cn("w-full border-collapse text-[14px] leading-snug", className)} {...p} />
+        <table ref={ref} className={cn("w-full border-collapse text-[14px] leading-snug [&_td[style*=right]]:tabular-nums", className)} {...p} />
       </ScrollX>
     </div>
   );
@@ -83,7 +83,7 @@ export const markdownComponents = {
   // Markdown makes these disabled and without handlers; a checkbox written as JSX keeps its own behaviour.
   input: (p: P<"input">) => (p.type === "checkbox" && p.disabled && !p.onChange ? <TaskCheckbox checked={p.checked} /> : <input {...p} />),
   blockquote: ({ className, ...p }: P<"blockquote">) => (
-    <blockquote className={cn("my-6 border-l-[3px] border-input pl-5 text-muted-foreground [&>p]:my-2 [&>p]:text-muted-foreground", className)} {...p} />
+    <blockquote className={cn("my-6 border-l-[3px] border-input/60 pl-5 text-muted-foreground [&>p]:my-2 [&>p]:text-muted-foreground", className)} {...p} />
   ),
   code: ({ className, ...p }: P<"code">) => (
     <code className={cn("rounded-[5px] border border-border bg-muted px-[0.35em] py-[0.1em] font-mono text-[0.86em] break-words text-foreground", className)} {...p} />
@@ -107,7 +107,7 @@ export const markdownComponents = {
   // On phones, cells keep a readable width and the table scrolls sideways.
   td: ({ className, ...p }: P<"td">) => <td className={cn("px-4 py-2.5 align-top first:pl-5 last:pr-5 max-sm:min-w-36", className)} {...p} />,
   hr: ({ className, ...p }: P<"hr">) => (
-    <hr className={cn("my-10 h-px border-0 bg-[linear-gradient(90deg,transparent,var(--input)_20%,var(--input)_80%,transparent)]", className)} {...p} />
+    <hr className={cn("my-10 h-px border-0 bg-[linear-gradient(90deg,transparent,color-mix(in_oklab,var(--input)_60%,transparent)_20%,color-mix(in_oklab,var(--input)_60%,transparent)_80%,transparent)]", className)} {...p} />
   ),
   img: ({ className, alt = "", src, ...p }: P<"img">) => (
     <img

@@ -8,6 +8,62 @@ Checks: `bun run typecheck`, `bun test`, `bun run build`. After UI changes,
 run `spikes/e2e-layout.ts` against a running stage: pages must never scroll
 sideways on a phone.
 
+## Controls, type and accessibility
+
+These hold for the shell and the kit alike. They keep slipping back in, so
+check new UI against them.
+
+**Touch and hover.**
+
+- Text fields, textareas and selects are at least 16px on touch screens (both
+  stylesheets force it under `pointer: coarse`). iOS zooms into anything
+  smaller and the page then scrolls sideways. Never cap zoom in the viewport
+  meta instead.
+- Nothing is hover-only. A control revealed on hover also shows on
+  `:focus-visible` and on touch (`pointer-coarse:` in the kit,
+  `@media (hover: none)` in the shell). Tailwind's `hover:` never fires on
+  touch, so a hover-only button is an invisible tap target. The same goes
+  for information in a tooltip: who voted, who ticked it.
+- Tap targets are at least 24px. Grow a small control's hit area with a
+  pseudo-element, not by enlarging what you see. Checkboxes come with
+  clickable text.
+- Presses get a colour change on `:active`, never movement.
+
+**Contrast and focus.**
+
+- Text is at least 4.5:1 on its surface; field borders, focus indicators and
+  state indicators at least 3:1. Compute it from the tokens against
+  `--background`, `--card` and `--popover`; don't eyeball it.
+- `--primary` has the same lightness as `--muted-foreground`, so links in
+  running text are underlined. Navigation, footers and button-like links
+  aren't.
+- Every keyboard focus shows a ring, outline or `--primary` border
+  (`focus-halo` in the kit, a 2px `--primary` outline in shell menus). A `--muted` background change alone
+  is about 1.1:1 and doesn't count.
+- Colour never carries meaning alone: pair it with a sign, icon or word.
+
+**Forms and failures.**
+
+- Never throw away what someone typed. Clear an input only after the send
+  is accepted; when a send fails or a drawer closes, keep the text.
+- A field's error sits directly under it, the field gets `aria-invalid`, and
+  focus moves there. Status and errors are announced (`role="status"`, or
+  `role="alert"` when blocking).
+- A button that starts a request can't be pressed twice while it runs
+  (`aria-busy`). Deleting what people wrote asks first or offers Undo.
+- Mark optional fields "(optional)", not required ones with a bare asterisk.
+
+**Type and shape.**
+
+- Headings balance and paragraphs wrap `pretty` by default (base styles).
+  Don't fix a line break with `<br>` or `&nbsp;`.
+- Digits in a column or that change live get `tabular-nums`. Uppercase is
+  for short labels, with at least 0.05em tracking.
+- A rounded item inside a padded rounded container uses the container's
+  radius minus its padding and border, or its corners look fat.
+- Cards, menus, popovers and toasts take their shadow from `--shadow-card`
+  or `--shadow-pop`, so elevation reads the same everywhere.
+
 ## Motion, sound and haptics
 
 Feedback, not decoration. Every animation and sound answers "what just
@@ -25,6 +81,14 @@ where a test can catch them; keep the rest by hand.
   top), so nothing reflows.
 - Prefer CSS: transitions, `@starting-style`, keyframes, and same-document
   View Transitions for reordering. No animation libraries.
+- Things that open and close (menus, popovers, panels, sheets) use
+  transitions, not keyframes, so they reverse when someone changes their
+  mind. In shell CSS, toggle `hidden` with `@starting-style` and
+  `transition-behavior: allow-discrete` on `display`. Popovers grow from
+  their trigger. Exits may be one step faster than entrances.
+- Third-party components bring their own animation defaults: switch them
+  off or set them to the tokens (Recharts charts run with
+  `isAnimationActive={false}`).
 
 **One scale.** Durations and curves are the `--motion-*` tokens in
 `src/kit/theme.css`, mirrored in `src/shell/shell.css`:
@@ -57,6 +121,9 @@ are the `.art-move-*` classes in `src/kit/motion.css` and `shell.css`.
 - In the kit, `useArrivals` (`src/kit/feedback.ts`) glows a component's
   elements when shared state under its key changes remotely. The shell marks
   such changes `remote`; your own writes coming back are not arrivals.
+- A change of yours the server refuses rolls back. Where something was
+  there before, it glows as it snaps back, with no sound; the bar's status
+  says why in the error colour.
 
 **No sound without motion.**
 

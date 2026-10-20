@@ -10,14 +10,14 @@ type Div = React.HTMLAttributes<HTMLDivElement>;
 // ---- Button ---------------------------------------------------------------------
 
 const buttonVariants = {
-  // Signature gradient; the hover sheen is an overlay that only fades opacity.
+  // Signature gradient; the hover sheen and the press shade are an overlay that only fades opacity.
   default:
-    "relative isolate bg-primary bg-signal font-semibold text-primary-foreground shadow-card after:absolute after:inset-0 after:-z-10 after:rounded-[inherit] after:bg-white/15 after:opacity-0 after:transition-opacity hover:after:opacity-100",
-  secondary: "border border-border bg-secondary text-secondary-foreground hover:border-input hover:bg-input/60",
-  outline: "border border-input bg-card text-foreground shadow-card hover:border-muted-foreground/40 hover:bg-muted",
-  ghost: "text-foreground hover:bg-muted",
-  destructive: "bg-negative font-semibold text-background shadow-card hover:bg-negative/90",
-  link: "text-primary underline-offset-4 hover:underline px-0 h-auto",
+    "relative isolate bg-primary bg-signal font-semibold text-primary-foreground shadow-card after:absolute after:inset-0 after:-z-10 after:rounded-[inherit] after:bg-white/15 after:opacity-0 after:transition-opacity hover:after:opacity-100 active:after:bg-black/15 active:after:opacity-100",
+  secondary: "border border-border bg-secondary text-secondary-foreground hover:border-input hover:bg-input/35 active:bg-input/50",
+  outline: "border border-input bg-card text-foreground shadow-card hover:border-muted-foreground/65 hover:bg-muted active:bg-input/40",
+  ghost: "text-foreground hover:bg-muted active:bg-input/40",
+  destructive: "bg-negative font-semibold text-background shadow-card hover:bg-negative/90 active:bg-negative/80",
+  link: "text-primary underline-offset-4 hover:underline active:text-primary/80 px-0 h-auto",
 } as const;
 
 const buttonSizes = {
@@ -110,7 +110,7 @@ export function CardFooter({ className, ...props }: Div) {
 // ---- Form fields ----------------------------------------------------------------
 
 const fieldClass =
-  "w-full min-w-0 rounded-md border border-input bg-background/60 px-3 text-sm text-foreground transition-[border-color,box-shadow] outline-none placeholder:text-muted-foreground/80 hover:border-muted-foreground/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60 read-only:cursor-default read-only:border-border read-only:bg-muted/40 read-only:shadow-none read-only:focus-visible:border-border read-only:focus-visible:ring-0";
+  "w-full min-w-0 rounded-md border border-input bg-background/60 px-3 text-sm text-foreground transition-[border-color,box-shadow] outline-none placeholder:text-muted-foreground/80 hover:border-muted-foreground/65 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 aria-invalid:border-negative aria-invalid:focus-visible:border-negative aria-invalid:focus-visible:ring-negative/25 disabled:cursor-not-allowed disabled:opacity-60 read-only:cursor-default read-only:border-border read-only:bg-muted/40 read-only:shadow-none read-only:focus-visible:border-border read-only:focus-visible:ring-0";
 
 export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(function Input(
   { className, type = "text", ...props },

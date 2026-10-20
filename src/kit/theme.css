@@ -31,13 +31,14 @@
     --accent: oklch(0.27 0.055 285);
     --accent-foreground: oklch(0.88 0.07 285);
     --border: oklch(0.29 0.02 275);
-    --input: oklch(0.37 0.024 275);
+    --input: oklch(0.52 0.024 275);
     --ring: oklch(0.76 0.13 285);
     --positive: oklch(0.79 0.15 158);
     --caution: oklch(0.84 0.135 80);
     --negative: oklch(0.72 0.17 22);
-    /* Charts: six hues spread around the wheel with staggered lightness so
-       neighbours stay distinct (also in grayscale / for CVD). */
+    /* Charts: six hues spread around the wheel. They differ by hue, not
+       lightness (some neighbours match in grayscale), so charts with several
+       series rely on the legend or direct labels too. */
     --chart-1: oklch(0.72 0.15 285);
     --chart-2: oklch(0.82 0.12 200);
     --chart-3: oklch(0.85 0.14 78);

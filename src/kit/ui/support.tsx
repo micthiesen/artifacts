@@ -81,7 +81,7 @@ export function SupportCase({ data: path = "case.json" }: { data?: string }) {
 
       {(context.length > 0 || data.error) && (
         <section>
-          <h2 className="mb-2 text-[13px] font-medium tracking-wide text-muted-foreground uppercase">Shared with the report</h2>
+          <h2 className="mb-2 text-[13px] font-medium tracking-[0.06em] text-muted-foreground uppercase">Shared with the report</h2>
           <dl className="grid grid-cols-[minmax(0,0.7fr)_minmax(0,2fr)] gap-x-3 gap-y-1 text-[14px]">
             {context.map(([k, v]) => (
               <React.Fragment key={k}>
@@ -103,7 +103,7 @@ export function SupportCase({ data: path = "case.json" }: { data?: string }) {
 
       {status?.history && status.history.length > 1 && (
         <section>
-          <h2 className="mb-2 text-[13px] font-medium tracking-wide text-muted-foreground uppercase">History</h2>
+          <h2 className="mb-2 text-[13px] font-medium tracking-[0.06em] text-muted-foreground uppercase">History</h2>
           <ol className="m-0 flex list-none flex-col gap-1 p-0 text-[14px]">
             {status.history.map((h, i) => (
               <li key={i} className="flex gap-3">

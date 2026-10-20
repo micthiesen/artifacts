@@ -53,7 +53,12 @@ const PAGE_CSP =
 const DARK_HEAD = `<meta name="color-scheme" content="dark">
 <style>html{background:oklch(0.16 0.017 275)}</style>`;
 
+/** shell.css's face, fetched with the stylesheet instead of after it: the same URL, so the two share one cache entry. */
+const INTER_PRELOAD = `<link rel="preload" href="/kit/v1/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>`;
+
 function page(title: string, body: string, init: ResponseInit = {}, head = ""): Response {
+  // Pages with server-rendered POST forms load the double-submit guard (src/shell/forms.ts).
+  const forms = /<form\b[^>]*\bmethod="post"/i.test(body) ? `<script type="module" src="${asset("/static/forms.js")}"></script>\n` : "";
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -69,7 +74,8 @@ ${DARK_HEAD}
 <link rel="apple-touch-icon" href="${asset("/static/icons/apple-touch-icon.png")}">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="${asset("/static/shell.css")}">
-${head}</head>
+${INTER_PRELOAD}
+${forms}${head}</head>
 <body>${body}</body>
 </html>`;
   const headers = new Headers(init.headers);
@@ -828,6 +834,40 @@ export function linkSwitchPage(url: URL, current: string, linked: string, brand:
   );
 }
 
+/** What the product is and where its docs are, for language models (llmstxt.org). Lists only public pages. */
+export function llmsTxt(brand: Brand, workspaceSuffix: string, pricing: boolean): Response {
+  const raw = (path: string) => `${REPO.replace("github.com", "raw.githubusercontent.com")}/main/${path}`;
+  const body = `# ${PRODUCT}
+
+> ${DESCRIPTION}
+
+Agents publish small interactive pages (reports, dashboards, polls, checklists, mini apps) that specific people open after verifying their email. Artifacts get live shared state, per-viewer storage and anchored comments. Each team has a workspace at its own subdomain.
+
+Agents connect to a workspace's MCP server at \`https://<workspace>${workspaceSuffix}/mcp\`, with OAuth or a personal agent token from the workspace's settings, and act as that member. Call the \`artifact_guide\` tool first; it returns the agent guide and the component catalog below.
+
+## Docs
+
+- [Agent guide](${raw("docs/guide.md")}): what agents can build and how to write artifacts
+- [Components](${raw("src/kit/CATALOG.md")}): the built-in component kit
+- [Design](${raw("docs/DESIGN.md")}): what the system is for and the decisions behind it
+- [Export format](${raw("docs/EXPORT.md")}): the workspace export archive
+
+## Pages
+
+- [Home](${brand.apex}/)
+- [Help](${brand.apex}/help)${pricing ? `\n- [Pricing](${brand.apex}/pricing)` : ""}
+- [Privacy](${brand.apex}/privacy)
+- [Terms](${brand.apex}/terms)
+- [Security](${brand.apex}/security)
+
+## Optional
+
+- [Source code](${REPO})
+- [Sitemap](${brand.apex}/sitemap.xml)
+`;
+  return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600" } });
+}
+
 /** Asks before signing out here to sign in with a different email. */
 export function switchPage(next: string, brand: Brand): Response {
   return page(
@@ -959,7 +999,7 @@ export function shellPage(boot: ShellBoot, brand: Brand, reportUrl?: string): Re
   return page(
     boot.title,
     `<div class="shell">
-<header class="bar"><span class="lead"><a class="mark" href="/" title="${escapeHtml(brand.name)}" aria-label="${escapeHtml(brand.name)}">${GHOST}</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status"></span><span id="presence" class="presence"></span>${reportUrl ? `<a class="bar-link report-link" href="${escapeHtml(reportUrl)}" target="_blank" rel="noopener">Report</a>` : ""}${
+<header class="bar"><span class="lead"><a class="mark" href="/" title="${escapeHtml(brand.name)}" aria-label="${escapeHtml(brand.name)}">${GHOST}</a><span class="title" title="${escapeHtml(boot.title)}">${escapeHtml(boot.title)}</span></span><span id="status" class="status" role="status" aria-live="polite"></span><span id="presence" class="presence"></span>${reportUrl ? `<a class="bar-link report-link" href="${escapeHtml(reportUrl)}" target="_blank" rel="noopener">Report</a>` : ""}${
       boot.viewer.email ? avatar(boot.viewer.email, brand, "workspace", { member: boot.member, scoped: boot.scoped }) : ""
     }</header>
 <div id="since" class="since" hidden></div>

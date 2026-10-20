@@ -273,7 +273,7 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         resolveInit();
         break;
       case "shared":
-        store.applyShared(msg.changes as Record<string, JsonValue | null>, msg.remote === true);
+        store.applyShared(msg.changes as Record<string, JsonValue | null>, msg.remote === true ? "remote" : msg.reverted === true ? "reverted" : undefined);
         break;
       case "sounds":
         setSoundsEnabled(msg.on === true);

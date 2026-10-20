@@ -32,6 +32,9 @@ setSoundsEnabled(readSoundsCookie(document.cookie, soundsScopeOf(document.getEle
 const statusEl = document.getElementById("status")!;
 const presenceEl = document.getElementById("presence")!;
 
+// iOS Safari only applies :active (the shell's press colours) when a touch listener is on the page.
+document.addEventListener("touchstart", () => {}, { passive: true });
+
 function printArtifact() {
   const when = new Date().toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   post({ t: "print", title: boot.title, meta: `v${boot.version} · printed ${when}` });
@@ -175,10 +178,13 @@ const drawer = createDrawer(document.getElementById("threads")!, toggle, {
   isOwner: boot.viewer.role === "owner",
   readSeq: boot.readSeq ?? 0,
   send: (msg) => {
-    if (socket?.readyState === WebSocket.OPEN) {
-      if (msg.t !== "set" && "cid" in msg) pendingComments.add(msg.cid);
-      socket.send(JSON.stringify(msg));
-    } else setStatus("Offline: comment not sent. Try again when reconnected.");
+    if (socket?.readyState !== WebSocket.OPEN) {
+      setStatus("Offline: comment not sent", "error");
+      return false;
+    }
+    if (msg.t !== "set" && "cid" in msg) pendingComments.add(msg.cid);
+    socket.send(JSON.stringify(msg));
+    return true;
   },
   focus: (thread) => post({ t: "focus", thread }),
   onThreads: sendThreads,
@@ -282,8 +288,17 @@ function sendSync(msg: SyncClientMessage) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
 }
 
-function setStatus(text: string) {
+/** The bar's status line (a live region). Errors show in --negative; the full text is in the title when it's cut short. */
+function setStatus(text: string, tone?: "error") {
   statusEl.textContent = text;
+  statusEl.title = text;
+  if (tone) statusEl.dataset.tone = tone;
+  else delete statusEl.dataset.tone;
+}
+
+/** One of your writes was saved: a failure still showing in the bar is out of date. */
+function clearError() {
+  if (statusEl.dataset.tone === "error") setStatus("");
 }
 
 function connect() {
@@ -327,22 +342,25 @@ function connect() {
         else shared[msg.key] = msg.value;
         saveCache();
         if (initSent) post({ t: "shared", changes: { [msg.key]: msg.value }, ...(own ? {} : { remote: true }) });
+        if (own) clearError();
         break;
       }
       case "rejected": {
         if (pendingComments.delete(msg.cid)) {
-          setStatus(`Comment not saved: ${msg.reason}`);
+          setStatus(`Comment not saved: ${msg.reason}`, "error");
+          // A comment's text goes back into its box, so nothing typed is lost.
+          drawer.failed(msg.cid);
           break;
         }
         const rejected = pending.get(msg.cid);
         pending.delete(msg.cid);
-        setStatus(`Change not saved: ${msg.reason}`);
+        setStatus(`Change not saved: ${msg.reason}`, "error");
         if (rejected) {
           // Roll the frame's optimistic value back to the last confirmed one.
           const confirmed = confirmedValue(rejected.key);
           if (confirmed === null) delete shared[rejected.key];
           else shared[rejected.key] = confirmed;
-          if (initSent) post({ t: "shared", changes: { [rejected.key]: confirmed } });
+          if (initSent) post({ t: "shared", changes: { [rejected.key]: confirmed }, reverted: true });
         }
         break;
       }
@@ -360,6 +378,10 @@ function connect() {
         break;
       case "thread": {
         const own = msg.cid !== undefined && pendingComments.delete(msg.cid);
+        if (own) {
+          drawer.sent(msg.cid!);
+          clearError();
+        }
         const before = drawer.count(msg.thread.id);
         drawer.upsert(msg.thread);
         const last = msg.thread.comments.at(-1);
@@ -379,10 +401,11 @@ function connect() {
   ws.addEventListener("close", (event) => {
     socket = null;
     if (event.code === 4003 || event.code === 4004) {
-      setStatus(event.code === 4004 ? "This artifact was deleted." : "Your access changed. Reload the page.");
+      setStatus(event.code === 4004 ? "This artifact was deleted." : "Your access changed. Reload the page.", "error");
       return;
     }
-    setStatus(pending.size ? "Offline, changes will sync when reconnected" : "Reconnecting…");
+    if (pending.size) setStatus("Offline, changes will sync when reconnected", "error");
+    else setStatus("Reconnecting…");
     retry = Math.min(retry + 1, 6);
     setTimeout(connect, 500 * 2 ** retry);
   });

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { indexPage } from "../src/worker/pages.ts";
+import { indexPage, loginPage, policyPage } from "../src/worker/pages.ts";
 import { listing } from "../src/worker/listing.ts";
 
 /** The page as the workspace would hand it over. */
@@ -109,4 +109,14 @@ test("pricing lists Free's render checks and invitations from the plan, under h2
   expect(html).toContain("<h2>Free</h2>");
   expect(html).not.toContain("<h3>");
   expect(html).toContain("The person who pays can");
+});
+
+test("pages with POST forms load the double-submit guard; others don't", async () => {
+  const login = await loginPage({ step: "email", to: "", n: "", return: "/" }, brand).text();
+  expect(login).toContain("/static/forms.js");
+  const policy = await policyPage("privacy", brand, "").text();
+  expect(policy).not.toContain("/static/forms.js");
+  // Both preload shell.css's font at the URL shell.css uses.
+  expect(policy).toContain('<link rel="preload" href="/kit/v1/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>');
+  expect(await Bun.file(new URL("../src/shell/shell.css", import.meta.url)).text()).toContain("url(/kit/v1/fonts/inter-latin-wght-normal.woff2)");
 });

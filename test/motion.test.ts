@@ -57,6 +57,18 @@ describe("motion tokens", () => {
     expect(bad).toEqual([]);
   });
 
+  test("hover and keyboard focus change colour, never position or size", () => {
+    const bad: string[] = [];
+    for (const path of ["src/shell/shell.css", ...files("src/kit", /\.css$/)]) {
+      // Innermost rules only (selector { declarations }), so a wrapping @media doesn't hide or join them.
+      for (const m of stripCss(read(path)).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const [, selector, body] = m;
+        if (/:hover|:focus-visible/.test(selector) && /(?:^|[;\s])(transform|translate|scale)\s*:/.test(body)) bad.push(`${path}: ${selector.trim()}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
   test("components use the tokens, not Tailwind's numbered durations or inline timings", () => {
     const bad: string[] = [];
     for (const path of files("src", /\.tsx?$/)) {

@@ -84,6 +84,8 @@ type TaskState = { done?: boolean; by?: string | null; at?: number };
 export function TaskCheckbox({ checked }: { checked?: boolean }) {
   const ref = React.useRef<HTMLButtonElement>(null);
   const [key, setKey] = React.useState<string | null>(null);
+  // The item's text names the checkbox for screen readers (it sits beside the button, not in it).
+  const [label, setLabel] = React.useState<string | undefined>(undefined);
   // A name of the kit's own, so it can't collide with an artifact's useSharedMap("tasks").
   const tasks = useSharedMap<TaskState>("_kit/tasks");
   const viewer = useViewer();
@@ -93,6 +95,7 @@ export function TaskCheckbox({ checked }: { checked?: boolean }) {
     if (!li) return;
     const own = [...li.childNodes].filter((n) => !(n instanceof HTMLElement && (n.tagName === "UL" || n.tagName === "OL"))).map((n) => n.textContent ?? "").join("").trim();
     if (!own) return;
+    setLabel(own.slice(0, 200));
     const slug = slugify(own).slice(0, 120) || "item";
     const same = [...document.querySelectorAll("li.task-list-item")].filter((x) => x !== li && x.compareDocumentPosition(li) & Node.DOCUMENT_POSITION_FOLLOWING);
     const earlier = same.filter((x) => slugify([...x.childNodes].filter((n) => !(n instanceof HTMLElement && (n.tagName === "UL" || n.tagName === "OL"))).map((n) => n.textContent ?? "").join("").trim()).slice(0, 120) === slug).length;
@@ -117,12 +120,13 @@ export function TaskCheckbox({ checked }: { checked?: boolean }) {
       type="button"
       role="checkbox"
       aria-checked={done}
+      aria-label={label}
       disabled={!viewer.canWrite}
       onClick={toggle}
       title={state?.by ? `${done ? "Done" : "Unticked"} by ${displayName(state.by)}` : undefined}
       className={cn(
-        "mr-2 inline-flex size-[1.05rem] translate-y-[0.2rem] cursor-pointer items-center justify-center rounded-[5px] border align-baseline transition-colors disabled:cursor-default",
-        done ? "border-primary bg-primary text-primary-foreground" : "border-input bg-card hover:border-primary/60",
+        "relative mr-2 inline-flex size-[1.05rem] translate-y-[0.2rem] cursor-pointer items-center justify-center rounded-[5px] border align-baseline transition-colors after:absolute after:-inset-1 after:content-[''] disabled:cursor-default",
+        done ? "border-primary bg-primary text-primary-foreground" : "border-input bg-card hover:border-primary/85",
       )}
     >
       {done && (
@@ -141,7 +145,7 @@ export function LinkedFrom() {
   if (!backlinks.length) return null;
   return (
     <footer className="art-linked-from mt-16 border-t border-border pt-6">
-      <h2 className="mb-3 text-[13px] font-medium tracking-wide text-muted-foreground uppercase">Linked from</h2>
+      <h2 className="mb-3 text-[13px] font-medium tracking-[0.06em] text-muted-foreground uppercase">Linked from</h2>
       <ul className="flex flex-wrap gap-2">
         {backlinks.map((b) => (
           <li key={b.id}>

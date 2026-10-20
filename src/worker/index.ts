@@ -28,6 +28,7 @@ import {
   POLICY_UPDATED,
   pricingPage,
   helpPage,
+  llmsTxt,
   inboxPage,
   switchPage,
   supportPage,
@@ -720,8 +721,8 @@ async function noteSignIn(env: Env, slug: string, email: string, join = true) {
 
 // ---- apex: front door, sign-in, account and operator -------------------------------------
 
-/** Public apex pages search engines may index (pricing only exists with billing on). */
-const indexablePages = (env: Env) => ["/", "/help", "/privacy", "/terms", "/security", ...(billingOn(env) ? ["/pricing"] : [])];
+/** Public apex pages search engines may index (pricing only exists with billing on), and the summary for language models. */
+const indexablePages = (env: Env) => ["/", "/help", "/privacy", "/terms", "/security", ...(billingOn(env) ? ["/pricing"] : []), "/llms.txt"];
 
 /** Opt a public apex page out of the default noindex (see the fetch handler). */
 function indexable(response: Response): Response {
@@ -738,7 +739,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
     if (url.searchParams.get("deep") === "1") await directory(env).workspace("healthz");
     return new Response("ok", { headers: { "Cache-Control": "no-store" } });
   }
-  // Search engines may index the front page, help, pricing and the policies, nothing else.
+  // Search engines may index the front page, help, pricing, the policies and llms.txt, nothing else.
   if (path === "/robots.txt") {
     const allow = indexablePages(env).map((p) => `Allow: ${p === "/" ? "/$" : `${p}$`}\n`).join("");
     return new Response(`User-agent: *\n${allow}Disallow: /\n\nSitemap: ${apexOrigin(env)}/sitemap.xml\n`, { headers: { "Content-Type": "text/plain" } });
@@ -749,6 +750,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
       headers: { "Content-Type": "application/xml", "Cache-Control": "public, max-age=3600" },
     });
   }
+  if (path === "/llms.txt") return indexable(llmsTxt(brand, env.WORKSPACE_SUFFIX, billingOn(env)));
   if (PREVIEW_BOT.test(request.headers.get("User-Agent") ?? "")) return previewPage({ url: url.href, origin: url.origin, title: PRODUCT, description: DESCRIPTION });
   const viewer = await currentViewer(request, env);
   const operator = viewer.email !== null && operatorEmails(env).has(viewer.email);

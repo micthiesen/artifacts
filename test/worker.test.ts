@@ -106,11 +106,20 @@ test("signed out, the apex shows the splash page, with the examples and the word
   expect((await fetchAs(`${APEX}/login`)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
   // (Billing is off here, so there's no pricing page to list.)
   expect(await (await fetchAs(`${APEX}/robots.txt`)).text()).toBe(
-    "User-agent: *\nAllow: /$\nAllow: /help$\nAllow: /privacy$\nAllow: /terms$\nAllow: /security$\nDisallow: /\n\nSitemap: https://artifacts.test/sitemap.xml\n",
+    "User-agent: *\nAllow: /$\nAllow: /help$\nAllow: /privacy$\nAllow: /terms$\nAllow: /security$\nAllow: /llms.txt$\nDisallow: /\n\nSitemap: https://artifacts.test/sitemap.xml\n",
   );
   const sitemap = await (await fetchAs(`${APEX}/sitemap.xml`)).text();
-  expect([...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1])).toEqual(["/", "/help", "/privacy", "/terms", "/security"].map((p) => `https://artifacts.test${p}`));
+  expect([...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1])).toEqual(["/", "/help", "/privacy", "/terms", "/security", "/llms.txt"].map((p) => `https://artifacts.test${p}`));
   expect((await fetchAs(`${APEX}/help`)).headers.get("X-Robots-Tag")).toBe("all");
+  // llms.txt says what this is and links the agent docs; pricing stays out while billing is off.
+  const llms = await fetchAs(`${APEX}/llms.txt`);
+  expect(llms.headers.get("Content-Type")).toStartWith("text/plain");
+  expect(llms.headers.get("X-Robots-Tag")).toBe("all");
+  const llmsText = await llms.text();
+  expect(llmsText).toStartWith("# artifacts.boo\n\n> ");
+  expect(llmsText).toContain("https://<workspace>.artifacts.test/mcp");
+  expect(llmsText).toContain("https://raw.githubusercontent.com/micthiesen/artifacts.boo/main/docs/guide.md");
+  expect(llmsText).not.toContain("/pricing");
   expect(await (await fetchAs(`${APEX}/help`)).text()).toContain('<link rel="canonical" href="https://artifacts.test/help">');
   // What the front page tells search engines is only what's true: no offers while there's no pricing, no ratings.
   const ld = JSON.parse(/<script type="application\/ld\+json">(.*?)<\/script>/.exec(html)![1]);

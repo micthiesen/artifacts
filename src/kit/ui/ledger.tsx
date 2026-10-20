@@ -48,7 +48,6 @@ function LedgerInner({ id, fields, data, sort, total, title, description, addLab
   const seed = useRows(data);
   const [editing, setEditing] = React.useState<{ key: string | null; values: Record<string, FormValue> } | null>(null);
   const [error, setError] = React.useState<{ field: string; text: string } | null>(null);
-  const errorId = `ledger-${id}-error`;
   const root = React.useRef<HTMLDivElement>(null);
   useArrivals(root, `ledger/${id}`);
 
@@ -164,16 +163,10 @@ function LedgerInner({ id, fields, data, sort, total, title, description, addLab
                     setError(null);
                   }}
                   onEnter={save}
-                  invalid={error?.field === f.name}
-                  errorId={errorId}
+                  error={error?.field === f.name ? error.text : undefined}
                 />
               ))}
             </div>
-            {error && (
-              <p id={errorId} role="alert" className="text-sm text-negative">
-                {error.text}
-              </p>
-            )}
             <div className="flex flex-wrap gap-2">
               <Button type="button" size="sm" onClick={save}>
                 {editing.key ? "Save" : addLabel}

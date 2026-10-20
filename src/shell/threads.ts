@@ -11,7 +11,8 @@ export type DrawerOptions = {
   canResolveAny: boolean;
   isOwner: boolean;
   readSeq: number;
-  send: (msg: SyncClientMessage) => void;
+  /** Sends a message; false when it couldn't go (offline), so the caller keeps what was typed. */
+  send: (msg: SyncClientMessage) => boolean;
   /** Ask the frame to scroll to and flash a thread's anchor. */
   focus: (threadId: string) => void;
   /** Threads changed: the frame redraws highlights. */
@@ -30,6 +31,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
   let readSeq = opts.readSeq;
   let activeId: string | null = null;
   const replyDrafts = new Map<string, string>();
+  /** Comments sent but not yet saved, by cid: a rejected one puts its text back. */
+  const unsaved = new Map<string, { thread: string; text: string } | { anchor: Anchor | null; text: string }>();
   let pendingFocus: string | null = null;
 
   const nameOf = (email: string) => {
@@ -50,7 +53,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       render();
       markRead();
     } else {
-      draft = null;
+      // A comment you started stays for when the drawer opens again; an empty one goes.
+      if (!draft?.text?.trim()) draft = null;
       activeId = null;
       opts.onThreads(visibleThreads());
     }
@@ -228,7 +232,9 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       const send = () => {
         const text = reply.value.trim();
         if (!text) return;
-        opts.send({ t: "comment", cid: cid(), thread: t.id, text });
+        const id = cid();
+        if (!opts.send({ t: "comment", cid: id, thread: t.id, text })) return;
+        unsaved.set(id, { thread: t.id, text });
         replyDrafts.delete(t.id);
         reply.value = "";
       };
@@ -269,7 +275,9 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     const submit = () => {
       const text = input.value.trim();
       if (!text) return;
-      opts.send({ t: "comment", cid: cid(), anchor, text });
+      const id = cid();
+      if (!opts.send({ t: "comment", cid: id, anchor, text })) return;
+      unsaved.set(id, { anchor, text });
       draft = null;
       render();
     };
@@ -278,9 +286,13 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
         e.preventDefault();
         submit();
       }
+      // Escape leaves a comment you've started (Cancel discards it); an empty one just closes.
       if (e.key === "Escape") {
-        draft = null;
-        render();
+        if (input.value.trim()) input.blur();
+        else {
+          draft = null;
+          render();
+        }
       }
     });
     attachMentions(input);
@@ -413,7 +425,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     },
     compose(anchor: Anchor) {
       if (!opts.canComment) return;
-      draft = { anchor };
+      // Text already typed moves to the new selection rather than being dropped.
+      draft = { anchor, text: draft?.text };
       filter = "open";
       setOpen(true);
     },
@@ -431,6 +444,23 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     },
     show() {
       setOpen(true);
+    },
+    /** A comment was saved: forget its text. */
+    sent(cid: string) {
+      unsaved.delete(cid);
+    },
+    /** A comment was rejected: put its text back where it was typed (unless something new is being typed there). */
+    failed(cid: string) {
+      const lost = unsaved.get(cid);
+      if (!lost) return;
+      unsaved.delete(cid);
+      if ("thread" in lost) {
+        filter = threads.get(lost.thread)?.resolved ? "resolved" : "open";
+        if (!replyDrafts.get(lost.thread)?.trim()) replyDrafts.set(lost.thread, lost.text);
+        pendingFocus = lost.thread;
+      } else if (!draft?.text?.trim()) draft = { anchor: lost.anchor, text: lost.text };
+      if (isOpen()) render();
+      else setOpen(true);
     },
     unread: unreadCount,
   };

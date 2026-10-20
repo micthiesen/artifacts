@@ -100,19 +100,27 @@ describe("remote changes", () => {
   test("only what someone else added or changed reaches the arrival listeners, after the page updates", async () => {
     initAs({ email: "a@x.dev", role: "edit" }, { "check/c/x": { done: true }, "poll/p/a@x.dev": ["Yes"], "poll/p/c@x.dev": ["Yes"] });
     const heard: string[][] = [];
-    const stop = store.onRemoteChange((keys) => heard.push(keys));
+    const kinds: string[] = [];
+    const stop = store.onRemoteChange((keys, kind) => {
+      heard.push(keys);
+      kinds.push(kind);
+    });
     // Your own write coming back is not an arrival.
     store.applyShared({ "poll/p/a@x.dev": ["No"] });
     // From someone else: a new key, a changed one, a removal of an existing key, and a value written again as it was.
-    store.applyShared({ "poll/p/b@x.dev": ["No"], "poll/p/c@x.dev": ["No"], "check/c/x": null, "poll/p/a@x.dev": ["No"] }, true);
+    store.applyShared({ "poll/p/b@x.dev": ["No"], "poll/p/c@x.dev": ["No"], "check/c/x": null, "poll/p/a@x.dev": ["No"] }, "remote");
     expect(heard).toEqual([]);
     expect(store.getShared("check/c/x")).toBeUndefined();
     await flush();
     expect(heard).toEqual([["poll/p/b@x.dev", "poll/p/c@x.dev"]]);
-    stop();
-    store.applyShared({ n: 1 }, true);
+    // Your own write the server refused, rolled back: reported as such.
+    store.applyShared({ "poll/p/a@x.dev": ["Yes"] }, "reverted");
     await flush();
-    expect(heard).toHaveLength(1);
+    expect(kinds).toEqual(["remote", "reverted"]);
+    stop();
+    store.applyShared({ n: 1 }, "remote");
+    await flush();
+    expect(heard).toHaveLength(2);
   });
 });
 

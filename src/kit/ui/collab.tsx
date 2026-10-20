@@ -4,7 +4,7 @@ import { Check, Plus, Send, Trash2, X } from "./icons.ts";
 import * as React from "react";
 import { useShared, useSharedMap, useViewer } from "../hooks.ts";
 import { Avatar, AvatarGroup, Badge, Button, Input, Label, Textarea } from "./primitives.tsx";
-import { Checkbox, Select, Tooltip } from "./controls.tsx";
+import { Checkbox, Popover, PopoverContent, PopoverTrigger, Select } from "./controls.tsx";
 import { Table } from "./table.tsx";
 import { getBoot } from "../store.ts";
 import { cueAfterRender, moveAfterRender, useArrivals } from "../feedback.ts";
@@ -18,9 +18,26 @@ function ReadOnlyNote({ email }: { email: string | null }) {
   );
 }
 
-/** A tooltip can't scroll: the first few names, then how many more. */
+/** For a label: the first few names, then how many more. */
 function namesList(names: string[], max = 8): string {
   return names.length > max ? `${names.slice(0, max - 1).join(", ")} and ${names.length - max + 1} more` : names.join(", ");
+}
+
+/** Who did something, in a popover: tap or keyboard reaches it, not only hover. */
+function NameList({ title, emails }: { title: React.ReactNode; emails: string[] }) {
+  return (
+    <>
+      <div className="mb-2 text-[13px] text-muted-foreground">{title}</div>
+      <ul className="flex flex-col gap-1.5">
+        {emails.map((e) => (
+          <li key={e} className="flex min-w-0 items-center gap-2">
+            <Avatar email={e} size="sm" className="ring-0" />
+            <span className="min-w-0 truncate">{displayName(e)}</span>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
 }
 
 /** The element inside `root` whose `data-<attr>` is `value`. */
@@ -66,45 +83,63 @@ export function Poll({ id, options, multiple = false, question, className }: { i
           const chosen = mine.includes(o);
           const pct = (who.length / maxCount) * 100;
           return (
-            <button
+            // The vote button covers the whole row (its ::after); the voters button sits above it, so
+            // tapping the faces lists the names instead of voting.
+            <div
               key={o}
-              type="button"
-              role={multiple ? "checkbox" : "radio"}
-              aria-checked={chosen}
-              disabled={!viewer.canWrite}
-              onClick={() => vote(o)}
               className={cn(
-                "group relative isolate flex w-full items-center gap-3 overflow-hidden rounded-lg border bg-background/40 px-3.5 py-2.5 text-left text-[15px] transition-colors outline-none",
-                "focus-visible:focus-halo enabled:cursor-pointer enabled:hover:border-primary/45",
+                "relative isolate flex w-full items-center gap-3 rounded-lg border bg-background/40 px-3.5 py-2.5 text-[15px] transition-colors",
+                "has-[[data-vote]:focus-visible]:focus-halo",
+                viewer.canWrite && "hover:border-primary/45",
                 chosen ? "border-primary/60" : "border-border",
               )}
             >
               {/* Result bar: scaled with transform so it animates without layout. */}
-              <span
-                className={cn("absolute inset-0 -z-10 origin-left transition-transform duration-(--motion-data) ease-(--motion-ease)", chosen ? "bg-signal opacity-25" : "bg-muted")}
-                style={{ transform: `scaleX(${who.length ? pct / 100 : 0})` }}
-                aria-hidden
-              />
-              <span
-                data-mark={o}
-                className={cn(
-                  "relative flex size-[18px] shrink-0 items-center justify-center border transition-colors",
-                  multiple ? "rounded-[5px]" : "rounded-full",
-                  chosen ? "border-transparent bg-primary bg-signal text-primary-foreground" : "border-input bg-card",
-                )}
-              >
-                {chosen && <Check className="size-3" strokeWidth={3} />}
+              <span className="absolute inset-0 -z-10 overflow-hidden rounded-[inherit]" aria-hidden>
+                <span
+                  className={cn("absolute inset-0 origin-left transition-transform duration-(--motion-data) ease-(--motion-ease)", chosen ? "bg-signal opacity-25" : "bg-muted")}
+                  style={{ transform: `scaleX(${who.length ? pct / 100 : 0})` }}
+                />
               </span>
-              <span className="relative min-w-0 flex-1 font-medium">{o}</span>
+              <button
+                type="button"
+                data-vote=""
+                role={multiple ? "checkbox" : "radio"}
+                aria-checked={chosen}
+                disabled={!viewer.canWrite}
+                onClick={() => vote(o)}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left outline-none after:absolute after:inset-0 after:rounded-[inherit] after:content-[''] enabled:cursor-pointer"
+              >
+                <span
+                  data-mark={o}
+                  className={cn(
+                    "relative flex size-[18px] shrink-0 items-center justify-center border transition-colors",
+                    multiple ? "rounded-[5px]" : "rounded-full",
+                    chosen ? "border-transparent bg-primary bg-signal text-primary-foreground" : "border-input bg-card",
+                  )}
+                >
+                  {chosen && <Check className="size-3" strokeWidth={3} />}
+                </span>
+                <span className="relative min-w-0 flex-1 font-medium">{o}</span>
+              </button>
               {who.length > 0 && (
-                <Tooltip content={namesList(who.map(displayName))}>
-                  <span className="relative">
+                <Popover>
+                  <PopoverTrigger
+                    openOnHover
+                    delay={300}
+                    render={<button type="button" />}
+                    aria-label={`Who voted for ${o}: ${namesList(who.map(displayName))}`}
+                    className="relative -m-1 flex cursor-pointer rounded-full p-1 outline-none focus-visible:focus-halo"
+                  >
                     <AvatarGroup emails={who} max={3} />
-                  </span>
-                </Tooltip>
+                  </PopoverTrigger>
+                  <PopoverContent side="top" className="w-auto max-w-64 p-3">
+                    <NameList title={`Voted for ${o}`} emails={who} />
+                  </PopoverContent>
+                </Popover>
               )}
-              <span className="relative w-6 text-right text-sm text-muted-foreground tabular-nums">{who.length}</span>
-            </button>
+              <span className="pointer-events-none relative w-6 text-right text-sm text-muted-foreground tabular-nums">{who.length}</span>
+            </div>
           );
         })}
       </div>
@@ -141,7 +176,7 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
     if (!viewer.canWrite) return;
     const cur = map.get(slug);
     map.set(slug, { ...(cur ?? {}), done: !cur?.done, by: viewer.email, at: cur?.at ?? Date.now(), ...(added ? { text, added: true } : {}) });
-    if (!cur?.done) moveAfterRender(() => root.current && byData(root.current, "slug", slug)?.querySelector("[role=checkbox]"));
+    if (!cur?.done) moveAfterRender(() => root.current && byData(root.current, "slug", slug)?.querySelector("[data-box]"));
   }
 
   // Works with or without native form submission (the frame CSP sets form-action 'none').
@@ -160,36 +195,53 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
           const st = map.get(slug);
           const done = !!st?.done;
           return (
-            <li key={slug} data-slug={slug} className="group flex items-center gap-3 px-4 py-2.5">
+            <li key={slug} data-slug={slug} className="group flex items-center gap-3 px-4">
+              {/* The whole row (box and text) is the checkbox, so the text toggles it and names it. */}
               <button
                 type="button"
                 role="checkbox"
                 aria-checked={done}
                 disabled={!viewer.canWrite}
                 onClick={() => toggle(slug, text, added)}
-                className={cn(
-                  "flex size-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-colors outline-none focus-visible:focus-halo enabled:cursor-pointer",
-                  done ? "border-positive bg-positive text-background" : "border-input bg-background/60 enabled:hover:border-primary/60",
-                )}
+                className="group/check flex min-w-0 flex-1 items-start gap-3 rounded-md py-2.5 text-left outline-none focus-visible:focus-halo enabled:cursor-pointer"
               >
-                {done && <Check className="size-3.5" strokeWidth={3} />}
+                <span
+                  data-box=""
+                  aria-hidden
+                  className={cn(
+                    // On the first line of a wrapping item: its line is 15px × 1.375, about 1px taller than the box.
+                    "mt-px flex size-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-colors",
+                    done ? "border-positive bg-positive text-background" : cn("border-input bg-background/60", viewer.canWrite && "group-hover/check:border-primary/85"),
+                  )}
+                >
+                  {done && <Check className="size-3.5" strokeWidth={3} />}
+                </span>
+                <span className={cn("min-w-0 flex-1 text-[15px] leading-snug transition-colors", done && "text-muted-foreground line-through decoration-muted-foreground/50")}>
+                  {text}
+                </span>
               </button>
-              <span className={cn("min-w-0 flex-1 text-[15px] leading-snug transition-colors", done && "text-muted-foreground line-through decoration-muted-foreground/50")}>
-                {text}
-              </span>
               {done && st?.by && (
-                <Tooltip content={`Done by ${displayName(st.by)}`}>
-                  <span>
+                <Popover>
+                  <PopoverTrigger
+                    openOnHover
+                    delay={300}
+                    render={<button type="button" />}
+                    aria-label={`Done by ${displayName(st.by)}`}
+                    className="-m-1 flex cursor-pointer rounded-full p-1 outline-none focus-visible:focus-halo"
+                  >
                     <Avatar email={st.by} size="sm" />
-                  </span>
-                </Tooltip>
+                  </PopoverTrigger>
+                  <PopoverContent side="top" className="w-auto max-w-64 p-3">
+                    <NameList title="Done by" emails={[st.by]} />
+                  </PopoverContent>
+                </Popover>
               )}
               {added && viewer.canWrite && (
                 <button
                   type="button"
                   aria-label={`Remove ${text}`}
                   onClick={() => map.delete(slug)}
-                  className="cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-negative focus-visible:opacity-100"
+                  className="relative cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 after:absolute after:-inset-1 after:content-[''] hover:text-negative focus-visible:opacity-100 pointer-coarse:opacity-70"
                 >
                   <X className="size-3.5" />
                 </button>
@@ -272,8 +324,8 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
                   <button
                     type="button"
                     aria-label="Delete comment"
-                    onClick={() => map.delete(key)}
-                    className="ml-auto cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-negative focus-visible:opacity-100"
+                    onClick={() => confirm("Delete this comment?") && map.delete(key)}
+                    className="relative ml-auto cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 after:absolute after:-inset-1 after:content-[''] hover:text-negative focus-visible:opacity-100 pointer-coarse:opacity-70"
                   >
                     <Trash2 className="size-3.5" />
                   </button>
@@ -299,7 +351,7 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
               className="min-h-16"
             />
             <div className="mt-2 flex items-center justify-end gap-3">
-              <span className="text-xs text-muted-foreground">⌘/Ctrl + Enter</span>
+              <span className="text-xs text-muted-foreground pointer-coarse:hidden">⌘/Ctrl + Enter</span>
               <Button type="button" onClick={submit} size="sm" disabled={!text.trim()}>
                 <Send /> Comment
               </Button>
@@ -557,41 +609,44 @@ export function emptyValue(f: FormField): FormValue {
   return f.type === "checkbox" ? false : "";
 }
 
-/** One labelled form control (Form and Ledger). */
+/** One labelled form control (Form and Ledger), with its error message right under it. */
 export function FieldControl({
   field: f,
   fid,
   value,
   onChange,
   onEnter,
-  invalid,
-  errorId,
+  error,
 }: {
   field: FormField;
   fid: string;
   value: FormValue;
   onChange: (v: FormValue) => void;
   onEnter: (e: React.SyntheticEvent) => void;
-  invalid: boolean;
-  errorId: string;
+  /** Set when this field failed the last check: shown under it and linked to it. */
+  error?: string;
 }) {
   const label = f.label ?? f.name;
-  const describedBy = [f.hint ? `${fid}-hint` : "", invalid ? errorId : ""].filter(Boolean).join(" ") || undefined;
-  const required = f.required ? <span className="text-muted-foreground">*</span> : null;
+  const errorId = `${fid}-error`;
+  const describedBy = [f.hint ? `${fid}-hint` : "", error ? errorId : ""].filter(Boolean).join(" ") || undefined;
+  // Optional fields are marked rather than required ones (a ticked box is never "optional").
+  const optional = !f.required && f.type !== "checkbox" ? <span className="font-normal text-muted-foreground"> (optional)</span> : null;
+  const aria = { "aria-describedby": describedBy, "aria-invalid": error ? true : undefined, "aria-required": f.required || undefined };
   const control =
     f.type === "checkbox" ? (
-      <Checkbox
-        id={fid}
-        checked={value === true}
-        onCheckedChange={(c) => onChange(c === true)}
-        label={<>{label}{required}</>}
-        aria-describedby={describedBy}
-        aria-invalid={invalid || undefined}
-      />
+      <Checkbox id={fid} checked={value === true} onCheckedChange={(c) => onChange(c === true)} label={label} {...aria} />
     ) : f.type === "select" ? (
-      <Select options={f.options ?? []} value={typeof value === "string" && value ? value : null} onValueChange={(v) => onChange(String(v ?? ""))} placeholder={f.placeholder} aria-label={label} />
+      <Select
+        id={fid}
+        options={f.options ?? []}
+        value={typeof value === "string" && value ? value : null}
+        onValueChange={(v) => onChange(String(v ?? ""))}
+        placeholder={f.placeholder}
+        aria-label={f.required ? label : `${label} (optional)`}
+        {...aria}
+      />
     ) : f.type === "textarea" ? (
-      <Textarea id={fid} value={String(value)} onChange={(e) => onChange(e.target.value)} placeholder={f.placeholder} rows={3} aria-describedby={describedBy} aria-invalid={invalid || undefined} />
+      <Textarea id={fid} value={String(value)} onChange={(e) => onChange(e.target.value)} placeholder={f.placeholder} rows={3} {...aria} />
     ) : (
       <Input
         id={fid}
@@ -603,21 +658,22 @@ export function FieldControl({
           if (e.key === "Enter" && !e.nativeEvent.isComposing) onEnter(e);
         }}
         placeholder={f.placeholder}
-        aria-describedby={describedBy}
-        aria-invalid={invalid || undefined}
+        {...aria}
       />
     );
   return (
     <div className="flex flex-col gap-1.5">
       {f.type === "select" ? (
-        <span className="text-sm leading-none font-medium">
+        <span className="text-sm leading-none font-medium" aria-hidden>
           {label}
-          {required}
+          {optional}
         </span>
       ) : f.type !== "checkbox" ? (
         <Label htmlFor={fid}>
-          {label}
-          {required}
+          <span>
+            {label}
+            {optional}
+          </span>
         </Label>
       ) : null}
       {control}
@@ -625,6 +681,11 @@ export function FieldControl({
         <span id={`${fid}-hint`} className="text-[13px] text-muted-foreground">
           {f.hint}
         </span>
+      )}
+      {error && (
+        <p id={errorId} role="alert" className="text-sm text-negative">
+          {error}
+        </p>
       )}
     </div>
   );
@@ -637,8 +698,10 @@ export function readField(f: FormField, raw: FormValue | undefined): { error: st
   if (f.required && (v === "" || v === false || v === undefined)) return { error: `${label} is required.` };
   if (v === "" || v === undefined) return { value: undefined };
   if (f.type === "number") {
-    // Decimal numbers only, with a comma accepted as the decimal point.
-    const text = String(v).replace(/\s/g, "");
+    // Decimal numbers only, with a comma accepted as the decimal point, and spaces or a currency sign ("$12.50", "1 200 €") ignored.
+    const text = String(v)
+      .replace(/\s/g, "")
+      .replace(/^([-+]?)[$€£¥]|[$€£¥]$/g, "$1");
     if (!/^[-+]?(\d+([.,]\d*)?|[.,]\d+)$/.test(text)) return { error: `${label} must be a number.` };
     return { value: Number(text.replace(",", ".")) };
   }
@@ -683,7 +746,6 @@ export function Form({
   const [editing, setEditing] = React.useState(false);
   const [error, setError] = React.useState<{ field: string; text: string } | null>(null);
   const open = viewer.canWrite && (!mine || editing);
-  const errorId = `form-${id}-error`;
 
   function set(name: string, v: FormValue) {
     setValues((prev) => ({ ...prev, [name]: v }));
@@ -721,8 +783,7 @@ export function Form({
         value={values[f.name] ?? emptyValue(f)}
         onChange={(v) => set(f.name, v)}
         onEnter={submit}
-        invalid={error?.field === f.name}
-        errorId={errorId}
+        error={error?.field === f.name ? error.text : undefined}
       />
     );
   }
@@ -741,11 +802,6 @@ export function Form({
         {open ? (
           <form onSubmit={submit} className="flex flex-col gap-4">
             {fields.map(field)}
-            {error && (
-              <p id={errorId} role="alert" className="text-sm text-negative">
-                {error.text}
-              </p>
-            )}
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" size="sm" onClick={submit}>
                 <Send /> {mine ? "Save changes" : submitLabel}
@@ -787,7 +843,7 @@ export function Form({
                 </Button>
               )}
             </div>
-            <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+            <dl className="grid grid-cols-[fit-content(40%)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
               {fields.map((f) => (
                 <React.Fragment key={f.name}>
                   <dt className="text-muted-foreground">{f.label ?? f.name}</dt>

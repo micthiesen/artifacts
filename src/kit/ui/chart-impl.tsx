@@ -125,7 +125,7 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
     const key = y[0];
     chart = (
       <PieChart>
-        <Pie data={rows} dataKey={key} nameKey={x} innerRadius="55%" outerRadius="85%" paddingAngle={2} stroke="var(--card)" strokeWidth={2}>
+        <Pie isAnimationActive={false} data={rows} dataKey={key} nameKey={x} innerRadius="55%" outerRadius="85%" paddingAngle={2} stroke="var(--card)" strokeWidth={2}>
           {rows.map((_, i) => (
             <Cell key={i} fill={c[i % c.length]} />
           ))}
@@ -143,7 +143,7 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
         {tooltip}
         {legendEl}
         {y.map((k, i) => (
-          <Bar key={k} dataKey={k} fill={c[i % c.length]} radius={stacked ? 0 : [4, 4, 0, 0]} stackId={stacked ? "s" : undefined} maxBarSize={48} />
+          <Bar key={k} isAnimationActive={false} dataKey={k} fill={c[i % c.length]} radius={stacked ? 0 : [4, 4, 0, 0]} stackId={stacked ? "s" : undefined} maxBarSize={48} />
         ))}
       </BarChart>
     );
@@ -167,6 +167,7 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
         {y.map((k, i) => (
           <Area
             key={k}
+            isAnimationActive={false}
             dataKey={k}
             type="monotone"
             stroke={c[i % c.length]}
@@ -187,7 +188,7 @@ export default function ChartImpl({ type, rows, x, y, height, stacked, colors, l
         {tooltip}
         {legendEl}
         {y.map((k, i) => (
-          <Line key={k} dataKey={k} type="monotone" stroke={c[i % c.length]} strokeWidth={2} dot={rows.length <= 24 ? { r: 2.5, strokeWidth: 0, fill: c[i % c.length] } : false} activeDot={{ r: 4.5, stroke: "var(--card)", strokeWidth: 2 }} />
+          <Line key={k} isAnimationActive={false} dataKey={k} type="monotone" stroke={c[i % c.length]} strokeWidth={2} dot={rows.length <= 24 ? { r: 2.5, strokeWidth: 0, fill: c[i % c.length] } : false} activeDot={{ r: 4.5, stroke: "var(--card)", strokeWidth: 2 }} />
         ))}
       </LineChart>
     );

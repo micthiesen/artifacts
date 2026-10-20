@@ -17,7 +17,7 @@ import { cn } from "./utils.ts";
 
 const popupMotion =
   "origin-[var(--transform-origin)] transition-[transform,opacity] duration-(--motion-base) ease-(--motion-ease) data-ending-style:scale-[0.97] data-ending-style:opacity-0 data-starting-style:scale-[0.97] data-starting-style:opacity-0";
-const surface = "rounded-lg border border-input/70 bg-popover text-popover-foreground shadow-pop";
+const surface = "rounded-lg border border-input/40 bg-popover text-popover-foreground shadow-pop";
 
 // ---- Select -----------------------------------------------------------------------
 
@@ -31,7 +31,11 @@ export function Select({
   placeholder = "Select…",
   disabled,
   className,
+  id,
   "aria-label": ariaLabel,
+  "aria-describedby": describedBy,
+  "aria-invalid": invalid,
+  "aria-required": ariaRequired,
 }: {
   options: SelectOption[];
   value?: string | number | null;
@@ -40,7 +44,12 @@ export function Select({
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  /** On the trigger, so a `<label htmlFor>` and focus() reach it. */
+  id?: string;
   "aria-label"?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: boolean;
+  "aria-required"?: boolean;
 }) {
   const items = options.map((o) => (typeof o === "object" ? { value: o.value, label: o.label ?? String(o.value), disabled: o.disabled } : { value: o, label: String(o) }));
   return (
@@ -52,10 +61,15 @@ export function Select({
       disabled={disabled}
     >
       <BaseSelect.Trigger
+        id={id}
         aria-label={ariaLabel}
+        aria-describedby={describedBy}
+        aria-invalid={invalid}
+        aria-required={ariaRequired}
         className={cn(
           "inline-flex h-9 min-w-40 cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-background/60 pr-2.5 pl-3 text-sm outline-none select-none",
-          "hover:border-muted-foreground/40 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 data-disabled:opacity-60 data-popup-open:border-ring",
+          "hover:border-muted-foreground/65 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 data-disabled:opacity-60 data-popup-open:border-ring",
+          "aria-invalid:border-negative aria-invalid:focus-visible:border-negative aria-invalid:focus-visible:ring-negative/25",
           className,
         )}
       >
@@ -73,7 +87,7 @@ export function Select({
                   key={String(it.value)}
                   value={it.value}
                   disabled={it.disabled}
-                  className="grid cursor-default grid-cols-[minmax(0,1fr)_1rem] items-center gap-3 rounded-md py-1.5 pr-2 pl-2.5 text-sm outline-none select-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground data-selected:font-medium"
+                  className="grid cursor-default grid-cols-[minmax(0,1fr)_1rem] items-center gap-3 rounded-[calc(var(--radius)-5px)] py-1.5 pr-2 pl-2.5 text-sm outline-none select-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground data-selected:font-medium"
                 >
                   <BaseSelect.ItemText className="[overflow-wrap:anywhere]">{it.label}</BaseSelect.ItemText>
                   <BaseSelect.ItemIndicator className="text-primary">
@@ -105,8 +119,9 @@ type ToggleProps = {
 function withLabel(control: React.ReactNode, label: React.ReactNode, disabled?: boolean) {
   if (label == null) return control;
   return (
-    <label className={cn("inline-flex cursor-pointer items-center gap-2.5 text-sm leading-snug select-none", disabled && "cursor-not-allowed opacity-60")}>
-      {control}
+    <label className={cn("inline-flex cursor-pointer items-start gap-2.5 text-sm leading-snug select-none", disabled && "cursor-not-allowed opacity-60")}>
+      {/* One line tall, so the control sits on the label's first line when it wraps. */}
+      <span className="flex h-[1lh] shrink-0 items-center">{control}</span>
       <span>{label}</span>
     </label>
   );
@@ -121,7 +136,7 @@ export function Checkbox({ checked, defaultChecked, onCheckedChange, disabled, l
       disabled={disabled}
       indeterminate={indeterminate}
       className={cn(
-        "inline-flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border border-input bg-background/60 transition-colors outline-none hover:border-primary/60",
+        "inline-flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border border-input bg-background/60 transition-colors outline-none hover:border-primary/85 aria-invalid:border-negative",
         "focus-visible:focus-halo data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground data-indeterminate:border-primary data-indeterminate:bg-primary data-indeterminate:text-primary-foreground data-disabled:cursor-not-allowed",
         className,
       )}
@@ -193,7 +208,7 @@ export function Slider({
       disabled={disabled}
       className={cn("w-full data-disabled:opacity-60", className)}
     >
-      <BaseSlider.Control className="flex w-full cursor-pointer touch-none items-center py-2 select-none">
+      <BaseSlider.Control className="flex w-full cursor-pointer touch-none items-center py-3 select-none">
         <BaseSlider.Track className="relative h-1.5 w-full rounded-full bg-muted">
           <BaseSlider.Indicator className="rounded-full bg-primary bg-signal" />
           {Array.from({ length: thumbs }, (_, i) => (
@@ -223,7 +238,7 @@ export function TabsList({ className, children, ...props }: React.ComponentProps
     >
       {children}
       {/* Active pill with a gradient underline; it slides via translate. */}
-      <BaseTabs.Indicator className="absolute top-0 left-0 -z-10 h-[var(--active-tab-height)] w-[var(--active-tab-width)] translate-x-[var(--active-tab-left)] translate-y-[var(--active-tab-top)] rounded-md border border-border bg-popover shadow-card transition-[translate,width] duration-(--motion-base) ease-(--motion-ease) after:absolute after:inset-x-2.5 after:bottom-0 after:h-[2px] after:rounded-full after:bg-signal" />
+      <BaseTabs.Indicator className="absolute top-0 left-0 -z-10 h-[var(--active-tab-height)] w-[var(--active-tab-width)] translate-x-[var(--active-tab-left)] translate-y-[var(--active-tab-top)] rounded-[calc(var(--radius)-5px)] border border-border bg-popover shadow-card transition-[translate,width] duration-(--motion-base) ease-(--motion-ease) after:absolute after:inset-x-2.5 after:bottom-0 after:h-[2px] after:rounded-full after:bg-signal" />
     </BaseTabs.List>
   );
 }
@@ -231,7 +246,7 @@ export function TabsTrigger({ className, ...props }: React.ComponentProps<typeof
   return (
     <BaseTabs.Tab
       className={cn(
-        "inline-flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium whitespace-nowrap transition-colors outline-none hover:text-foreground focus-visible:focus-halo data-active:text-foreground [&_svg]:size-4",
+        "inline-flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded-[calc(var(--radius)-5px)] px-3 text-sm font-medium whitespace-nowrap transition-colors outline-none hover:text-foreground focus-visible:focus-halo data-active:text-foreground [&_svg]:size-4",
         className as string,
       )}
       {...props}
@@ -255,7 +270,7 @@ export function DialogTrigger({ className, ...props }: React.ComponentProps<type
 export function DialogContent({ className, children, showClose = true, ...props }: React.ComponentProps<typeof BaseDialog.Popup> & { showClose?: boolean }) {
   return (
     <BaseDialog.Portal>
-      <BaseDialog.Backdrop className="fixed inset-0 z-50 bg-black/60 transition-opacity duration-(--motion-base) data-ending-style:opacity-0 data-starting-style:opacity-0" />
+      <BaseDialog.Backdrop className="fixed inset-0 z-50 bg-[oklch(0.08_0.02_275/0.6)] transition-opacity duration-(--motion-base) data-ending-style:opacity-0 data-starting-style:opacity-0" />
       <BaseDialog.Popup
         className={cn(
           surface,
@@ -335,7 +350,7 @@ export function Tooltip({
         <BaseTooltip.Positioner side={side} sideOffset={6} className="z-50">
           <BaseTooltip.Popup
             className={cn(
-              "max-w-xs rounded-md border border-input/70 bg-secondary px-2.5 py-1.5 text-xs leading-snug text-foreground shadow-pop",
+              "max-w-xs rounded-md border border-input/40 bg-secondary px-2.5 py-1.5 text-xs leading-snug text-foreground shadow-pop",
               popupMotion,
               "data-instant:transition-none",
             )}

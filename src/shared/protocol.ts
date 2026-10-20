@@ -46,7 +46,7 @@ export type ShellMessage =
       sounds?: boolean;
     }
   /** `remote`: someone else (or another tab) made these changes, so the page shows them arriving. */
-  | { t: "shared"; changes: Record<string, JsonValue | null>; remote?: boolean }
+  | { t: "shared"; changes: Record<string, JsonValue | null>; remote?: boolean; reverted?: boolean }
   | { t: "sounds"; on: boolean }
   | { t: "presence"; viewers: string[] }
   | { t: "theme"; theme: "light" | "dark" }

@@ -45,11 +45,11 @@ Primitives
 - `Badge({tone?: neutral|primary|positive|caution|negative|outline})`
 - `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter`
 - `Input`, `Textarea`, `Label`, `Select({options: (string|{value,label})[], value?, defaultValue?, onValueChange?, placeholder?})`
-- `Checkbox` and `Switch({checked?, defaultChecked?, onCheckedChange?, label?})`; `Slider({value?, defaultValue?, min?, max?, step?, onValueChange?})`
+- `Checkbox` and `Switch({checked?, defaultChecked?, onCheckedChange?, label?})` (without `label`, pass `aria-label`); `Slider({value?, defaultValue?, min?, max?, step?, onValueChange?, "aria-label"?})`
 - `Tabs({defaultValue})` > `TabsList` > `TabsTrigger({value})`, then `TabsContent({value})`
 - `Accordion` > `AccordionItem({value})` > `AccordionTrigger` + `AccordionContent`
 - `Dialog` > `DialogTrigger` (`render={<Button/>}` to restyle) + `DialogContent` > `DialogHeader` > `DialogTitle`, `DialogDescription`, then `DialogFooter`, `DialogClose`
-- `Popover` > `PopoverTrigger` + `PopoverContent({side?, align?})`; `Tooltip({content, side?})` wraps one element
+- `Popover` > `PopoverTrigger` + `PopoverContent({side?, align?})`; `Tooltip({content, side?})` wraps one element; it's a hover extra that phones never show, so nothing people need goes only in a tooltip
 - `Progress({value, max?, label?})`, `Separator`, `Avatar({email?|name?, src?, size?})`, `AvatarGroup({emails})`, `Kbd`, `Skeleton`, `ScrollArea`
 
 Live and shared (they work without extra code; view-only and anonymous viewers see results read-only)
@@ -136,8 +136,9 @@ export default function App() {
           <div className="flex gap-2">
             <Input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={!canWrite}
               onKeyDown={(e) => e.key === "Enter" && add()} />
-            <Button onClick={add} disabled={!canWrite || !draft}>Add</Button>
+            <Button onClick={add} disabled={!canWrite || !draft}>Add item</Button>
           </div>
+          {!canWrite && <p className="text-[13px] text-muted-foreground">Read-only: ask the owner for edit access.</p>}
           <Button variant="ghost" onClick={() => setTitle("Launch list (final)")}>Rename</Button>
         </CardContent>
       </Card>

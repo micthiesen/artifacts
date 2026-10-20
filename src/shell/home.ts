@@ -37,7 +37,11 @@ function toast(message: string, action?: { label: string; run: () => void }) {
     el.append(b);
   }
   document.body.append(el);
-  toastTimer = setTimeout(() => el.remove(), 6000);
+  // Timing out, it drops away (.toast.leaving); a new toast replacing it just takes its place.
+  toastTimer = setTimeout(() => {
+    el.classList.add("leaving");
+    toastTimer = setTimeout(() => el.remove(), motionMs("fast"));
+  }, 6000);
 }
 
 function adjustCount(delta: number) {
@@ -71,11 +75,14 @@ function syncEmpty(list: HTMLUListElement) {
 function removeRow(li: HTMLLIElement) {
   const list = li.parentElement as HTMLUListElement;
   li.classList.add("leaving");
+  // Once it has faded, the rows below glide up into its place instead of jumping.
   const done = () => {
     removals.delete(li);
-    li.remove();
-    li.classList.remove("leaving");
-    syncEmpty(list);
+    glide(list, () => {
+      li.remove();
+      li.classList.remove("leaving");
+      syncEmpty(list);
+    });
   };
   // The row fades out on the base duration (.list li in shell.css) before it goes.
   const wait = motionMs("base");

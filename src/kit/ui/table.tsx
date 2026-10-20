@@ -308,7 +308,7 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
       {!asCards && search && (
         <div className="relative mb-3 max-w-xs">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter…" className="pl-9" aria-label="Filter rows" />
+          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter…" className="pl-10" aria-label="Filter rows" />
         </div>
       )}
       {!asCards && (
@@ -330,7 +330,7 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
                       type="button"
                       onClick={() => toggleSort(c.key)}
                       className={cn(
-                        "group inline-flex cursor-pointer items-center gap-1 rounded outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40",
+                        "group inline-flex cursor-pointer items-center gap-1 rounded outline-none hover:text-foreground focus-visible:focus-halo",
                         active && "text-foreground",
                         c.align === "right" && "flex-row-reverse",
                       )}
@@ -339,7 +339,7 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
                       {active ? (
                         desc ? <ArrowDown className="size-3.5" /> : <ArrowUp className="size-3.5" />
                       ) : (
-                        <ChevronsUpDown className="size-3.5 opacity-0 transition-opacity group-hover:opacity-60" />
+                        <ChevronsUpDown className="size-3.5 opacity-0 transition-opacity group-hover:opacity-60 group-focus-visible:opacity-60 pointer-coarse:opacity-60" />
                       )}
                     </button>
                   </th>

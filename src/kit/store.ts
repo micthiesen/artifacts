@@ -165,41 +165,46 @@ export function setShared(key: string, value: JsonValue | null | undefined): boo
   return true;
 }
 
-/** Apply authoritative changes from the shell (null deletes). `remote`: someone else made them. */
-export function applyShared(changes: Record<string, JsonValue | null>, remote = false) {
+/**
+ * Apply authoritative changes from the shell (null deletes). `remote`: someone else made them;
+ * `reverted`: the server refused this viewer's own write and the value went back.
+ */
+export function applyShared(changes: Record<string, JsonValue | null>, kind?: ChangeKind) {
   let next: Record<string, JsonValue> | null = null;
-  // What someone else added or changed (not removed, not rewritten as it was) shows arriving.
+  // What someone else added or changed (not removed, not rewritten as it was) shows arriving,
+  // and what snapped back shows where it did.
   const arrived: string[] = [];
   for (const [k, v] of Object.entries(changes)) {
     next ??= { ...shared };
     if (v === null || v === undefined) delete next[k];
     else {
-      if (remote && JSON.stringify(shared[k]) !== JSON.stringify(v)) arrived.push(k);
+      if (kind && JSON.stringify(shared[k]) !== JSON.stringify(v)) arrived.push(k);
       next[k] = v;
     }
   }
   if (next) {
     shared = next;
     emit();
-    if (arrived.length) notifyRemote(arrived);
+    if (arrived.length && kind) notifyRemote(arrived, kind);
   }
 }
 
-type RemoteListener = (keys: string[]) => void;
+export type ChangeKind = "remote" | "reverted";
+type RemoteListener = (keys: string[], kind: ChangeKind) => void;
 const remoteListeners = new Set<RemoteListener>();
 
-/** Called with the keys of each change someone else made, once the page shows it. */
+/** Called with the keys of each change someone else made, or of a refused write rolled back, once the page shows it. */
 export function onRemoteChange(l: RemoteListener): () => void {
   remoteListeners.add(l);
   return () => remoteListeners.delete(l);
 }
 
-function notifyRemote(keys: string[]) {
+function notifyRemote(keys: string[], kind: ChangeKind) {
   // Nobody sees a hidden page, and frames wait until it's shown: queued arrivals would all replay at once then.
   if (typeof document !== "undefined" && document.hidden) return;
   // A frame later, so React has rendered the change and the elements to show it on exist.
   const run = () => {
-    for (const l of [...remoteListeners]) l(keys);
+    for (const l of [...remoteListeners]) l(keys, kind);
   };
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
   else setTimeout(run, 0);
