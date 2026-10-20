@@ -6,6 +6,14 @@ Artifacts get per-viewer browser storage, live shared state and anchored
 comments. Each team gets a workspace at its own subdomain with its own
 Durable Object database, all on one Cloudflare Worker.
 
+## Try the hosted service
+
+1. [Create a Free workspace](https://artifacts.boo/) with no card required. Free includes 20 artifacts and 3 members; guests are free. See [pricing](https://artifacts.boo/pricing) for all limits and the Team plan.
+2. Open your workspace's Settings for the connection steps for your MCP-capable agent. Each workspace has its own MCP address.
+3. Ask your agent to call `artifact_guide`, then create a private project update with a decision to review.
+
+You do not need to deploy the app to use the hosted service. [Help](https://artifacts.boo/help) covers setup and feedback. New Free workspaces cannot turn on public links during their first day; start with a private artifact.
+
 - **Agents** connect to a workspace's MCP server at `https://<slug>.<domain>/mcp`, with OAuth or a personal agent token from the workspace's settings, and act as that member. Call `artifact_guide` first. Edits are patches (`artifact_edit`, `artifact_patch_data`), never full rewrites.
 - **Viewers** open `/a/<id>` in the workspace. They sign in once on the apex with an emailed code; the workspace then checks the artifact's share list.
 - **Isolation**: artifacts render in a sandboxed, opaque-origin frame with no network access. Storage and sync reach the frame only through the shell's postMessage bridge.
