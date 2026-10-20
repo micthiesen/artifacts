@@ -1,6 +1,6 @@
 // The signed-in viewer's inbox bell (with its unread count; it opens the latest
 // items in a panel) and avatar in the top bar. The avatar opens a small menu in three parts: this artifact (Manage
-// artifact… for owners, Copy link, Print, Pin), then how it reaches you (its
+// artifact… for owners, Copy link, Copy as Markdown, Print, Pin), then how it reaches you (its
 // notification level as one segmented row, Sounds), then links: in a workspace
 // its notification settings (which link on to your account), settings (members)
 // and list, and your workspaces; on the apex your account and workspaces; Sign out.
@@ -32,6 +32,8 @@ export type AccountMenuOptions = {
   /** Returns a link to copy; owners get a presigned sign-in link, others the page URL. */
   copyLink?: () => Promise<string>;
   copyLabel?: string;
+  /** Copies this artifact as one Markdown document, for agents without MCP (fetches the URL it returns). */
+  markdownUrl?: string;
   /** On an artifact page: pin it to the top of your own list, or unpin it. */
   pin?: { pinned: () => boolean; toggle: () => Promise<void> };
   /** On an artifact page: its id, so opening it reads what the inbox said about it. */
@@ -257,6 +259,30 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
       } catch {
         el.textContent = "Couldn't copy";
       }
+      setTimeout(() => (el.textContent = label), 1600);
+    });
+  }
+  if (options.markdownUrl) {
+    const url = options.markdownUrl;
+    const label = "Copy as Markdown for AI";
+    const el = item(label, async () => {
+      el.setAttribute("aria-busy", "true");
+      const text = fetch(url).then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.text();
+      });
+      try {
+        // Safari only copies inside the click, so hand it the pending text; writeText where ClipboardItem can't wait.
+        if (typeof ClipboardItem !== "undefined" && ClipboardItem.supports?.("text/plain") !== false) {
+          await navigator.clipboard.write([new ClipboardItem({ "text/plain": text.then((t) => new Blob([t], { type: "text/plain" })) })]);
+        } else {
+          await navigator.clipboard.writeText(await text);
+        }
+        el.textContent = "Copied ✓";
+      } catch {
+        el.textContent = "Couldn't copy";
+      }
+      el.removeAttribute("aria-busy");
       setTimeout(() => (el.textContent = label), 1600);
     });
   }

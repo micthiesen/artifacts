@@ -47,6 +47,7 @@ import { checkLayout } from "./layout.ts";
 import { exportRun, latestManifest } from "./snapshot.ts";
 import { DATA_TABLES } from "./tables.ts";
 import { PasskeyError, registrationOptions, signInOptions, verifyRegistration, verifySignIn } from "./passkeys.ts";
+import { artifactMarkdown } from "./markdown.ts";
 export { isTestAddress };
 import {
   b64url,
@@ -624,6 +625,25 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
         "Cache-Control": "private, max-age=600",
         "Cross-Origin-Resource-Policy": "cross-origin",
       },
+    });
+  }
+
+  // The artifact as Markdown, for agents that can't use MCP. Same access as the page.
+  const md = /^\/a\/([a-z0-9]+)\.md$/.exec(path);
+  if (md) {
+    const id = md[1];
+    const here = session.only === id ? session : viewer;
+    if (!(await hub.roleFor(id, here.email))) {
+      if (!here.email && (request.headers.get("Accept") ?? "").includes("text/html")) return signIn(path);
+      return new Response(here.email ? "Not available to you, or it doesn't exist.\n" : "Sign in to read this artifact.\n", {
+        status: here.email ? 403 : 401,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+    const meta = await hub.meta(id);
+    if (!meta) return new Response("not found", { status: 404 });
+    return new Response(artifactMarkdown(meta, await hub.files(id), `${url.origin}/a/${id}`), {
+      headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" },
     });
   }
 

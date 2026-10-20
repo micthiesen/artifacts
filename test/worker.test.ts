@@ -367,3 +367,29 @@ test("return paths can't become another host; grep patterns that could stall are
   expect(Date.now() - t2).toBeLessThan(100);
   expect(grepFiles({ "a.md": "foo then bar" }, "foo.*bar")).toHaveLength(1);
 });
+
+test("an artifact reads as Markdown at /a/<id>.md, with the page's access", async () => {
+  const files = { "index.mdx": "# Costs\n\nIntro with ```inline``` ticks.\n\n<Table data=\"rows.json\" />\n", "data/rows.json": '[{"a":1}]', "chart.tsx": "export default () => null;\n" };
+  expect((await h.hub.create({ title: "Costs", description: "What it costs", files, owner: MIA })).ok).toBe(true);
+  const id = h.hub.list(MIA)[0].id;
+  const { location, nonceCookie } = await signIn(MIA, ACME);
+  const cookie = cookieOf(await fetchAs(location, { cookie: nonceCookie }));
+  const res = await fetchAs(`${ACME}/a/${id}.md`, { cookie });
+  expect(res.status).toBe(200);
+  expect(res.headers.get("Content-Type")).toBe("text/markdown; charset=utf-8");
+  const text = await res.text();
+  expect(text).toStartWith(`# Costs\n\n> Exported from artifacts.boo: ${ACME}/a/${id}\n`);
+  expect(text).toContain("> What it costs");
+  // The page's own title isn't repeated; its body is inline, other files fenced, data last.
+  expect(text.match(/^# Costs$/gm)?.length).toBe(1);
+  expect(text).toContain('<Table data="rows.json" />');
+  expect(text.indexOf("## chart.tsx")).toBeLessThan(text.indexOf("## data/rows.json"));
+  expect(text).toContain('## data/rows.json\n\n```json\n[{"a":1}]\n```');
+  // Signed out: agents get a 401, browsers the sign-in page; someone without access a 403.
+  expect((await fetchAs(`${ACME}/a/${id}.md`)).status).toBe(401);
+  expect((await fetchAs(`${ACME}/a/${id}.md`, { headers: { Accept: "text/html" } })).status).toBe(302);
+  await h.hub.setMember("zed@corp.com", "member", ADMIN);
+  const zed = await signIn("zed@corp.com", ACME);
+  const zedCookie = cookieOf(await fetchAs(zed.location, { cookie: zed.nonceCookie }));
+  expect((await fetchAs(`${ACME}/a/${id}.md`, { cookie: zedCookie })).status).toBe(403);
+});

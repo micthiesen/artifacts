@@ -66,6 +66,7 @@ if (meSlot && boot.viewer.email) {
   const common = {
     seen: boot.artifactId,
     print: printArtifact,
+    markdownUrl: `/a/${boot.artifactId}.md`,
     watch: { level: boot.watch ?? "participating", set: setWatch },
     onSounds: (on: boolean) => post({ t: "sounds", on }),
     ...(pin ? { pin } : {}),
