@@ -383,8 +383,9 @@ test("an artifact reads as Markdown at /a/<id>.md, with the page's access", asyn
   // The page's own title isn't repeated; its body is inline, other files fenced, data last.
   expect(text.match(/^# Costs$/gm)?.length).toBe(1);
   expect(text).toContain('<Table data="rows.json" />');
-  expect(text.indexOf("## chart.tsx")).toBeLessThan(text.indexOf("## data/rows.json"));
-  expect(text).toContain('## data/rows.json\n\n```json\n[{"a":1}]\n```');
+  expect(text.indexOf("### File: chart.tsx")).toBeLessThan(text.indexOf("### File: data/rows.json"));
+  expect(text).toContain('### File: data/rows.json\n\n```json\n[{"a":1}]\n```');
+  expect(text).toContain("- `index.mdx` (");
   // Signed out: agents get a 401, browsers the sign-in page; someone without access a 403.
   expect((await fetchAs(`${ACME}/a/${id}.md`)).status).toBe(401);
   expect((await fetchAs(`${ACME}/a/${id}.md`, { headers: { Accept: "text/html" } })).status).toBe(302);
@@ -392,4 +393,12 @@ test("an artifact reads as Markdown at /a/<id>.md, with the page's access", asyn
   const zed = await signIn("zed@corp.com", ACME);
   const zedCookie = cookieOf(await fetchAs(zed.location, { cookie: zed.nonceCookie }));
   expect((await fetchAs(`${ACME}/a/${id}.md`, { cookie: zedCookie })).status).toBe(403);
+  // Shared or public, others can read it too; a link session only for its own artifact.
+  await h.hub.share(id, { add: [{ email: "zed@corp.com", role: "view" }] });
+  expect((await fetchAs(`${ACME}/a/${id}.md`, { cookie: zedCookie })).status).toBe(200);
+  const { signToken } = await import("../src/worker/session.ts");
+  const other = (await h.hub.create({ title: "Other", files: { "index.md": "x" }, owner: MIA })).ok && h.hub.list(MIA)[0].id;
+  const linked = cookieOf(await fetchAs(`${ACME}/s/${await signToken(h.env.LOGIN_SECRET, "link", 600, { e: MIA, a: other, w: "acme" })}`));
+  expect((await fetchAs(`${ACME}/a/${other}.md`, { cookie: linked })).status).toBe(200);
+  expect((await fetchAs(`${ACME}/a/${id}.md`, { cookie: linked })).status).toBe(401);
 });

@@ -230,6 +230,13 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
   who.textContent = email;
   menu.append(who);
 
+  // Copy results are said aloud as well as shown on the item; outside the menu, which may close first.
+  const live = document.createElement("span");
+  live.className = "sr-only";
+  live.setAttribute("role", "status");
+  slot.append(live);
+  const announce = (text: string) => (live.textContent = text);
+
   const item = (label: string, onSelect: () => void | Promise<void>) => {
     const el = document.createElement("button");
     el.type = "button";
@@ -256,8 +263,10 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
         const link = await copyLink();
         await navigator.clipboard.writeText(link);
         el.textContent = "Copied ✓";
+        announce("Copied the link");
       } catch {
         el.textContent = "Couldn't copy";
+        announce("Couldn't copy the link");
       }
       setTimeout(() => (el.textContent = label), 1600);
     });
@@ -265,25 +274,35 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
   if (options.markdownUrl) {
     const url = options.markdownUrl;
     const label = "Copy as Markdown for AI";
+    let busy = false;
     const el = item(label, async () => {
+      if (busy) return;
+      busy = true;
       el.setAttribute("aria-busy", "true");
-      const text = fetch(url).then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      el.textContent = "Copying…";
+      const text = fetch(url).then(async (res) => {
+        if (!res.ok) throw new Error(res.status === 401 || res.status === 403 ? "Sign in again to copy" : "Couldn't load it");
         return res.text();
       });
+      text.catch(() => {});
+      let result = "Copied ✓";
       try {
-        // Safari only copies inside the click, so hand it the pending text; writeText where ClipboardItem can't wait.
+        // Safari only copies inside the click, so it gets the pending text; elsewhere writeText after the fetch.
         if (typeof ClipboardItem !== "undefined" && ClipboardItem.supports?.("text/plain") !== false) {
           await navigator.clipboard.write([new ClipboardItem({ "text/plain": text.then((t) => new Blob([t], { type: "text/plain" })) })]);
         } else {
           await navigator.clipboard.writeText(await text);
         }
-        el.textContent = "Copied ✓";
       } catch {
-        el.textContent = "Couldn't copy";
+        result = await text.then(() => "Couldn't copy", (err: Error) => err.message);
       }
+      el.textContent = result;
+      announce(result === "Copied ✓" ? "Copied the artifact as Markdown" : result);
       el.removeAttribute("aria-busy");
-      setTimeout(() => (el.textContent = label), 1600);
+      setTimeout(() => {
+        el.textContent = label;
+        busy = false;
+      }, 1600);
     });
   }
   if (options.print) {

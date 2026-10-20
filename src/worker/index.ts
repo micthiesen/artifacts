@@ -635,15 +635,17 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
     const here = session.only === id ? session : viewer;
     if (!(await hub.roleFor(id, here.email))) {
       if (!here.email && (request.headers.get("Accept") ?? "").includes("text/html")) return signIn(path);
-      return new Response(here.email ? "Not available to you, or it doesn't exist.\n" : "Sign in to read this artifact.\n", {
+      return new Response(here.email
+        ? "This artifact isn't shared with you, or it doesn't exist.\n"
+        : "This artifact is private. Open it in a browser and use \"Copy as Markdown for AI\" in your account menu, or ask its owner for a public link.\n", {
         status: here.email ? 403 : 401,
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
     const meta = await hub.meta(id);
     if (!meta) return new Response("not found", { status: 404 });
-    return new Response(artifactMarkdown(meta, await hub.files(id), `${url.origin}/a/${id}`), {
-      headers: { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" },
+    return new Response(artifactMarkdown(meta, await hub.files(id), `${url.origin}/a/${id}`, await hub.assets(id)), {
+      headers: { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": "inline", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" },
     });
   }
 
