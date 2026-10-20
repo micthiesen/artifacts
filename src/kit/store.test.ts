@@ -93,6 +93,29 @@ describe("shared state", () => {
   });
 });
 
+describe("remote changes", () => {
+  // No DOM here, so the store falls back to a timeout for its frame: one turn of the loop flushes it.
+  const flush = () => new Promise((r) => setTimeout(r, 5));
+
+  test("only what someone else added or changed reaches the arrival listeners, after the page updates", async () => {
+    initAs({ email: "a@x.dev", role: "edit" }, { "check/c/x": { done: true }, "poll/p/a@x.dev": ["Yes"], "poll/p/c@x.dev": ["Yes"] });
+    const heard: string[][] = [];
+    const stop = store.onRemoteChange((keys) => heard.push(keys));
+    // Your own write coming back is not an arrival.
+    store.applyShared({ "poll/p/a@x.dev": ["No"] });
+    // From someone else: a new key, a changed one, a removal of an existing key, and a value written again as it was.
+    store.applyShared({ "poll/p/b@x.dev": ["No"], "poll/p/c@x.dev": ["No"], "check/c/x": null, "poll/p/a@x.dev": ["No"] }, true);
+    expect(heard).toEqual([]);
+    expect(store.getShared("check/c/x")).toBeUndefined();
+    await flush();
+    expect(heard).toEqual([["poll/p/b@x.dev", "poll/p/c@x.dev"]]);
+    stop();
+    store.applyShared({ n: 1 }, true);
+    await flush();
+    expect(heard).toHaveLength(1);
+  });
+});
+
 describe("prefix entries", () => {
   test("returns sorted remainder keys and is referentially stable across unrelated writes", () => {
     initAs({ email: "a@x.dev", role: "edit" }, { "todo/b": 2, "todo/a": 1, "todos/x": 9, other: 0 });

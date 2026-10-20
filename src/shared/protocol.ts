@@ -42,8 +42,12 @@ export type ShellMessage =
       backlinks?: { id: string; title: string }[];
       /** Titles of the artifacts this one links to (that this viewer can open), by id, so links can read as titles. */
       linkTitles?: Record<string, string>;
+      /** The viewer turned Sounds on for this device. */
+      sounds?: boolean;
     }
-  | { t: "shared"; changes: Record<string, JsonValue | null> }
+  /** `remote`: someone else (or another tab) made these changes, so the page shows them arriving. */
+  | { t: "shared"; changes: Record<string, JsonValue | null>; remote?: boolean }
+  | { t: "sounds"; on: boolean }
   | { t: "presence"; viewers: string[] }
   | { t: "theme"; theme: "light" | "dark" }
   /** Threads to highlight (open ones; resolved ones are not drawn). */

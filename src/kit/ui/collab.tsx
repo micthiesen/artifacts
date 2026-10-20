@@ -7,6 +7,7 @@ import { Avatar, AvatarGroup, Badge, Button, Input, Label, Textarea } from "./pr
 import { Checkbox, Select, Tooltip } from "./controls.tsx";
 import { Table } from "./table.tsx";
 import { getBoot } from "../store.ts";
+import { cueAfterRender, moveAfterRender, useArrivals } from "../feedback.ts";
 import { cn, displayName, relativeTime, slugify, useNow } from "./utils.ts";
 
 function ReadOnlyNote({ email }: { email: string | null }) {
@@ -15,6 +16,12 @@ function ReadOnlyNote({ email }: { email: string | null }) {
       {email === null ? "Sign in with edit access to take part." : "You have view access, so this is read-only."}
     </p>
   );
+}
+
+/** The element inside `root` whose `data-<attr>` is `value`. */
+function byData(root: HTMLElement, attr: string, value: string): Element | null {
+  for (const el of root.querySelectorAll(`[data-${attr}]`)) if (el.getAttribute(`data-${attr}`) === value) return el;
+  return null;
 }
 
 export function rand(n = 6) {
@@ -27,6 +34,8 @@ export function rand(n = 6) {
 export function Poll({ id, options, multiple = false, question, className }: { id: string; options: string[]; multiple?: boolean; question?: React.ReactNode; className?: string }) {
   const votes = useSharedMap<string[]>(`poll/${id}`);
   const viewer = useViewer();
+  const root = React.useRef<HTMLDivElement>(null);
+  useArrivals(root, `poll/${id}`);
   const mine = (viewer.email && votes.get(viewer.email)) || [];
   const voters = votes.entries.filter(([, v]) => Array.isArray(v) && v.length > 0);
   const byOption = new Map<string, string[]>(options.map((o) => [o, []]));
@@ -40,10 +49,11 @@ export function Poll({ id, options, multiple = false, question, className }: { i
     const next = multiple ? (has ? mine.filter((o) => o !== option) : [...mine, option]) : has ? [] : [option];
     if (next.length === 0) votes.delete(viewer.email);
     else votes.set(viewer.email, next);
+    if (!has) moveAfterRender(() => root.current && byData(root.current, "mark", option));
   }
 
   return (
-    <div className={cn("my-6 rounded-xl border border-border bg-card p-5 shadow-card", className)}>
+    <div ref={root} className={cn("my-6 rounded-xl border border-border bg-card p-5 shadow-card", className)}>
       {question && <div className="mb-4 font-semibold">{question}</div>}
       <div className="flex flex-col gap-2" role={multiple ? "group" : "radiogroup"}>
         {options.map((o) => {
@@ -66,11 +76,12 @@ export function Poll({ id, options, multiple = false, question, className }: { i
             >
               {/* Result bar: scaled with transform so it animates without layout. */}
               <span
-                className={cn("absolute inset-0 -z-10 origin-left transition-transform duration-500 ease-out", chosen ? "bg-signal opacity-25" : "bg-muted")}
+                className={cn("absolute inset-0 -z-10 origin-left transition-transform duration-(--motion-data) ease-(--motion-ease)", chosen ? "bg-signal opacity-25" : "bg-muted")}
                 style={{ transform: `scaleX(${who.length ? pct / 100 : 0})` }}
                 aria-hidden
               />
               <span
+                data-mark={o}
                 className={cn(
                   "relative flex size-[18px] shrink-0 items-center justify-center border transition-colors",
                   multiple ? "rounded-[5px]" : "rounded-full",
@@ -110,6 +121,8 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
   const map = useSharedMap<CheckItem>(`check/${id}`);
   const viewer = useViewer();
   const [draft, setDraft] = React.useState("");
+  const root = React.useRef<HTMLDivElement>(null);
+  useArrivals(root, `check/${id}`, (slug, el) => byData(el, "slug", slug));
   const base = items.map((text) => ({ slug: slugify(text), text, added: false }));
   const baseSlugs = new Set(base.map((b) => b.slug));
   const extra = map.entries
@@ -123,6 +136,7 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
     if (!viewer.canWrite) return;
     const cur = map.get(slug);
     map.set(slug, { ...(cur ?? {}), done: !cur?.done, by: viewer.email, at: cur?.at ?? Date.now(), ...(added ? { text, added: true } : {}) });
+    if (!cur?.done) moveAfterRender(() => root.current && byData(root.current, "slug", slug)?.querySelector("[role=checkbox]"));
   }
 
   // Works with or without native form submission (the frame CSP sets form-action 'none').
@@ -135,13 +149,13 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
   }
 
   return (
-    <div className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
+    <div ref={root} className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
       <ul className="divide-y divide-border/70">
         {all.map(({ slug, text, added }) => {
           const st = map.get(slug);
           const done = !!st?.done;
           return (
-            <li key={slug} className="group flex items-center gap-3 px-4 py-2.5">
+            <li key={slug} data-slug={slug} className="group flex items-center gap-3 px-4 py-2.5">
               <button
                 type="button"
                 role="checkbox"
@@ -216,18 +230,22 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
   const now = useNow();
   const [text, setText] = React.useState("");
   const list = map.entries.filter(([, c]) => c && typeof c.text === "string");
+  const root = React.useRef<HTMLElement>(null);
+  useArrivals(root, `comments/${id}`, (key, el) => byData(el, "key", key));
 
   function submit(e?: React.SyntheticEvent) {
     e?.preventDefault();
     const t = text.trim();
     if (!t || !viewer.canWrite) return;
     const at = Date.now();
-    map.set(`${String(at).padStart(14, "0")}-${rand()}`, { by: viewer.email, text: t, at });
+    const key = `${String(at).padStart(14, "0")}-${rand()}`;
+    map.set(key, { by: viewer.email, text: t, at });
     setText("");
+    cueAfterRender(() => root.current && byData(root.current, "key", key), "send");
   }
 
   return (
-    <section className={cn("my-8", className)}>
+    <section ref={root} className={cn("my-8", className)}>
       {title && (
         <h3 className="mb-4 flex items-baseline gap-2 text-base font-semibold">
           {title}
@@ -237,7 +255,7 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
       {list.length === 0 && <p className="mb-4 text-sm text-muted-foreground">No comments yet.</p>}
       <ul className="flex flex-col gap-5">
         {list.map(([key, c]) => (
-          <li key={key} className="group flex gap-3">
+          <li key={key} data-key={key} className="group flex gap-3">
             <Avatar email={c.by} />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2 text-sm">
@@ -298,6 +316,8 @@ type Note = { text: string; by: string | null; at: number };
 export function Notes({ id, placeholder = "Write shared notes…", rows = 6, className }: { id: string; placeholder?: string; rows?: number; className?: string }) {
   const [note, setNote] = useShared<Note | null>(`notes/${id}`, null);
   const viewer = useViewer();
+  const root = React.useRef<HTMLDivElement>(null);
+  useArrivals(root, `notes/${id}`);
   const now = useNow();
   const remote = note?.text ?? "";
   const [draft, setDraft] = React.useState(remote);
@@ -330,7 +350,7 @@ export function Notes({ id, placeholder = "Write shared notes…", rows = 6, cla
   }
 
   return (
-    <div className={cn("my-6", className)}>
+    <div ref={root} className={cn("my-6", className)}>
       {viewer.canWrite ? (
         <Textarea
           value={draft}
@@ -387,6 +407,8 @@ export function Approval({
   const map = useSharedMap<Decision>(`approve/${id}`);
   const viewer = useViewer();
   const now = useNow();
+  const root = React.useRef<HTMLDivElement>(null);
+  useArrivals(root, `approve/${id}`, (email, el) => byData(el, "email", email));
   const mine = viewer.email ? map.get(viewer.email) : undefined;
   const [note, setNote] = React.useState("");
   // A decision made on an earlier version than this page no longer counts: the page changed since.
@@ -423,10 +445,11 @@ export function Approval({
     // The version on screen: the server records that, so an old tab approves what it showed.
     map.set(viewer.email, { decision, ...(text ? { note: text } : {}), ...(pageVersion ? { version: pageVersion } : {}) });
     setNote("");
+    cueAfterRender(() => root.current?.querySelector("[role=status]"), decision === "approve" ? "approve" : "send");
   }
 
   return (
-    <div className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
+    <div ref={root} className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
       <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-4 pb-3">
         <div className="min-w-0">
           <div className="font-semibold">{title}</div>
@@ -440,7 +463,7 @@ export function Approval({
       {(decisions.length > 0 || waiting.length > 0) && (
         <ul className="divide-y divide-border/70 border-t border-border">
           {decisions.map(([email, d]) => (
-            <li key={email} className="flex gap-3 px-5 py-2.5">
+            <li key={email} data-email={email} className="flex gap-3 px-5 py-2.5">
               <Avatar email={email} size="sm" />
               <div className="min-w-0 flex-1">
                 {/* As tall as the avatar, so the name line centers on it. */}
@@ -643,6 +666,8 @@ export function Form({
   const map = useSharedMap<FormResponse>(`form/${id}`);
   const viewer = useViewer();
   const now = useNow();
+  const root = React.useRef<HTMLDivElement>(null);
+  useArrivals(root, `form/${id}`, (_, el) => el.querySelector("[data-responses]"));
   const responses = map.entries
     .filter(([, r]) => r && r.values && typeof r.values === "object" && !Array.isArray(r.values))
     .sort((a, b) => (a[1].at ?? Infinity) - (b[1].at ?? Infinity));
@@ -679,6 +704,7 @@ export function Form({
     const version = getBoot()?.version;
     map.set(viewer.email, { values: out, ...(version ? { version } : {}) });
     setEditing(false);
+    cueAfterRender(() => root.current?.querySelector("[data-sent]"), "send");
   }
 
   function field(f: FormField) {
@@ -699,7 +725,7 @@ export function Form({
   const show = (v: FormValue | undefined) => (v === undefined || v === "" ? "—" : typeof v === "boolean" ? (v ? "Yes" : "No") : String(v));
 
   return (
-    <div className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
+    <div ref={root} className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
       {(title || description) && (
         <div className="px-5 pt-4 pb-1">
           {title && <div className="font-semibold">{title}</div>}
@@ -737,7 +763,7 @@ export function Form({
         ) : mine ? (
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <Badge tone="positive">
+              <Badge tone="positive" data-sent="">
                 <Check /> Sent
               </Badge>
               {mine.at && <span className="text-[13px] text-muted-foreground">{relativeTime(mine.at, now)}</span>}
@@ -770,7 +796,7 @@ export function Form({
         )}
       </div>
       {showResponses && (
-        <div className="border-t border-border px-5 py-3">
+        <div data-responses="" className="border-t border-border px-5 py-3">
           <div className="mb-2 text-[13px] text-muted-foreground">
             {responses.length === 0 ? "No responses yet." : `${responses.length} ${responses.length === 1 ? "response" : "responses"}`}
           </div>

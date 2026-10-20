@@ -195,6 +195,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     if (anchor) c.append(anchor);
     for (const cm of t.comments) {
       const row = el("div", `comment${cm.seq > readSeq && cm.by !== opts.me ? " is-new" : ""}`);
+      row.dataset.comment = cm.id;
       const meta = el("div", "comment-meta");
       const av = el("span", `avatar small${cm.by === "agent" ? " agent" : ""}`);
       if (cm.by === "agent") av.innerHTML = SPARKLE_ICON;
@@ -381,6 +382,14 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
   // ---- public API ---------------------------------------------------------------------
 
   return {
+    /** How many comments a thread has (0 for one not seen yet). */
+    count(id: string): number {
+      return threads.get(id)?.comments.length ?? 0;
+    },
+    /** A comment's row, while the drawer shows it. */
+    commentEl(id: string): HTMLElement | null {
+      return panel.querySelector(`[data-comment="${CSS.escape(id)}"]`);
+    },
     setAll(list: Thread[], ppl: Person[]) {
       threads = new Map(list.map((t) => [t.id, t]));
       people = ppl;

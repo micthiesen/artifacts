@@ -10,6 +10,7 @@ import { Page } from "./ui/layout.tsx";
 import { LinkedFrom } from "./ui/page-extras.tsx";
 import { focusThread, installAnnotations, markChanged, setThreads } from "./annotate.ts";
 import { preparePrint } from "./print.ts";
+import { setSoundsEnabled } from "../shared/sound.ts";
 
 const LS_PREFIX = "ls:";
 
@@ -266,12 +267,16 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     switch (msg.t) {
       case "init":
         store.init({ ...msg, theme: THEME });
+        setSoundsEnabled(msg.sounds === true);
         applyTheme();
         shims?.seedFromStore();
         resolveInit();
         break;
       case "shared":
-        store.applyShared(msg.changes as Record<string, JsonValue | null>);
+        store.applyShared(msg.changes as Record<string, JsonValue | null>, msg.remote === true);
+        break;
+      case "sounds":
+        setSoundsEnabled(msg.on === true);
         break;
       case "presence":
         store.setPresence(msg.viewers);

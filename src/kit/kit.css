@@ -5,6 +5,7 @@
 @source not "./**/*.test.ts";
 @import "./theme.css";
 @import "./annotate.css";
+@import "./motion.css";
 @import "./print.css";
 
 @layer base {
@@ -60,6 +61,7 @@
     *::after {
       animation-duration: 0.01ms !important;
       animation-iteration-count: 1 !important;
+      animation-delay: 0s !important;
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
@@ -119,7 +121,7 @@
 .art-diagram .pele-zoom {
   flex-direction: row !important;
   opacity: 0;
-  transition: opacity 150ms;
+  transition: opacity var(--motion-fast);
 }
 .art-diagram:hover .pele-zoom,
 .art-diagram:focus-within .pele-zoom {

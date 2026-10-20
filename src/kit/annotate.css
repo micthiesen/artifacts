@@ -25,7 +25,7 @@
   width: 3px;
   border-radius: 2px;
   background: var(--primary);
-  animation: art-fade-in 400ms ease-out;
+  animation: art-fade-in var(--motion-slow) var(--motion-ease);
 }
 @media (max-width: 640px) {
   .art-changed::before {
@@ -34,7 +34,7 @@
 }
 
 .art-flash {
-  animation: art-flash 1.2s ease-out;
+  animation: art-flash var(--motion-attention) var(--motion-ease);
 }
 @keyframes art-flash {
   0% {

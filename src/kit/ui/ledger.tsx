@@ -9,6 +9,7 @@ import { Button } from "./primitives.tsx";
 import { emptyValue, FieldControl, rand, readField, type FormField, type FormValue } from "./collab.tsx";
 import { formatValue, Table, useRows, type ColumnSpec, type Format, type Row } from "./table.tsx";
 import { ErrorBoundary } from "./error.tsx";
+import { cueAfterRender, useArrivals } from "../feedback.ts";
 import { cn, displayName, relativeTime, useNow } from "./utils.ts";
 
 export type LedgerField = FormField & { format?: Format };
@@ -48,6 +49,8 @@ function LedgerInner({ id, fields, data, sort, total, title, description, addLab
   const [editing, setEditing] = React.useState<{ key: string | null; values: Record<string, FormValue> } | null>(null);
   const [error, setError] = React.useState<{ field: string; text: string } | null>(null);
   const errorId = `ledger-${id}-error`;
+  const root = React.useRef<HTMLDivElement>(null);
+  useArrivals(root, `ledger/${id}`);
 
   const entries = map.entries.filter(([, e]) => e && e.values && typeof e.values === "object" && !Array.isArray(e.values));
   const rows: Row[] = [
@@ -83,6 +86,8 @@ function LedgerInner({ id, fields, data, sort, total, title, description, addLab
     const key = editing.key ?? `${Date.now().toString(36)}${rand(4)}`;
     map.set(key, { ...(editing.key ? map.get(editing.key) : {}), values: out });
     setEditing(null);
+    // The form closes; its Add button coming back is what you see land.
+    cueAfterRender(() => root.current?.querySelector("[data-ledger-add]"), "send");
   }
 
   const columns: ColumnSpec[] = [
@@ -127,7 +132,7 @@ function LedgerInner({ id, fields, data, sort, total, title, description, addLab
   });
 
   return (
-    <div className={cn("my-6", className)}>
+    <div ref={root} className={cn("my-6", className)}>
       {(title || description) && (
         <div className="mb-2">
           {title && <div className="font-semibold">{title}</div>}
@@ -179,7 +184,7 @@ function LedgerInner({ id, fields, data, sort, total, title, description, addLab
             </div>
           </form>
         ) : (
-          <Button type="button" size="sm" variant="secondary" className="mt-3" onClick={() => start(null)}>
+          <Button type="button" size="sm" variant="secondary" className="mt-3" data-ledger-add="" onClick={() => start(null)}>
             <Plus /> {addLabel}
           </Button>
         ))}

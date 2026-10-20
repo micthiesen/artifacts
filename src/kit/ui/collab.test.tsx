@@ -67,3 +67,24 @@ test("a current approval isn't re-sent by clicking it again", async () => {
   await act(async () => button.click());
   expect(sent.filter((m) => m.t === "shared:set")).toEqual([]);
 });
+
+// Feedback runs a frame after the change renders: wait two.
+const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+test("approving pops the status it changed; someone else's decision glows their row as it arrives", async () => {
+  await show(3, {});
+  const button = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Approve"))!;
+  await act(async () => {
+    button.click();
+    await frame();
+  });
+  expect(container.querySelector("[role=status]")?.classList.contains("art-move-pop")).toBe(true);
+  // In a browser React renders the change before the next frame; act holds it back until its scope ends.
+  await act(async () => store.applyShared({ [`approve/go/${DANA}`]: approve(DANA, 3) }, true));
+  await act(frame);
+  expect(container.querySelector(`[data-email="${DANA}"]`)?.classList.contains("art-move-glow")).toBe(true);
+  // An echo of your own write is not an arrival.
+  await act(async () => store.applyShared({ [`approve/go/${ME}`]: approve(ME, 3) }));
+  await act(frame);
+  expect(container.querySelector(`[data-email="${ME}"]`)?.classList.contains("art-move-glow")).toBe(false);
+});

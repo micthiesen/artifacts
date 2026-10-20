@@ -9,6 +9,8 @@
 // so it gets a way to sign in properly instead of links it can't open).
 import type { WatchLevel } from "../shared/protocol.ts";
 import "./report-errors.ts";
+import { cue, move } from "../shared/motion.ts";
+import { readSoundsCookie, setSoundsEnabled, soundsCookie, soundsScopeOf, unlockAudio } from "../shared/sound.ts";
 
 const LEVELS: [WatchLevel, string][] = [
   ["all", "All activity"],
@@ -32,6 +34,8 @@ export type AccountMenuOptions = {
   pin?: { pinned: () => boolean; toggle: () => Promise<void> };
   /** On an artifact page: its id, so opening it reads what the inbox said about it. */
   seen?: string;
+  /** Sounds were turned on or off here (the artifact page tells its frame). */
+  onSounds?: (on: boolean) => void;
 };
 
 const BELL = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`;
@@ -42,14 +46,22 @@ function mountInboxBell(slot: HTMLElement, href: string, seen?: string) {
   bell.className = "bar-button inbox-bell";
   bell.href = href;
   bell.innerHTML = `${BELL}<span class="count"></span>`;
-  const paint = (unread: number) => {
+  const draw = (unread: number) => {
     bell.querySelector(".count")!.textContent = unread ? (unread > 99 ? "99+" : String(unread)) : "";
     bell.classList.toggle("has-unread", unread > 0);
     const label = unread ? `Inbox, ${unread} unread` : "Inbox";
     bell.setAttribute("aria-label", label);
     bell.title = label;
   };
-  paint(0);
+  draw(0);
+  // Null until the first count arrives. More unread than last time pops the count as it changes (motion only:
+  // the inbox is about other pages).
+  let shown: number | null = null;
+  const paint = (unread: number) => {
+    draw(unread);
+    if (shown !== null && unread > shown) move(bell.querySelector(".count"), "pop");
+    shown = unread;
+  };
   // Coming back to the tab refreshes it, at most every half minute. While an artifact is open, what
   // arrives about it counts as read.
   let last = 0;
@@ -196,6 +208,30 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     paint(watch.level);
     menu.append(group);
   }
+  // Sounds: a per-device choice, remembered in a cookie every workspace on this browser can read.
+  const scope = soundsScopeOf(slot);
+  let soundsOn = readSoundsCookie(document.cookie, scope.name);
+  setSoundsEnabled(soundsOn);
+  const sounds = document.createElement("button");
+  sounds.type = "button";
+  sounds.setAttribute("role", "menuitemcheckbox");
+  sounds.textContent = "Sounds";
+  sounds.title = "Short, quiet sounds when your changes land and when other people's arrive (this device only)";
+  const paintSounds = () => sounds.setAttribute("aria-checked", String(soundsOn));
+  paintSounds();
+  sounds.addEventListener("click", () => {
+    soundsOn = !soundsOn;
+    document.cookie = soundsCookie(soundsOn, scope, location.hostname, location.protocol === "https:");
+    setSoundsEnabled(soundsOn);
+    paintSounds();
+    if (soundsOn) {
+      // This click is the gesture that lets audio start, and the tick says what turning it on sounds like.
+      unlockAudio();
+      cue(sounds, "toggle");
+    }
+    options.onSounds?.(soundsOn);
+  });
+  menu.append(sounds);
   const link = (href: string, label: string) => {
     const here = new URL(href, location.href);
     if (here.origin === location.origin && here.pathname === location.pathname) return;
@@ -237,7 +273,7 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     if (open) paintArchive();
     menu.hidden = !open;
     button.setAttribute("aria-expanded", String(open));
-    if (open) menu.querySelector<HTMLElement>("[role=menuitem], [role=menuitemradio]")?.focus();
+    if (open) menu.querySelector<HTMLElement>("[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]")?.focus();
   }
   button.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -261,7 +297,7 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
   });
   // Menu keys: arrows move between items (wrapping), Home and End jump to the ends.
   menu.addEventListener("keydown", (e) => {
-    const items = [...menu.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio]")];
+    const items = [...menu.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]")];
     const at = items.indexOf(document.activeElement as HTMLElement);
     const next =
       e.key === "ArrowDown" ? (at + 1) % items.length

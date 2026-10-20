@@ -8,6 +8,7 @@ import { useSharedMap, useViewer } from "../hooks.ts";
 import { cn, displayName, humanize, slugify } from "./utils.ts";
 import { formatValue, useRows } from "./table.tsx";
 import { ChevronRight } from "./icons.ts";
+import { moveAfterRender, useArrivals } from "../feedback.ts";
 
 /** A page with at least this many sections gets a contents list under its title. */
 const CONTENTS_MIN_SECTIONS = 4;
@@ -97,12 +98,18 @@ export function TaskCheckbox({ checked }: { checked?: boolean }) {
     const earlier = same.filter((x) => slugify([...x.childNodes].filter((n) => !(n instanceof HTMLElement && (n.tagName === "UL" || n.tagName === "OL"))).map((n) => n.textContent ?? "").join("").trim()).slice(0, 120) === slug).length;
     setKey(earlier ? `${slug}~${earlier + 1}` : slug);
   }, []);
+  const item = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    item.current = ref.current?.closest("li") ?? null;
+  }, []);
+  useArrivals(item, key ? `_kit/tasks/${key}` : null);
   const state = key ? tasks.get(key) : undefined;
   // Until someone ticks it on the page, the source's [x] / [ ] stands.
   const done = state?.done ?? Boolean(checked);
   const toggle = () => {
     if (!key || !viewer.canWrite) return;
     tasks.set(key, { done: !done, by: viewer.email, at: Date.now() });
+    if (!done) moveAfterRender(() => ref.current);
   };
   return (
     <button

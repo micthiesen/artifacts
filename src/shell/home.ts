@@ -3,6 +3,7 @@
 // row to the top of their own list.
 import { setArchived } from "./archive.ts";
 import { setPinned } from "./pins.ts";
+import { motionMs } from "../shared/motion.ts";
 
 // On the list itself, the logo reloads the page (handy for checking changes).
 for (const a of document.querySelectorAll<HTMLAnchorElement>(".bar a[href='/']")) {
@@ -76,9 +77,31 @@ function removeRow(li: HTMLLIElement) {
     li.classList.remove("leaving");
     syncEmpty(list);
   };
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) done();
-  else removals.set(li, setTimeout(done, 180));
+  // The row fades out on the base duration (.list li in shell.css) before it goes.
+  const wait = motionMs("base");
+  if (wait === 0) done();
+  else removals.set(li, setTimeout(done, wait));
   return list;
+}
+
+/** Changes the list's order with a view transition, so rows glide to their new places instead of jumping. */
+let glides = 0;
+function glide(list: HTMLUListElement | null, change: () => void, ...joining: HTMLLIElement[]) {
+  if (!list || !("startViewTransition" in document) || motionMs("slow") === 0) return change();
+  const rows = new Set([...list.querySelectorAll<HTMLLIElement>(":scope > li[data-id]"), ...joining].filter((li) => !li.hidden));
+  for (const li of rows) li.style.viewTransitionName = `row-${li.dataset.id}`;
+  // A newer glide (pinning twice quickly) takes over these names; only the latest one clears them.
+  const mine = ++glides;
+  const clear = () => {
+    if (mine !== glides) return;
+    for (const li of rows) li.style.viewTransitionName = "";
+  };
+  try {
+    document.startViewTransition(change).finished.then(clear, clear);
+  } catch {
+    clear();
+    change();
+  }
 }
 
 /** Put a row back where it belongs: pinned first, then by last update. */
@@ -86,10 +109,17 @@ function restoreRow(li: HTMLLIElement, list: HTMLUListElement) {
   clearTimeout(removals.get(li));
   removals.delete(li);
   li.classList.remove("leaving");
-  list.append(li);
-  placeRow(li);
-  for (const b of li.querySelectorAll<HTMLButtonElement>(".row-action")) b.disabled = false;
-  syncEmpty(list);
+  glide(
+    list,
+    () => {
+      list.append(li);
+      placeRow(li);
+      // Inside the change: a view transition runs it a moment later, and the list isn't empty until then.
+      for (const b of li.querySelectorAll<HTMLButtonElement>(".row-action")) b.disabled = false;
+      syncEmpty(list);
+    },
+    li,
+  );
 }
 
 function undo(li: HTMLLIElement, list: HTMLUListElement, id: string, archive: boolean) {
@@ -132,8 +162,12 @@ function togglePin(button: HTMLButtonElement, li: HTMLLIElement, id: string, tit
       if (r.pinnedAt) li.dataset.pinned = r.pinnedAt;
       else delete li.dataset.pinned;
       paintPin(button, pinned, title);
-      placeRow(li);
-      button.focus();
+      // Focus after the move: moving the focused button drops its focus.
+      glide(li.parentElement as HTMLUListElement | null, () => {
+        if (!li.isConnected) return;
+        placeRow(li);
+        button.focus();
+      });
       // Pins sit at the top of page 1, which may not be this one.
       if (pinned && new URLSearchParams(location.search).has("page") && new URLSearchParams(location.search).get("page") !== "1") toast("Pinned: it's at the top of page 1.");
     },

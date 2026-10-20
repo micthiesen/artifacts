@@ -1,0 +1,25 @@
+/* Feedback motion run by src/shared/motion.ts (src/shell/shell.css has the same
+   two). pop: something you did just landed. glow: someone else changed this.
+   --move-delay holds a motion back to land with a sound that is heard late. */
+.art-move-pop {
+  animation: art-move-pop var(--motion-slow) var(--motion-spring) var(--move-delay, 0ms) both;
+}
+@keyframes art-move-pop {
+  from {
+    transform: scale(0.92);
+    opacity: 0.4;
+  }
+}
+.art-move-glow {
+  animation: art-move-glow var(--motion-attention) var(--motion-ease) var(--move-delay, 0ms);
+}
+@keyframes art-move-glow {
+  from {
+    outline: 2px solid color-mix(in oklab, var(--primary) 60%, transparent);
+    outline-offset: 2px;
+  }
+  to {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+}

@@ -172,7 +172,7 @@ export function Progress({ value, max = 100, label, className }: { value: number
           <div className="absolute inset-y-0 left-0 w-1/3 animate-[art-indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-signal" />
         ) : (
           <div
-            className="absolute inset-0 origin-left rounded-full bg-signal transition-transform duration-500 ease-out"
+            className="absolute inset-0 origin-left rounded-full bg-signal transition-transform duration-(--motion-data) ease-(--motion-ease)"
             style={{ transform: `scaleX(${Math.min(1, Math.max(0, max ? value / max : 0))})` }}
           />
         )}

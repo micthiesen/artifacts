@@ -16,7 +16,7 @@ import { buttonClass } from "./primitives.tsx";
 import { cn } from "./utils.ts";
 
 const popupMotion =
-  "origin-[var(--transform-origin)] transition-[transform,opacity] duration-150 ease-out data-ending-style:scale-[0.97] data-ending-style:opacity-0 data-starting-style:scale-[0.97] data-starting-style:opacity-0";
+  "origin-[var(--transform-origin)] transition-[transform,opacity] duration-(--motion-base) ease-(--motion-ease) data-ending-style:scale-[0.97] data-ending-style:opacity-0 data-starting-style:scale-[0.97] data-starting-style:opacity-0";
 const surface = "rounded-lg border border-input/70 bg-popover text-popover-foreground shadow-pop";
 
 // ---- Select -----------------------------------------------------------------------
@@ -149,7 +149,7 @@ export function Switch({ checked, defaultChecked, onCheckedChange, disabled, lab
       )}
       {...rest}
     >
-      <BaseSwitch.Thumb className="size-4 rounded-full bg-foreground shadow-sm shadow-black/40 transition-transform duration-150 data-checked:translate-x-4 data-checked:bg-white" />
+      <BaseSwitch.Thumb className="size-4 rounded-full bg-foreground shadow-sm shadow-black/40 transition-transform duration-(--motion-fast) data-checked:translate-x-4 data-checked:bg-white" />
     </BaseSwitch.Root>,
     label,
     disabled,
@@ -223,7 +223,7 @@ export function TabsList({ className, children, ...props }: React.ComponentProps
     >
       {children}
       {/* Active pill with a gradient underline; it slides via translate. */}
-      <BaseTabs.Indicator className="absolute top-0 left-0 -z-10 h-[var(--active-tab-height)] w-[var(--active-tab-width)] translate-x-[var(--active-tab-left)] translate-y-[var(--active-tab-top)] rounded-md border border-border bg-popover shadow-card transition-[translate,width] duration-200 ease-out after:absolute after:inset-x-2.5 after:bottom-0 after:h-[2px] after:rounded-full after:bg-signal" />
+      <BaseTabs.Indicator className="absolute top-0 left-0 -z-10 h-[var(--active-tab-height)] w-[var(--active-tab-width)] translate-x-[var(--active-tab-left)] translate-y-[var(--active-tab-top)] rounded-md border border-border bg-popover shadow-card transition-[translate,width] duration-(--motion-base) ease-(--motion-ease) after:absolute after:inset-x-2.5 after:bottom-0 after:h-[2px] after:rounded-full after:bg-signal" />
     </BaseTabs.List>
   );
 }
@@ -255,12 +255,12 @@ export function DialogTrigger({ className, ...props }: React.ComponentProps<type
 export function DialogContent({ className, children, showClose = true, ...props }: React.ComponentProps<typeof BaseDialog.Popup> & { showClose?: boolean }) {
   return (
     <BaseDialog.Portal>
-      <BaseDialog.Backdrop className="fixed inset-0 z-50 bg-black/60 transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0" />
+      <BaseDialog.Backdrop className="fixed inset-0 z-50 bg-black/60 transition-opacity duration-(--motion-base) data-ending-style:opacity-0 data-starting-style:opacity-0" />
       <BaseDialog.Popup
         className={cn(
           surface,
           "before:pointer-events-none before:absolute before:inset-x-6 before:top-0 before:h-px before:bg-signal before:opacity-70",
-          "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl p-6 shadow-2xl transition-[transform,opacity] duration-150",
+          "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl p-6 shadow-2xl transition-[transform,opacity] duration-(--motion-base)",
           "data-ending-style:scale-[0.97] data-ending-style:opacity-0 data-starting-style:scale-[0.97] data-starting-style:opacity-0",
           className as string,
         )}
@@ -367,7 +367,7 @@ export function AccordionTrigger({ className, children, ...props }: React.Compon
         {...props}
       >
         {children}
-        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform duration-200 group-data-panel-open:rotate-180" />
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform duration-(--motion-base) group-data-panel-open:rotate-180" />
       </BaseAccordion.Trigger>
     </BaseAccordion.Header>
   );
@@ -375,7 +375,7 @@ export function AccordionTrigger({ className, children, ...props }: React.Compon
 export function AccordionContent({ className, children, ...props }: React.ComponentProps<typeof BaseAccordion.Panel>) {
   return (
     <BaseAccordion.Panel
-      className="overflow-hidden text-sm text-muted-foreground transition-opacity duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0"
+      className="overflow-hidden text-sm text-muted-foreground transition-opacity duration-(--motion-base) ease-(--motion-ease) data-ending-style:opacity-0 data-starting-style:opacity-0"
       {...props}
     >
       <div className={cn("pb-4 leading-relaxed", className as string)}>{children}</div>

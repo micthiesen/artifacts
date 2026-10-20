@@ -165,18 +165,44 @@ export function setShared(key: string, value: JsonValue | null | undefined): boo
   return true;
 }
 
-/** Apply authoritative changes from the shell (null deletes). */
-export function applyShared(changes: Record<string, JsonValue | null>) {
+/** Apply authoritative changes from the shell (null deletes). `remote`: someone else made them. */
+export function applyShared(changes: Record<string, JsonValue | null>, remote = false) {
   let next: Record<string, JsonValue> | null = null;
+  // What someone else added or changed (not removed, not rewritten as it was) shows arriving.
+  const arrived: string[] = [];
   for (const [k, v] of Object.entries(changes)) {
     next ??= { ...shared };
     if (v === null || v === undefined) delete next[k];
-    else next[k] = v;
+    else {
+      if (remote && JSON.stringify(shared[k]) !== JSON.stringify(v)) arrived.push(k);
+      next[k] = v;
+    }
   }
   if (next) {
     shared = next;
     emit();
+    if (arrived.length) notifyRemote(arrived);
   }
+}
+
+type RemoteListener = (keys: string[]) => void;
+const remoteListeners = new Set<RemoteListener>();
+
+/** Called with the keys of each change someone else made, once the page shows it. */
+export function onRemoteChange(l: RemoteListener): () => void {
+  remoteListeners.add(l);
+  return () => remoteListeners.delete(l);
+}
+
+function notifyRemote(keys: string[]) {
+  // Nobody sees a hidden page, and frames wait until it's shown: queued arrivals would all replay at once then.
+  if (typeof document !== "undefined" && document.hidden) return;
+  // A frame later, so React has rendered the change and the elements to show it on exist.
+  const run = () => {
+    for (const l of [...remoteListeners]) l(keys);
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+  else setTimeout(run, 0);
 }
 
 /** Entries under `${prefix}/`, keyed by the remainder, sorted by key. Stable between changes. */

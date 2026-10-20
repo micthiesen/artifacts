@@ -1,5 +1,6 @@
 // HTML documents: the splash page and sign-in on the apex, workspace pages, the
 // shell around an artifact, and the sandboxed frame document that renders it.
+import type { SoundsCookie } from "../shared/sound.ts";
 import type { Build } from "./compile.ts";
 import type { ArtifactMeta } from "./hub.ts";
 import type { WorkspaceRole } from "./directory.ts";
@@ -82,7 +83,8 @@ ${head}</head>
 export { PRODUCT };
 
 /** Whose pages these are: the apex (PRODUCT) or a workspace (its name). */
-export type Brand = { name: string; home: string; apex: string };
+/** `sounds`: the cookie the apex and every workspace share for the Sounds choice (src/shared/sound.ts). */
+export type Brand = { name: string; home: string; apex: string; sounds?: SoundsCookie };
 
 /** The ghost logo, drawn by CSS (a gradient through an SVG mask). */
 const GHOST = `<span class="logo-ghost" aria-hidden="true"></span>`;
@@ -102,6 +104,7 @@ function avatar(email: string, brand: Brand, context: "account" | "workspace", f
     `data-email="${escapeHtml(email)}"`,
     `data-apex="${escapeHtml(brand.apex)}"`,
     `data-context="${context}"`,
+    ...(brand.sounds ? [`data-sounds-cookie="${escapeHtml(brand.sounds.name)}"`, `data-sounds-domain="${escapeHtml(brand.sounds.domain)}"`] : []),
     ...(flags.member ? ['data-member="1"'] : []),
     ...(flags.scoped ? ['data-scoped="1"'] : []),
     ...(flags.operator ? ['data-operator="1"'] : []),

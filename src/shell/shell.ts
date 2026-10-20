@@ -18,11 +18,16 @@ import { createDrawer } from "./threads.ts";
 import { showSince } from "./since.ts";
 import { mountArchiveBar, setArchived } from "./archive.ts";
 import { setPinned } from "./pins.ts";
+import { cue, move, shown } from "../shared/motion.ts";
+import { readSoundsCookie, setSoundsEnabled, soundsEnabled, soundsScopeOf } from "../shared/sound.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
 const localKey = `art:${boot.artifactId}:local:${boot.viewer.email ?? "anon"}`;
 const cacheKey = `art:${boot.artifactId}:shared`;
 const canWrite = boot.viewer.role !== "view" && boot.viewer.email !== null;
+
+// Sounds are a per-device choice (the account menu's Sounds item); the frame hears it in `init` and `sounds`.
+setSoundsEnabled(readSoundsCookie(document.cookie, soundsScopeOf(document.getElementById("me")).name));
 
 const statusEl = document.getElementById("status")!;
 const presenceEl = document.getElementById("presence")!;
@@ -55,7 +60,13 @@ if (meSlot && boot.viewer.email) {
             pinned = (await setPinned(boot.artifactId, !pinned)).pinned;
           },
         };
-  const common = { seen: boot.artifactId, print: printArtifact, watch: { level: boot.watch ?? "participating", set: setWatch }, ...(pin ? { pin } : {}) };
+  const common = {
+    seen: boot.artifactId,
+    print: printArtifact,
+    watch: { level: boot.watch ?? "participating", set: setWatch },
+    onSounds: (on: boolean) => post({ t: "sounds", on }),
+    ...(pin ? { pin } : {}),
+  };
   if (boot.viewer.role === "owner") {
     let panel: ReturnType<typeof initOwnerMenu> | null = null;
     let archivedAt = boot.archivedAt ?? null;
@@ -149,7 +160,7 @@ function post(msg: ShellMessage) {
 function maybeInit() {
   if (!frameReady || initSent || !snapshotReceived) return;
   initSent = true;
-  post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme(), backlinks: boot.backlinks, linkTitles: boot.linkTitles });
+  post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme(), backlinks: boot.backlinks, linkTitles: boot.linkTitles, sounds: soundsEnabled() });
   // A link to a section (/a/<id>#<section>) scrolls there once the page has rendered.
   const section = sectionOf(location.hash);
   if (section) post({ t: "scroll", target: section });
@@ -184,9 +195,10 @@ const drawer = createDrawer(document.getElementById("threads")!, toggle, {
   isOwner: boot.viewer.role === "owner",
   readSeq: boot.readSeq ?? 0,
   send: (msg) => {
-    if (msg.t !== "set" && "cid" in msg) pendingComments.add(msg.cid);
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
-    else setStatus("Offline: comment not sent. Try again when reconnected.");
+    if (socket?.readyState === WebSocket.OPEN) {
+      if (msg.t !== "set" && "cid" in msg) pendingComments.add(msg.cid);
+      socket.send(JSON.stringify(msg));
+    } else setStatus("Offline: comment not sent. Try again when reconnected.");
   },
   focus: (thread) => post({ t: "focus", thread }),
   onThreads: sendThreads,
@@ -325,15 +337,18 @@ function connect() {
         maybeInit();
         break;
       }
-      case "set":
+      case "set": {
+        // Our own write coming back carries its cid; anything else (another person, another tab) arrives.
+        const own = msg.cid !== undefined && pending.has(msg.cid);
         if (msg.cid) pending.delete(msg.cid);
         if (msg.value === null) delete confirmedState[msg.key];
         else confirmedState[msg.key] = msg.value;
         if (msg.value === null) delete shared[msg.key];
         else shared[msg.key] = msg.value;
         saveCache();
-        if (initSent) post({ t: "shared", changes: { [msg.key]: msg.value } });
+        if (initSent) post({ t: "shared", changes: { [msg.key]: msg.value }, ...(own ? {} : { remote: true }) });
         break;
+      }
       case "rejected": {
         if (pendingComments.delete(msg.cid)) {
           setStatus(`Comment not saved: ${msg.reason}`);
@@ -363,10 +378,19 @@ function connect() {
           deepLink = null;
         }
         break;
-      case "thread":
-        if (msg.cid) pendingComments.delete(msg.cid);
+      case "thread": {
+        const own = msg.cid !== undefined && pendingComments.delete(msg.cid);
+        const before = drawer.count(msg.thread.id);
         drawer.upsert(msg.thread);
+        const last = msg.thread.comments.at(-1);
+        if (!last || msg.thread.comments.length <= before) break;
+        // A comment you sent lands in the drawer; one from someone else shows on it, or on the button when closed.
+        const row = drawer.commentEl(last.id);
+        const target = shown(row) ? row : toggle;
+        if (own) cue(target, "send");
+        else if (last.by !== boot.viewer.email) cue(target, "arrive");
         break;
+      }
       case "version":
         if (msg.version > boot.version) showUpdated(msg.version, msg.note);
         break;
@@ -401,7 +425,9 @@ function saveCache() {
 /** A newer version was saved while this page is open. */
 function showUpdated(version: number, note: string) {
   let pill = document.getElementById("updated");
-  if (!pill) {
+  // A pill already showing says so again when another version lands (a new one slides in by itself).
+  if (pill) move(pill, "pop");
+  else {
     pill = document.createElement("button");
     pill.id = "updated";
     pill.className = "updated-pill";
@@ -420,17 +446,26 @@ function showUpdated(version: number, note: string) {
   pill.title = `Reload to see v${version}`;
 }
 
+let presenceShown = false;
 function renderPresence() {
-  // Your own avatar is the account/manage button; show only the others here.
-  presenceEl.replaceChildren(
-    ...presence.filter((email) => email !== boot.viewer.email).map((email) => {
-      const el = document.createElement("span");
-      el.className = "avatar";
-      el.title = `Viewing now: ${email}`;
-      el.textContent = email.slice(0, 1).toUpperCase();
-      return el;
-    }),
-  );
+  // Your own avatar is the account/manage button; show only the others here. Elements stay put while their
+  // person does (re-inserting one would replay its entrance), so only people arriving animate in.
+  const wanted = new Set(presence.filter((email) => email !== boot.viewer.email));
+  for (const el of presenceEl.querySelectorAll<HTMLElement>(".avatar")) {
+    if (wanted.has(el.dataset.email!)) wanted.delete(el.dataset.email!);
+    else el.remove();
+  }
+  // The people already here when the page opened are shown, not announced: only later arrivals animate in.
+  if (presenceShown) presenceEl.classList.add("live");
+  presenceShown = true;
+  for (const email of wanted) {
+    const el = document.createElement("span");
+    el.className = "avatar";
+    el.dataset.email = email;
+    el.title = `Viewing now: ${email}`;
+    el.textContent = email.slice(0, 1).toUpperCase();
+    presenceEl.append(el);
+  }
 }
 
 connect();

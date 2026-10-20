@@ -2,6 +2,7 @@
 // workspaces, notification settings, the operator console); every workspace is
 // served at its own subdomain, backed by its own Durable Object, and is its own
 // OAuth authorization server and MCP resource.
+import { soundsCookieScope } from "../shared/sound.ts";
 import { OAuthProvider, AuthorizationError, CimdFetchError, getOAuthApi, type OAuthHelpers, type OAuthProviderOptions } from "@cloudflare/workers-oauth-provider";
 import { handleMcp, runOwnerTool, type Ctx } from "./mcp.ts";
 import {
@@ -336,7 +337,7 @@ function apexOrigin(env: Env): string {
 }
 
 function apexBrand(env: Env): Brand {
-  return { name: PRODUCT, home: "/", apex: apexOrigin(env) };
+  return { name: PRODUCT, home: "/", apex: apexOrigin(env), sounds: soundsCookieScope(env.APEX_HOST, env.WORKSPACE_SUFFIX) };
 }
 
 type Routable = Pick<WorkspaceRecord, "slug" | "name" | "suspended">;
@@ -473,7 +474,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   if (path === "/support") return Response.redirect(`${apexOrigin(env)}/support${url.search}`, 302);
   if (path === "/api/client-error" && request.method === "POST") return clientError(request, env);
   const record = await workspaceRecord(env, slug);
-  const brand: Brand = { name: record?.name ?? slug, home: "/", apex: apexOrigin(env) };
+  const brand: Brand = { name: record?.name ?? slug, home: "/", apex: apexOrigin(env), sounds: soundsCookieScope(env.APEX_HOST, env.WORKSPACE_SUFFIX) };
   if (!record) return messagePage("No such workspace", `There's no workspace at ${url.hostname}.`, 404, { href: apexOrigin(env), label: PRODUCT }, apexBrand(env));
   if (record.suspended) return messagePage("Workspace suspended", `${record.name} is suspended. Contact whoever runs it.`, 403, { href: apexOrigin(env), label: PRODUCT }, brand);
   const hub = workspaceHub(env, slug);
