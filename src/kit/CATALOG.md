@@ -44,7 +44,7 @@ Primitives
 - `Button({variant?: default|secondary|outline|ghost|destructive|link, size?: sm|default|lg|icon|icon-sm})`
 - `Badge({tone?: neutral|primary|positive|caution|negative|outline})`
 - `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter`
-- `Input`, `Textarea`, `Label`, `Select({options: (string|{value,label})[], value?, defaultValue?, onValueChange?, placeholder?})`
+- `Input`, `Textarea`, `Label`, `Select({options: (string|{value,label})[], value?, defaultValue?, onValueChange?, placeholder?})`. `Input`, `Textarea` and `Select` fill the width of a block or grid container (in a flex row a `Select` fits its text; put one in a `w-44` wrapper to size it); a `Label` sits on its own line above its control, so `space-y-1.5` or `flex flex-col gap-1.5` spaces them. Give the control an `id` and the label `htmlFor`.
 - `Checkbox` and `Switch({checked?, defaultChecked?, onCheckedChange?, label?})` (without `label`, pass `aria-label`); `Slider({value?, defaultValue?, min?, max?, step?, onValueChange?, "aria-label"?})`
 - `Tabs({defaultValue})` > `TabsList` > `TabsTrigger({value})`, then `TabsContent({value})`
 - `Accordion` > `AccordionItem({value})` > `AccordionTrigger` + `AccordionContent`

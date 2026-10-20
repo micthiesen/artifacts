@@ -126,7 +126,8 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
 );
 
 export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
-  return <label className={cn("inline-flex items-center gap-2 text-sm leading-none font-medium select-none", className)} {...props} />;
+  // Block-level, so the control under it starts on its own line and `space-y-*` or `gap` spaces them.
+  return <label className={cn("flex w-fit items-center gap-2 text-sm leading-none font-medium select-none", className)} {...props} />;
 }
 
 // ---- Small things ---------------------------------------------------------------

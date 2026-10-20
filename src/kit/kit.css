@@ -52,8 +52,10 @@
     background-color: color-mix(in oklab, var(--primary) 34%, transparent);
     color: var(--foreground);
   }
+  /* Plain buttons and links an artifact styles itself still show where focus is; components draw their own. */
   :focus-visible {
-    outline-color: var(--ring);
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
   /* Headings break into even lines; running text avoids a one-word last line.
      Utilities (truncate, whitespace-nowrap, text-wrap) still win. */

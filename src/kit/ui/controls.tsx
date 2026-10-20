@@ -67,7 +67,7 @@ export function Select({
         aria-invalid={invalid}
         aria-required={ariaRequired}
         className={cn(
-          "inline-flex h-9 min-w-40 cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-background/60 pr-2.5 pl-3 text-sm outline-none select-none",
+          "flex h-9 min-w-40 cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-background/60 pr-2.5 pl-3 text-sm outline-none select-none",
           "hover:border-muted-foreground/65 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 data-disabled:opacity-60 data-popup-open:border-ring",
           "aria-invalid:border-negative aria-invalid:focus-visible:border-negative aria-invalid:focus-visible:ring-negative/25",
           className,
@@ -79,7 +79,8 @@ export function Select({
         </BaseSelect.Icon>
       </BaseSelect.Trigger>
       <BaseSelect.Portal>
-        <BaseSelect.Positioner sideOffset={6} alignItemWithTrigger={false} className="z-50 outline-none">
+        {/* Starts at the trigger's left edge, so a popup wider than its trigger grows to the right, not both ways. */}
+        <BaseSelect.Positioner sideOffset={6} align="start" alignItemWithTrigger={false} className="z-50 outline-none">
           <BaseSelect.Popup className={cn(surface, popupMotion, "max-h-[min(24rem,var(--available-height))] min-w-[var(--anchor-width)] max-w-[var(--available-width)] overflow-y-auto p-1")}>
             <BaseSelect.List>
               {items.map((it) => (
@@ -136,7 +137,7 @@ export function Checkbox({ checked, defaultChecked, onCheckedChange, disabled, l
       disabled={disabled}
       indeterminate={indeterminate}
       className={cn(
-        "inline-flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border border-input bg-background/60 transition-colors outline-none hover:border-primary/85 aria-invalid:border-negative",
+        "relative inline-flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] after:absolute after:-inset-[3px] border border-input bg-background/60 transition-colors outline-none hover:border-primary/85 aria-invalid:border-negative",
         "focus-visible:focus-halo data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground data-indeterminate:border-primary data-indeterminate:bg-primary data-indeterminate:text-primary-foreground data-disabled:cursor-not-allowed",
         className,
       )}
