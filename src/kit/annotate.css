@@ -95,13 +95,16 @@
 .art-block-comment {
   position: absolute;
   z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 22px;
   height: 22px;
+  padding: 0;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--card);
   color: var(--muted-foreground);
-  font: 500 15px/20px var(--font-sans);
   cursor: pointer;
   opacity: 0.85;
 }

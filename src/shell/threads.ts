@@ -117,7 +117,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       b.setAttribute("aria-pressed", String(filter === f));
       tabs.append(b);
     }
-    const close = button("✕", "icon", () => setOpen(false));
+    const close = button("", "icon", () => setOpen(false));
+    close.innerHTML = X_ICON;
     close.setAttribute("aria-label", "Close comments");
     head.append(tabs, close);
 
@@ -196,7 +197,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       const row = el("div", `comment${cm.seq > readSeq && cm.by !== opts.me ? " is-new" : ""}`);
       const meta = el("div", "comment-meta");
       const av = el("span", `avatar small${cm.by === "agent" ? " agent" : ""}`);
-      av.textContent = cm.by === "agent" ? "✦" : cm.by.slice(0, 1).toUpperCase();
+      if (cm.by === "agent") av.innerHTML = SPARKLE_ICON;
+      else av.textContent = cm.by.slice(0, 1).toUpperCase();
       const who = el("span", "comment-who");
       who.textContent = nameOf(cm.by);
       // Display names are self-chosen; the address is always one hover away.
@@ -426,6 +428,10 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
 }
 
 // ---- small DOM helpers ------------------------------------------------------------------
+
+// Drawn, not typed: "✕" and "✦" come from fallback fonts and sit off-center in their boxes.
+const X_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+const SPARKLE_ICON = `<svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M12 2c.5 5.2 4.8 9.5 10 10-5.2.5-9.5 4.8-10 10-.5-5.2-4.8-9.5-10-10 5.2-.5 9.5-4.8 10-10z" fill="currentColor"/></svg>`;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = ""): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);

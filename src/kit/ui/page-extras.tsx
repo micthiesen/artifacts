@@ -7,6 +7,7 @@ import * as store from "../store.ts";
 import { useSharedMap, useViewer } from "../hooks.ts";
 import { cn, displayName, humanize, slugify } from "./utils.ts";
 import { formatValue, useRows } from "./table.tsx";
+import { ChevronRight } from "./icons.ts";
 
 /** A page with at least this many sections gets a contents list under its title. */
 const CONTENTS_MIN_SECTIONS = 4;
@@ -53,8 +54,8 @@ export function Contents() {
     <nav ref={ref} aria-label="Contents" className={cn("art-contents", show ? "-mt-2 mb-8" : "hidden")}>
       {show && (
         <details className="group rounded-lg border border-border bg-card/60 text-[14px]">
-          <summary className="cursor-pointer list-none px-4 py-2.5 font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
-            <span className="mr-1.5 inline-block transition-transform group-open:rotate-90">›</span>
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
+            <ChevronRight aria-hidden className="size-4 shrink-0 transition-transform group-open:rotate-90" />
             Contents · {sections.length} sections
           </summary>
           <ol className="grid gap-x-6 gap-y-1 px-4 pb-3 sm:grid-cols-2">

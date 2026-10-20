@@ -6,6 +6,7 @@ export { default as ArrowUp } from "lucide-react/dist/esm/icons/arrow-up.mjs";
 export { default as ArrowUpRight } from "lucide-react/dist/esm/icons/arrow-up-right.mjs";
 export { default as Check } from "lucide-react/dist/esm/icons/check.mjs";
 export { default as ChevronDown } from "lucide-react/dist/esm/icons/chevron-down.mjs";
+export { default as ChevronRight } from "lucide-react/dist/esm/icons/chevron-right.mjs";
 export { default as ChevronsUpDown } from "lucide-react/dist/esm/icons/chevrons-up-down.mjs";
 export { default as CircleCheck } from "lucide-react/dist/esm/icons/circle-check.mjs";
 export { default as Info } from "lucide-react/dist/esm/icons/info.mjs";

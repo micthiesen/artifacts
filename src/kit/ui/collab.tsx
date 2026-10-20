@@ -441,9 +441,10 @@ export function Approval({
         <ul className="divide-y divide-border/70 border-t border-border">
           {decisions.map(([email, d]) => (
             <li key={email} className="flex gap-3 px-5 py-2.5">
-              <Avatar email={email} size="sm" className="mt-0.5" />
+              <Avatar email={email} size="sm" />
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                {/* As tall as the avatar, so the name line centers on it. */}
+                <div className="flex flex-wrap items-baseline gap-x-2 text-sm leading-6">
                   <span className="font-medium">{email === viewer.email ? "You" : displayName(email)}</span>
                   <span className={stale(d) ? "text-muted-foreground" : d.decision === "approve" ? "text-positive" : "text-caution"}>
                     {d.decision === "approve" ? "approved" : "requested changes"}

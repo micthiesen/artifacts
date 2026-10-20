@@ -126,9 +126,9 @@ a.title:hover { text-decoration: none; }
 .inbox-bell { text-decoration: none; }
 .inbox-bell:hover { text-decoration: none; }
 .inbox-bell.has-unread { color: var(--fg); }
-.inbox-bell.has-unread .count {
-  min-width: 1.15rem; padding: 0 .3rem; border-radius: 999px; background: var(--caution); color: var(--bg);
-  font-size: 11px; line-height: 1.15rem; text-align: center;
+.inbox-bell.has-unread .count:not(:empty) {
+  display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 .3rem; border-radius: 999px;
+  background: var(--caution); color: var(--bg); font-size: 11px; line-height: 1;
 }
 .me .avatar-button {
   position: relative; width: 2rem; height: 2rem; padding: 0; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 650;
@@ -194,12 +194,13 @@ h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.
 .list li a:hover::before, .list li a:focus-visible::before { opacity: 1; }
 .list .title { font-weight: 600; font-size: 15.5px; letter-spacing: -.005em; }
 .list .desc { color: var(--muted-fg); font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* Block, not flex: an ellipsis only applies to text in a block box. */
 .list .sharing {
-  display: flex; align-items: center; gap: .45rem; min-width: 0; margin-top: .15rem;
+  display: block; min-width: 0; margin-top: .15rem;
   color: var(--muted-fg); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .list .sharing::before {
-  content: ""; flex: none; width: .4rem; height: .4rem; border-radius: 999px; background: var(--signal);
+  content: ""; display: inline-block; margin-right: .45rem; vertical-align: .1em; width: .4rem; height: .4rem; border-radius: 999px; background: var(--signal);
 }
 .list .meta { color: var(--muted-fg); font-size: 13px; font-variant-numeric: tabular-nums; }
 .empty { padding: 3.5rem 0 1rem; max-width: 30rem; }
@@ -292,6 +293,8 @@ body.om-open { overflow: hidden; }
 .om-inline { display: flex; flex-wrap: wrap; gap: .4rem; min-width: 0; }
 .om-inline > * { min-width: 0; }
 .om-inline .input { flex: 1 1 10rem; }
+/* Same height as the input and select beside it. */
+.om-inline > .button { height: 2.5rem; }
 .om-form > .input { flex: none; width: 100%; }
 .om-textarea { height: auto; padding: .55rem .8rem; resize: vertical; line-height: 1.45; }
 .om-select {
@@ -360,8 +363,10 @@ body.om-open { overflow: hidden; }
 .bar-button:hover { color: var(--fg); background: var(--muted); }
 .bar-button[aria-expanded="true"] { color: var(--fg); background: var(--muted); border-color: var(--border); }
 .bar-button .count:empty { display: none; }
+/* Room for the unread dot so it doesn't touch the count; kept when read so the bar doesn't shift. */
+.comments-toggle { padding-right: .85rem; }
 .comments-toggle.has-unread::after {
-  content: ""; position: absolute; top: .3rem; right: .3rem; width: .45rem; height: .45rem; border-radius: 999px;
+  content: ""; position: absolute; top: .3rem; right: .2rem; width: .45rem; height: .45rem; border-radius: 999px;
   background: var(--caution); box-shadow: 0 0 0 2px var(--bg);
 }
 
@@ -393,7 +398,7 @@ body.om-open { overflow: hidden; }
 .tbtn.link { height: auto; padding: 0 .2rem; border: 0; margin-left: auto; color: var(--muted-fg); font-size: 12px; font-weight: 500; }
 .tbtn.link:hover { background: none; text-decoration: underline; }
 .tbtn.danger:hover { color: var(--negative); }
-.tbtn.add-page { justify-self: start; border-style: dashed; color: var(--muted-fg); }
+.tbtn.add-page { justify-self: start; border-color: var(--border); border-style: dashed; color: var(--muted-fg); }
 
 .thread {
   display: grid; gap: .55rem; padding: .7rem .75rem; border-radius: var(--radius); border: 1px solid var(--border);
@@ -414,7 +419,7 @@ div.thread-anchor { cursor: default; }
 .chip.positive { color: var(--positive); background: color-mix(in oklab, var(--positive) 14%, transparent); }
 .chip.caution { color: var(--caution); background: color-mix(in oklab, var(--caution) 14%, transparent); }
 .comment { display: grid; gap: .2rem; }
-.comment.is-new .comment-who::after { content: "New"; margin-left: .4rem; padding: 0 .35rem; border-radius: 999px; font-size: 10.5px; font-weight: 700; color: var(--bg); background: var(--caution); }
+.comment.is-new .comment-who::after { content: "New"; display: inline-grid; place-items: center; height: 1rem; margin-left: .4rem; padding: 0 .35rem; border-radius: 999px; font-size: 10.5px; line-height: 1; font-weight: 700; color: var(--bg); background: var(--caution); }
 .comment-meta { display: flex; align-items: center; gap: .45rem; font-size: 13px; }
 .comment-who { font-weight: 600; display: inline-flex; align-items: center; gap: .35rem; }
 .comment-when { color: var(--muted-fg); font-size: 12px; }
@@ -479,6 +484,8 @@ div.thread-anchor { cursor: default; }
   background: color-mix(in oklab, var(--bg) 60%, transparent); color: var(--fg); font: inherit; font-size: 14px;
 }
 .profile .row > input { flex: 1 1 12rem; }
+/* Same height as the input or select beside it. */
+.profile .row:has(> input, > select) > .button { height: 2.25rem; }
 .profile input:focus, .profile select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); }
 .profile .small { font-size: 13px; }
 .channels { list-style: none; margin: 0 0 1rem; padding: 0; display: grid; gap: .4rem; }

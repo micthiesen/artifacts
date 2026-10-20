@@ -379,7 +379,8 @@ function onPointerMove(e: PointerEvent) {
     blockButton.setAttribute("data-print", "hide");
     blockButton.title = "Comment on this";
     blockButton.setAttribute("aria-label", "Comment on this");
-    blockButton.textContent = "+";
+    // A drawn plus, not the "+" glyph, so it sits in the exact middle of the circle.
+    blockButton.innerHTML = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
     blockButton.addEventListener("click", (ev) => {
       ev.stopPropagation();
       if (hoveredBlock) send({ t: "comment:new", anchor: blockAnchor(hoveredBlock) });
