@@ -50,6 +50,8 @@
     --others: oklch(0.82 0.1 200);
     /* People's ghost: the logo's silhouette without its face, so initials sit where the face would be. */
     --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%225%202%2090%2093%22%3E%3Cpath%20d%3D%22M50%204C70%204%2084%2020%2085%2044C86%2058%2092%2066%2093%2076C94%2087%2088%2092%2081%2092C76%2092%2073%2087%2067%2087C61%2087%2058%2093%2050%2093C42%2093%2039%2087%2033%2087C27%2087%2024%2092%2019%2092C12%2092%206%2087%207%2076C8%2066%2014%2058%2015%2044C16%2020%2030%204%2050%204Z%22%2F%3E%3C%2Fsvg%3E");
+    /* The shine on a person's ghost: a crescent of light along the top-left of the head, in the mask's own box. */
+    --ghost-shine: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%225%202%2090%2093%22%3E%3Cpath%20d%3D%22M21.5%2031C24%2018%2033%2011%2045%2010C36%2014%2029.5%2020.5%2026.5%2031C25.8%2033.5%2021%2033.5%2021.5%2031Z%22%20fill%3D%22%23fff%22%20fill-opacity%3D%22.45%22%2F%3E%3C%2Fsvg%3E");
     --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.6 0.12 292 / 0.16), oklch(0.62 0.09 200 / 0.05) 55%, transparent 75%);
     --shadow-card: 0 1px 0 oklch(1 0 0 / 0.035) inset, 0 1px 2px oklch(0 0 0 / 0.35);
     --shadow-pop: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 12px 32px -8px oklch(0 0 0 / 0.6), 0 2px 6px oklch(0 0 0 / 0.35);

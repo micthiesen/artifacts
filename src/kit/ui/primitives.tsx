@@ -215,7 +215,7 @@ export function Avatar({
         "inline-flex shrink-0 items-center justify-center overflow-hidden font-semibold select-none",
         src
           ? "rounded-full bg-accent text-accent-foreground ring-2 ring-background"
-          : "bg-(--who) bg-[radial-gradient(ellipse_20%_10%_at_40%_22%,oklch(1_0_0/0.4)_92%,transparent_100%)] pt-[0.15em] font-semibold tracking-[-0.01em] text-primary-foreground [mask:var(--ghost-mask)_center/contain_no-repeat]",
+          : "bg-(--who) bg-(image:--ghost-shine) bg-contain bg-center bg-no-repeat pt-[0.15em] font-semibold tracking-[-0.01em] text-primary-foreground [mask:var(--ghost-mask)_center/contain_no-repeat]",
         src ? avatarSizes[size] : ghostSizes[size],
         className,
       )}
