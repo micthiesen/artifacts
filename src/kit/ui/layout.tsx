@@ -138,12 +138,13 @@ export function Stat({
   return (
     <div className={cn("rounded-xl border border-border bg-card px-5 py-4 shadow-card", className)}>
       <div className="text-[13px] font-medium tracking-[0.01em] text-muted-foreground">{label}</div>
-      <div className="mt-1 flex items-baseline gap-2">
-        <span className="text-[1.75rem] leading-tight font-semibold tracking-tight tabular-nums">{value}</span>
+      {/* A long delta drops under the value rather than breaking inside itself; the value never breaks. */}
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
+        <span className="text-[1.75rem] leading-tight font-semibold tracking-tight whitespace-nowrap tabular-nums">{value}</span>
         {deltaText != null && deltaText !== "" && (
           <span
             className={cn(
-              "inline-flex items-center gap-0.5 text-sm font-medium tabular-nums",
+              "inline-flex items-center gap-0.5 text-sm font-medium whitespace-nowrap tabular-nums",
               sign === 0 ? "text-muted-foreground" : good ? "text-positive" : "text-negative",
             )}
           >
@@ -219,7 +220,7 @@ export function TimelineItem({ date, title, tone, children }: Children & { date?
   };
   return (
     <li className="relative pb-6 pl-6 last:pb-0">
-      <span className={cn("absolute top-[7px] -left-[5px] size-2.5 rounded-full ring-4 ring-background", dot[tone ?? "default"])} aria-hidden />
+      <span className={cn("absolute top-[7px] -left-[5px] size-2.5 rounded-full ring-4 ring-background", dot[tone ?? "default"] ?? dot.default)} aria-hidden />
       {date && <div className="text-[13px] text-muted-foreground tabular-nums">{date}</div>}
       {title && <div className="leading-snug font-semibold">{title}</div>}
       {children && <div className="mt-1 text-[15px] leading-relaxed text-muted-foreground [&_p]:my-1">{children}</div>}

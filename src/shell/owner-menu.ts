@@ -419,7 +419,7 @@ export function initOwnerMenu(
       type: "text",
       inputmode: "email",
       autocomplete: "off",
-      placeholder: "name@example.com, @example.com or workspace",
+      placeholder: "Email, @domain or workspace",
       "data-key": "add-email",
       required: true,
     }), "");

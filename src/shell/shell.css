@@ -91,7 +91,7 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 /* Page and section headings set in Fraunces. Labels, controls and numbers stay Inter. */
 :where(h1, h2, .display) { font-family: var(--font-display); font-variation-settings: "SOFT" 100; font-weight: 600; letter-spacing: -.01em; }
 :where(p, li, dd) { text-wrap: pretty; }
-code { font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted-fg); }
+code { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted-fg); }
 .muted { color: var(--muted-fg); }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
@@ -212,7 +212,9 @@ a.title:hover { text-decoration: none; }
 .inbox-pop-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: .3rem; display: grid; align-content: start; gap: .1rem; }
 .inbox-pop-item { display: grid; gap: .1rem; padding: .5rem .6rem; border-radius: calc(var(--radius) - .3rem - 1px); color: var(--fg); text-decoration: none; min-width: 0; }
 .inbox-pop-item:hover { background: var(--muted); text-decoration: none; }
-.inbox-pop-title { font-size: 14px; color: var(--muted-fg); overflow-wrap: anywhere; }
+/* Every title keeps the unread dot's room, so read and unread titles line up. */
+.inbox-pop-title { font-size: 14px; color: var(--muted-fg); overflow-wrap: anywhere; padding-left: .9rem; text-indent: -.9rem; }
+.inbox-pop-title::before { content: ""; display: inline-block; width: .45rem; margin-right: .45rem; }
 .inbox-pop-item.unread .inbox-pop-title { color: var(--fg); font-weight: 550; }
 .inbox-pop-item.unread .inbox-pop-title::before { content: ""; content: "" / "Unread: "; display: inline-block; width: .45rem; height: .45rem; border-radius: 50%; background: var(--primary); margin-right: .45rem; vertical-align: middle; }
 .inbox-pop-body { font-size: 13px; color: var(--muted-fg); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
@@ -455,10 +457,10 @@ body.om-open { overflow: hidden; }
 .bar-button:active { background: color-mix(in oklab, var(--input) 50%, var(--muted)); }
 .bar-button[aria-expanded="true"] { color: var(--fg); background: var(--muted); border-color: var(--border); }
 .bar-button .count:empty { display: none; }
-/* Room for the unread dot so it doesn't touch the count; kept when read so the bar doesn't shift. */
-.comments-toggle { padding-right: .85rem; }
+/* The unread dot sits on the speech bubble's top-right corner, so the button keeps the same padding as the inbox
+   button whether or not anything is unread. */
 .comments-toggle.has-unread::after {
-  content: ""; position: absolute; top: .3rem; right: .2rem; width: .45rem; height: .45rem; border-radius: 999px;
+  content: ""; position: absolute; top: .3rem; left: calc(.55rem + 12px); width: .45rem; height: .45rem; border-radius: 999px;
   background: var(--caution); box-shadow: 0 0 0 2px var(--bg);
 }
 
@@ -569,8 +571,9 @@ div.thread-anchor { cursor: default; }
 .account-menu .account-segments [role=menuitemradio]:hover { background: color-mix(in oklab, var(--card) 50%, transparent); color: var(--fg); }
 .account-menu .account-segments [role=menuitemradio][aria-checked="true"] { background: var(--card); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .25); }
 .account-menu .account-segments [role=menuitemradio]:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
-.account-menu [role=menuitemcheckbox] { padding-left: 1.7rem; position: relative; }
-.account-menu [role=menuitemcheckbox][aria-checked="true"]::before { content: "✓"; position: absolute; left: .6rem; color: var(--primary); font-weight: 700; }
+/* A toggle lines up with the other items; its tick sits at the right end. */
+.account-menu [role=menuitemcheckbox] { padding-right: 1.9rem; position: relative; }
+.account-menu [role=menuitemcheckbox][aria-checked="true"]::after { content: "✓"; position: absolute; right: .7rem; color: var(--primary); font-weight: 700; }
 
 /* Index: unread and updated markers. */
 .list .title .badge { margin-left: .5rem; padding: .05rem .45rem; border-radius: 999px; font-size: 11.5px; font-weight: 650; vertical-align: 1px; color: var(--bg); background: var(--caution); }
@@ -616,6 +619,7 @@ div.thread-anchor { cursor: default; }
 .reveal { padding: .3rem .5rem; border-radius: .4rem; background: var(--bg); color: var(--fg); font-size: 13px; overflow-wrap: anywhere; }
 .watches { width: 100%; border-collapse: collapse; font-size: 14px; }
 .watches td { padding: .45rem 0; border-top: 1px solid var(--border); }
+.watches td:first-child { padding-right: .75rem; overflow-wrap: anywhere; }
 .watches td:last-child { width: 14rem; text-align: right; }
 .watches select { width: 100%; }
 

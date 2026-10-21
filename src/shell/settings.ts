@@ -526,7 +526,7 @@ function render(opts: { keepTyped?: boolean } = {}) {
   const mine = data.tokens.filter((t) => t.email === data.you.email);
   const tokens = h("ul", { class: "channels" });
   for (const t of mine) tokens.append(tokenRow(t));
-  const label = h("input", { type: "text", placeholder: "Label, e.g. Codex on my laptop", maxlength: "60", "aria-label": "Token label" }) as HTMLInputElement;
+  const label = h("input", { type: "text", placeholder: "Label, e.g. Codex", maxlength: "60", "aria-label": "Token label" }) as HTMLInputElement;
   sections.push(
     h(
       "section",
