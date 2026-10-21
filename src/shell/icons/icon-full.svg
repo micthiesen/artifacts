@@ -12,6 +12,6 @@
     </radialGradient>
   </defs>
   <rect width="512" height="512" fill="url(#glow)"/>
-  <circle cx="256" cy="256" r="170" fill="url(#halo)"/>
-  <g transform="translate(256 258) scale(2.75) translate(-50 -48.5)"><path fill="#f6f2ea" d="M50 4C70 4 84 20 85 44C86 58 92 66 93 76C94 87 88 92 81 92C76 92 73 87 67 87C61 87 58 93 50 93C42 93 39 87 33 87C27 87 24 92 19 92C12 92 6 87 7 76C8 66 14 58 15 44C16 20 30 4 50 4Z"/><path d="M36.55 49.10Q40.75 42.80 44.95 49.10" fill="none" stroke="#161b24" stroke-width="2.5" stroke-linecap="round"/><path d="M55.05 49.10Q59.25 42.80 63.45 49.10" fill="none" stroke="#161b24" stroke-width="2.5" stroke-linecap="round"/><ellipse cx="35.25" cy="55.00" rx="3.4" ry="1.9" fill="#ff7ab0" fill-opacity="0.45"/><ellipse cx="64.75" cy="55.00" rx="3.4" ry="1.9" fill="#ff7ab0" fill-opacity="0.45"/></g>
+  <circle cx="256" cy="254" r="215" fill="url(#halo)"/>
+  <g transform="translate(256 254) scale(3.57) translate(-50 -48.5)"><path fill="#f6f2ea" d="M50 4C70 4 84 20 85 44C86 58 92 66 93 76C94 87 88 92 81 92C76 92 73 87 67 87C61 87 58 93 50 93C42 93 39 87 33 87C27 87 24 92 19 92C12 92 6 87 7 76C8 66 14 58 15 44C16 20 30 4 50 4Z"/><path d="M36.55 49.10Q40.75 42.80 44.95 49.10" fill="none" stroke="#161b24" stroke-width="2.5" stroke-linecap="round"/><path d="M55.05 49.10Q59.25 42.80 63.45 49.10" fill="none" stroke="#161b24" stroke-width="2.5" stroke-linecap="round"/><ellipse cx="35.25" cy="55.00" rx="3.4" ry="1.9" fill="#ff7ab0" fill-opacity="0.45"/><ellipse cx="64.75" cy="55.00" rx="3.4" ry="1.9" fill="#ff7ab0" fill-opacity="0.45"/></g>
 </svg>

@@ -84,8 +84,12 @@ function mountInboxBell(slot: HTMLElement, apex: string, seen?: string) {
     if (!res.ok) throw new Error(String(res.status));
     const json = (await res.json()) as { unread: number; items?: InboxEntry[] };
     paint(json.unread);
+    if (json.items) latest = json.items;
     return json;
   };
+  // The latest items, fetched with the count, so opening the panel shows them at once instead of a "Loading…"
+  // line that then grows into the list (a visible jump on a phone).
+  let latest: InboxEntry[] | null = null;
   // Coming back to the tab refreshes it, at most every half minute. While an artifact is open, what
   // arrives about it counts as read.
   let last = 0;
@@ -93,7 +97,7 @@ function mountInboxBell(slot: HTMLElement, apex: string, seen?: string) {
     if (Date.now() - last < 30_000) return;
     last = Date.now();
     try {
-      await ask(seen ? { seen } : {});
+      await ask({ items: true, ...(seen ? { seen } : {}) });
     } catch {
       // Offline: the count stays as it was.
     }
@@ -154,8 +158,12 @@ function mountInboxBell(slot: HTMLElement, apex: string, seen?: string) {
     bell.setAttribute("aria-expanded", String(open));
     if (!open) return;
     slot.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: panel }));
-    list.replaceChildren(Object.assign(document.createElement("p"), { className: "inbox-pop-empty", textContent: "Loading…" }));
-    readAll.hidden = true;
+    // What we have already, then refreshed in place; "Loading…" only if the first count hasn't arrived yet.
+    if (latest) render(latest);
+    else {
+      list.replaceChildren(Object.assign(document.createElement("p"), { className: "inbox-pop-empty", textContent: "Loading…" }));
+      readAll.hidden = true;
+    }
     // Only the latest opening's answer draws, so a quick close and reopen never shows an older list.
     const asked = ++opened;
     ask({ items: true, ...(seen ? { seen } : {}) }).then(
