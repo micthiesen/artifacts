@@ -112,6 +112,8 @@ code { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--mu
 /* Presses darken (colour only, no movement). */
 .button:active:not(:disabled) { filter: brightness(.92); }
 .button.small { height: 2.125rem; padding: 0 .85rem; font-size: 14px; }
+/* In the bar, buttons are as tall as the bar's other controls. */
+.bar .button.small { height: 2rem; }
 button.link { background: none; border: 0; color: var(--primary); cursor: pointer; font: inherit; padding: .25rem; border-radius: .35rem; }
 button.link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .input {
@@ -128,7 +130,8 @@ select, input, textarea { max-width: 100%; }
 /* Top bar, shared by every shell page. */
 .bar {
   position: relative;
-  display: flex; align-items: center; gap: .75rem; height: 3rem; padding: 0 1rem; flex: none;
+  --bar-gap: .75rem;
+  display: flex; align-items: center; gap: var(--bar-gap); height: 3rem; padding: 0 1rem; flex: none;
   background: transparent; font-size: 14px;
 }
 .bar::after {
@@ -166,7 +169,8 @@ a.title:hover { text-decoration: none; }
 .bar .status:empty { display: none; }
 /* Other people viewing now: a small overlapping stack, then a hairline before your avatar. */
 .bar .presence { display: flex; align-items: center; }
-.bar .presence:not(:empty) { padding-right: .7rem; margin-right: .1rem; border-right: 1px solid var(--border); height: 1.7rem; }
+/* The divider after other people sits a bar gap from them, like every other item. */
+.bar .presence:not(:empty) { padding-right: var(--bar-gap); border-right: 1px solid var(--border); height: 1.7rem; }
 .bar .presence .avatar {
   width: 1.5rem; height: 1.5rem; font-size: 10.5px; margin-left: -.35rem; border: 2px solid var(--bg);
   background: var(--muted); color: var(--muted-fg); cursor: default;
@@ -175,7 +179,8 @@ a.title:hover { text-decoration: none; }
 .bar .presence .avatar.ghosted { width: 1.65rem; height: 1.7rem; margin-left: .1rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
 .bar .presence .avatar.ghosted:first-child { margin-left: 0; }
 /* Your own avatar: opens the Manage panel (owner) or the account menu. */
-.me { position: relative; flex: none; display: flex; align-items: center; gap: .35rem; }
+/* Same gap as the rest of the bar (.bar sets --bar-gap), so the bell and your avatar aren't huddled together. */
+.me { position: relative; flex: none; display: flex; align-items: center; gap: var(--bar-gap); }
 /* The inbox bell: its count turns into a badge while anything is unread. */
 .inbox-bell { text-decoration: none; }
 .inbox-bell:hover { text-decoration: none; }
@@ -901,7 +906,7 @@ div.thread-anchor { cursor: default; }
 .site-foot { max-width: 46rem; margin: 0 auto; padding: 0 1.25rem 2.5rem; font-size: 13px; }
 .site-foot a { color: var(--muted-fg); }
 @media (max-width: 560px) {
-  .bar { gap: .5rem; padding: 0 .75rem; }
+  .bar { --bar-gap: .5rem; padding: 0 .75rem; }
   .content { padding-left: 1rem; padding-right: 1rem; }
   .card-section { padding: 1rem .9rem 1.1rem; }
 }

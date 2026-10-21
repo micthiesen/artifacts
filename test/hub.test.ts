@@ -127,24 +127,33 @@ test("recompiling a stale build does not overwrite a build written meanwhile", a
   expect(stored.css).toBe("/* newer */");
 });
 
-test("waking after the restyle rewrites stored files that used the retired gradient classes", async () => {
+type Restyling = { restylePass(): boolean; afterLoad(): Promise<void> };
+
+test("the restyle pass rewrites stored files that used the retired gradient classes, then stays done", async () => {
   const r = await h.hub.create({ title: "Old", files: { "index.mdx": `# Old\n\n<span className="bg-signal px-2">New</span>\n` }, owner: OWNER });
   if (!r.ok) throw new Error(JSON.stringify(r.errors));
-  // Pretend the object last ran before the restyle's migration (the last one), then wake it again.
+  // As if the workspace had last run before the restyle: the pass is due.
   const sql = h.ctx.sqlStorage;
-  const version = sql.exec(`SELECT version FROM _schema`).one().version as number;
-  sql.exec(`UPDATE _schema SET version = ?`, version - 1);
+  sql.exec(`DELETE FROM settings WHERE key IN ('restyle_done', 'restyle_pass')`);
   const { Workspace } = await import("../src/worker/hub.ts");
-  const woken = new Workspace(h.ctx as never, h.env as never);
+  const woken = new Workspace(h.ctx as never, h.env as never) as unknown as Restyling & typeof h.hub;
+  expect(woken.restylePass()).toBe(false);
   expect(woken.files(r.id)["index.mdx"]).toContain(`<span className="bg-primary px-2">New</span>`);
-  expect(sql.exec(`SELECT version FROM _schema`).one().version).toBe(version);
+  // No schema bump: the release before this one can still run against the data.
+  const setting = (k: string) => sql.exec(`SELECT value FROM settings WHERE key = ?`, k).toArray()[0]?.value ?? null;
+  expect(setting("restyle_done")).toBe("1");
+  expect(setting("restyle_pass")).toBeNull();
+  new Workspace(h.ctx as never, h.env as never);
+  expect(setting("restyle_pass")).toBeNull();
 });
 
 test("a restore from before the restyle loses the retired gradient classes too", async () => {
   const r = await h.hub.create({ title: "Old", files: { "index.mdx": "# Old\n\nPlain.\n" }, owner: OWNER });
   if (!r.ok) throw new Error(JSON.stringify(r.errors));
-  // As an older backup would load it: the old class back in the stored file, after the migration already ran.
+  // As an older backup would load it: the old class back in the stored file, after the pass already ran.
   h.ctx.sqlStorage.exec(`UPDATE blobs SET content = ? WHERE artifact_id = ?`, `# Old\n\n<b className="text-signal">Hi</b>\n`, r.id);
-  await (h.hub as unknown as { afterLoad(): Promise<void> }).afterLoad();
+  const hub = h.hub as unknown as Restyling;
+  await hub.afterLoad();
+  hub.restylePass();
   expect(h.hub.files(r.id)["index.mdx"]).toContain(`<b className="text-primary">Hi</b>`);
 });

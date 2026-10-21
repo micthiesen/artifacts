@@ -326,14 +326,14 @@ const MIGRATIONS: Migration[] = [
     `),
   // Tokens that work once (a render check's frame), remembered until they'd have expired anyway.
   (sql) => sql.exec(`CREATE TABLE used_tokens (id TEXT PRIMARY KEY, until INTEGER NOT NULL)`),
-  // The restyle retired the gradient classes (bg-signal, text-signal…): rewrite stored files to the solid colours.
-  (sql) => void retireSignalBlobs(sql),
 ];
 
 /** Links to other artifacts in this workspace, from file contents: /a/<id> (absolute or relative). */
 const LINK_RE = /\/a\/(a[a-z0-9]{12})(?![a-z0-9])/g;
 /** Artifacts whose links one alarm step reads while backfilling. */
 const LINKS_BATCH = 100;
+/** Artifacts per alarm step of the restyle pass (src/worker/restyle.ts). */
+const RESTYLE_BATCH = 50;
 
 /** The artifacts a page's own files link to: its markdown and code, not its data (which can be large and changes on every refresh). */
 function linkTargets(files: Record<string, string>, self: string): Set<string> {
@@ -407,8 +407,11 @@ export class Workspace extends DurableObject {
     // doesn't exist (or was just deleted) stays empty and stores nothing.
     this.ready = ctx.storage.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = '_schema'`).toArray().length > 0;
     if (this.ready) migrate(ctx.storage, MIGRATIONS);
-    // Work a migration left for the alarm (the links backfill) starts on the first wake.
-    if (this.ready && this.setting("links_backfill") !== null) ctx.blockConcurrencyWhile(() => this.armAlarm());
+    // The restyle pass (retired gradient classes) runs once per workspace, on the alarm. It's a setting rather than
+    // a numbered migration so the release before it can still run against this data.
+    if (this.ready && this.setting("restyle_done") === null && this.setting("restyle_pass") === null) this.setSetting("restyle_pass", "");
+    // Work a migration left for the alarm (the links backfill, the restyle pass) starts on the first wake.
+    if (this.ready && (this.setting("links_backfill") !== null || this.setting("restyle_pass") !== null)) ctx.blockConcurrencyWhile(() => this.armAlarm());
   }
 
   private ready: boolean;
@@ -1544,6 +1547,7 @@ export class Workspace extends DurableObject {
     await step("links", async () => this.backfillLinks());
     // Nothing else touches data while a restore or import replaces it.
     if (this.offline()) return;
+    await step("restyle", async () => this.restylePass());
     if (this.setting("resync_due")) await step("directory resync", () => this.resync());
     if (this.setting("inbox_forget_due")) await step("inbox cleanup", () => this.forgetInbox([]));
     const backupAt = Number(this.setting("backup_due_at") ?? NaN);
@@ -1610,7 +1614,7 @@ export class Workspace extends DurableObject {
     else if (!job && this.setting("jobs_next")) times.push(Date.now());
     if (this.setting("resync_due")) times.push(Date.now() + 60_000);
     if (this.setting("inbox_forget_due")) times.push(Date.now() + 60_000);
-    if (this.setting("links_backfill") !== null) times.push(Date.now() + 1000);
+    if (this.setting("links_backfill") !== null || this.setting("restyle_pass") !== null) times.push(Date.now() + 1000);
     if (!times.length) return;
     const at = Math.max(Math.min(...times), Date.now() + 1000);
     const existing = await this.ctx.storage.getAlarm();
@@ -2230,8 +2234,8 @@ export class Workspace extends DurableObject {
     this.sql.exec(`DELETE FROM event_subs`);
     this.sql.exec(`DELETE FROM links`);
     this.setSetting("links_backfill", "");
-    // A backup from before the restyle brings the retired gradient classes back; the migration has already run.
-    retireSignalBlobs(this.sql);
+    // A backup from before the restyle brings the retired gradient classes back: run the pass again.
+    this.setSetting("restyle_pass", "");
     this.dirty = false;
     this.markDirty();
     this.setSetting("resync_due", "1");
@@ -3417,6 +3421,18 @@ export class Workspace extends DurableObject {
     }
     this.setSetting("links_backfill", ids.length === LINKS_BATCH ? ids[ids.length - 1] : null);
     return ids.length === LINKS_BATCH;
+  }
+
+  /** One step of the restyle pass: a batch of artifacts' files off the retired gradient names. */
+  private restylePass(): boolean {
+    const after = this.setting("restyle_pass");
+    if (after === null) return false;
+    const ids = this.sql.exec(`SELECT id FROM artifacts WHERE id > ? ORDER BY id LIMIT ?`, after, RESTYLE_BATCH).toArray().map((r) => r.id as string);
+    for (const id of ids) retireSignalBlobs(this.sql, id);
+    const more = ids.length === RESTYLE_BATCH;
+    this.setSetting("restyle_pass", more ? ids[ids.length - 1] : null);
+    if (!more) this.setSetting("restyle_done", "1");
+    return more;
   }
 
   /** Drop file contents that neither the current files nor any kept version use. */

@@ -13,10 +13,10 @@ Style with Tailwind classes and theme tokens (the theme is dark only): `bg-backg
 
 Layout and content
 - `Page({title?, subtitle?, wide?})`: centered readable column. MDX is already wrapped in one.
-- `Section({title, description?})`, `Grid({cols: 1-6, gap?})`, `Stack({direction?: "row"|"col", gap?, align?})`
-- `Summary`: the lead answer, set large. Put it first.
+- `Section({title, description?})`, `Grid({cols: 1-6, gap?})`, `Stack({direction?: "row"|"col", gap?, align?})` (a row wraps its items when full; in a row with an `Avatar`, a text `span` or `p` takes the rest of the row and wraps beside it, which makes a byline)
+- `Summary`: the lead answer, set large in a tinted panel. Put it first.
 - `Callout({tone?: "info"|"success"|"warning"|"danger", title?})`
-- `Stat({label, value, delta?: "+12%"|number, hint?, invert?})` inside `Stats` (one panel divided into cells; put the `Stat`s directly inside it, not wrapped)
+- `Stat({label, value, delta?: "+12%"|number, hint?, invert?})` inside `Stats` (one panel divided into cells; put the `Stat`s directly inside it, not wrapped; a cell's own background and border are replaced by the panel's)
 - `Steps` > `Step({title})`; `Timeline` > `TimelineItem({date?, title?, tone?})`
 - `Link({href})`: external, opens a new tab. Markdown links do the same.
 
@@ -50,7 +50,7 @@ Primitives
 - `Accordion` > `AccordionItem({value})` > `AccordionTrigger` + `AccordionContent`
 - `Dialog` > `DialogTrigger` (`render={<Button/>}` to restyle) + `DialogContent` > `DialogHeader` > `DialogTitle`, `DialogDescription`, then `DialogFooter`, `DialogClose`
 - `Popover` > `PopoverTrigger` + `PopoverContent({side?, align?})`; `Tooltip({content, side?})` wraps one element; it's a hover extra that phones never show, so nothing people need goes only in a tooltip
-- `Progress({value, max?, label?})`, `Separator`, `Avatar({email?|name?, src?, size?})`, `AvatarGroup({emails})`, `Kbd`, `Skeleton`, `ScrollArea`
+- `Progress({value, max?, label?})`, `Separator`, `Avatar({email?|name?, src?, size?})` (a person is a small ghost in their own colour with their initials; with `src`, a round photo), `AvatarGroup({emails})` (a row of them), `Kbd`, `Skeleton`, `ScrollArea`
 
 Live and shared (they work without extra code; view-only and anonymous viewers see results read-only)
 - `Poll({id, options, multiple?, question?})`: shows counts and who voted.

@@ -110,7 +110,9 @@ where a test can catch them; keep the rest by hand.
   transitions, not keyframes, so they reverse when someone changes their
   mind. In shell CSS, toggle `hidden` with `@starting-style` and
   `transition-behavior: allow-discrete` on `display`. Popovers grow from
-  their trigger. Exits may be one step faster than entrances.
+  their trigger. Exits may be one step faster than entrances. One
+  exception: an accordion panel closes at once, because fading it out at
+  full height only delays the content below snapping up.
 - Third-party components bring their own animation defaults: switch them
   off or set them to the tokens (Recharts charts run with
   `isAnimationActive={false}`).

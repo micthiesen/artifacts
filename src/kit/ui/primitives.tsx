@@ -188,7 +188,7 @@ const avatarSizes = { sm: "size-6 text-[10px]", default: "size-8 text-xs", lg: "
  * A ghost keeps the same height as a round avatar (rows centre their first line on it), is about as wide as tall,
  * and its initials sit small, with room around them.
  */
-const ghostSizes = { sm: "h-6 w-[23px] text-[9.5px]", default: "h-8 w-[31px] text-[10.5px]", lg: "h-10 w-[39px] text-[13px]" } as const;
+const ghostSizes = { sm: "h-6 w-[23px] text-[10px]", default: "h-8 w-[31px] text-[11.5px]", lg: "h-10 w-[39px] text-[13px]" } as const;
 
 /** Avatar from an email (initials) or an image src (data: URLs only inside the frame). */
 export function Avatar({
