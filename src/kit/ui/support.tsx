@@ -60,7 +60,7 @@ export function SupportCase({ data: path = "case.json" }: { data?: string }) {
             {data.viaAgent ? " (via their agent)" : ""}, {relativeTime(data.submittedAt, now)}
           </span>
         </div>
-        <h1 className="m-0 text-[1.75rem] leading-tight font-semibold text-balance">{data.title}</h1>
+        <h1 className="m-0 font-display text-[1.75rem] leading-tight font-semibold text-balance">{data.title}</h1>
       </header>
 
       <section className="rounded-xl border border-border bg-card p-4 shadow-card">

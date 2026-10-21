@@ -24,7 +24,8 @@
   left: -14px;
   width: 3px;
   border-radius: 2px;
-  background: var(--primary);
+  /* Changed since your last visit: someone else's change, so it's the others' light. */
+  background: var(--others);
   animation: art-fade-in var(--motion-slow) var(--motion-ease);
 }
 @media (max-width: 640px) {

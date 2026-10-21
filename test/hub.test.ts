@@ -139,3 +139,12 @@ test("waking after the restyle rewrites stored files that used the retired gradi
   expect(woken.files(r.id)["index.mdx"]).toContain(`<span className="bg-primary px-2">New</span>`);
   expect(sql.exec(`SELECT version FROM _schema`).one().version).toBe(version);
 });
+
+test("a restore from before the restyle loses the retired gradient classes too", async () => {
+  const r = await h.hub.create({ title: "Old", files: { "index.mdx": "# Old\n\nPlain.\n" }, owner: OWNER });
+  if (!r.ok) throw new Error(JSON.stringify(r.errors));
+  // As an older backup would load it: the old class back in the stored file, after the migration already ran.
+  h.ctx.sqlStorage.exec(`UPDATE blobs SET content = ? WHERE artifact_id = ?`, `# Old\n\n<b className="text-signal">Hi</b>\n`, r.id);
+  await (h.hub as unknown as { afterLoad(): Promise<void> }).afterLoad();
+  expect(h.hub.files(r.id)["index.mdx"]).toContain(`<b className="text-primary">Hi</b>`);
+});

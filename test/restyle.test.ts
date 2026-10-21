@@ -11,8 +11,10 @@ test("retired gradient classes become the solid colours", () => {
     `border-primary text-others bg-gradient-to-r from-primary to-others`,
   );
   expect(retireSignal(`style={{ background: "var(--signal)", color: "var(--signal-to)", borderColor: "var(--signal-from)" }}`)).toBe(
-    `style={{ background: "var(--primary)", color: "var(--others)", borderColor: "var(--primary)" }}`,
+    `style={{ background: "linear-gradient(var(--primary), var(--primary))", color: "var(--others)", borderColor: "var(--primary)" }}`,
   );
+  // --signal was an image: it stays one where only an image is valid.
+  expect(retireSignal(`<div className="bg-[image:var(--signal-v)]" />`)).toBe(`<div className="bg-[image:linear-gradient(var(--primary), var(--primary))]" />`);
 });
 
 test("text that only mentions signal is left alone", () => {

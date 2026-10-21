@@ -88,7 +88,7 @@ export function Select({
                   key={String(it.value)}
                   value={it.value}
                   disabled={it.disabled}
-                  className="grid cursor-default grid-cols-[minmax(0,1fr)_1rem] items-center gap-3 rounded-[calc(var(--radius)-5px)] py-1.5 pr-2 pl-2.5 text-sm outline-none select-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground data-selected:font-medium"
+                  className="grid cursor-default grid-cols-[minmax(0,1fr)_1rem] items-center gap-3 rounded-[calc(var(--radius)-5px)] py-1.5 pr-2 pl-2.5 text-sm outline-none select-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground data-highlighted:outline-2 data-highlighted:-outline-offset-2 data-highlighted:outline-primary data-selected:font-medium"
                 >
                   <BaseSelect.ItemText className="[overflow-wrap:anywhere]">{it.label}</BaseSelect.ItemText>
                   <BaseSelect.ItemIndicator className="text-primary">
@@ -275,7 +275,6 @@ export function DialogContent({ className, children, showClose = true, ...props 
       <BaseDialog.Popup
         className={cn(
           surface,
-          "before:pointer-events-none before:absolute before:inset-x-6 before:top-0 before:h-px before:bg-border",
           "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl p-6 shadow-2xl transition-[transform,opacity] duration-(--motion-base)",
           "data-ending-style:scale-[0.97] data-ending-style:opacity-0 data-starting-style:scale-[0.97] data-starting-style:opacity-0",
           className as string,

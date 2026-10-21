@@ -57,17 +57,17 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
-  /* Headings break into even lines; running text avoids a one-word last line.
-     Utilities (truncate, whitespace-nowrap, text-wrap) still win. */
   /* A Stack that is a top-level block of a document (each is wrapped in its block's [data-b] div) gets the same
      breathing room as a paragraph; stacks inside cards and apps keep their own spacing. */
   [data-b] > .art-stack {
     margin-block: 1rem;
   }
-    /* Fraunces with soft terminals, like the ghost's outline. */
+  /* Fraunces with soft terminals, like the ghost's outline. */
   .font-display {
     font-variation-settings: "SOFT" 100;
   }
+  /* Headings break into even lines; running text avoids a one-word last line.
+     Utilities (truncate, whitespace-nowrap, text-wrap) still win. */
   :where(h1, h2, h3, h4, h5, h6) {
     text-wrap: balance;
   }

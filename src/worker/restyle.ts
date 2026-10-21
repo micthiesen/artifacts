@@ -9,11 +9,33 @@ const RENAMES: [RegExp, string][] = [
   // The two ends as colours (bg-signal-from, text-signal-to, border-signal-from, from-signal-from…).
   [/(?<=[\w-])-signal-from(?![\w-])/g, "-primary"],
   [/(?<=[\w-])-signal-to(?![\w-])/g, "-others"],
-  // CSS variables in style props and stylesheets.
+  // CSS variables in style props and stylesheets. --signal was a gradient, so it only ever sat where an image goes
+  // (background, background-image): it becomes a solid image there, not a colour, which would be invalid.
   [/var\(--signal-from\)/g, "var(--primary)"],
   [/var\(--signal-to\)/g, "var(--others)"],
-  [/var\(--signal(?:-v)?\)/g, "var(--primary)"],
+  [/var\(--signal(?:-v)?\)/g, "linear-gradient(var(--primary), var(--primary))"],
 ];
+
+/** Only files that name a retired class or variable; prose that merely says "signal" is never loaded. */
+const MATCH = `(content LIKE '%bg-signal%' OR content LIKE '%text-signal%' OR content LIKE '%-signal-from%' OR content LIKE '%-signal-to%' OR content LIKE '%--signal%')`;
+
+/**
+ * Rewrite stored files that use the retired names, one at a time. In place under the same hash: a later save of
+ * the old text lands on the new one anyway, and builds recompile from the files because the theme changed. Runs
+ * as a migration and again after every restore or import, since an older backup brings the old names back.
+ */
+export function retireSignalBlobs(sql: SqlStorage): number {
+  const keys = sql.exec(`SELECT artifact_id, hash FROM blobs WHERE ${MATCH}`).toArray();
+  let changed = 0;
+  for (const { artifact_id, hash } of keys) {
+    const content = sql.exec(`SELECT content FROM blobs WHERE artifact_id = ? AND hash = ?`, artifact_id, hash).one().content as string;
+    const next = retireSignal(content);
+    if (next === content) continue;
+    sql.exec(`UPDATE blobs SET content = ? WHERE artifact_id = ? AND hash = ?`, next, artifact_id, hash);
+    changed++;
+  }
+  return changed;
+}
 
 /** `text` with the retired gradient classes and variables replaced; the same string when there were none. */
 export function retireSignal(text: string): string {

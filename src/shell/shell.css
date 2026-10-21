@@ -336,7 +336,7 @@ h1 { font-size: 1.85rem; line-height: 1.15; margin: 0 0 .5rem; }
 }
 body.om-open { overflow: hidden; }
 .om-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem .5rem .25rem 1.1rem; flex: none; }
-.om-title { margin: 0; font-size: 1.05rem; font-weight: 650; letter-spacing: -.01em; }
+.om-title { margin: 0; font-family: inherit; font-variation-settings: normal; font-size: 1.05rem; font-weight: 650; letter-spacing: -.01em; }
 .om-icon-button {
   display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border: 0; border-radius: var(--radius); flex: none;
   background: none; color: var(--muted-fg); cursor: pointer;
@@ -580,7 +580,8 @@ div.thread-anchor { cursor: default; }
 .profile { display: grid; gap: 1.25rem; }
 .profile .page-title { margin-bottom: 0; }
 .card-section { padding: 1.1rem 1.2rem 1.25rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow-card); }
-.card-section h2 { margin: 0 0 .25rem; font-size: 17px; letter-spacing: -.01em; }
+/* Card and plan names are labels, so they stay Inter (Fraunces is for page and section headings). */
+.card-section h2 { margin: 0 0 .25rem; font-family: inherit; font-variation-settings: normal; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
 .card-section > p { margin: 0 0 .9rem; }
 /* Rows wrap on a phone: the input takes a line, its select and button the next. */
 .profile .row { display: flex; flex-wrap: wrap; gap: .5rem; }
@@ -761,7 +762,7 @@ div.thread-anchor { cursor: default; }
   position: relative; padding: 1.2rem 1.2rem 1.3rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px);
   background: var(--card); box-shadow: var(--shadow-card); overflow: hidden;
 }
-.pricing-card h2 { margin: 0 0 .35rem; font-size: 16px; letter-spacing: -.01em; }
+.pricing-card h2 { margin: 0 0 .35rem; font-family: inherit; font-variation-settings: normal; font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
 .splash-card > p { margin: 0 0 .9rem; font-size: 14px; line-height: 1.55; }
 .splash-self p { line-height: 1.6; margin: 0 0 1.1rem; }
 .splash-self p.splash-license { font-size: 13.5px; margin: 1.1rem 0 0; }

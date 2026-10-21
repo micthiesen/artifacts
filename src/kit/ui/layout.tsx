@@ -64,9 +64,9 @@ export function Stack({
       className={cn(
         "art-stack flex",
         direction === "row"
-          ? // Chips and buttons wrap to a new line when the row is full; text (a plain span or paragraph) takes the
-            // rest of the row and wraps inside it instead, so a byline stays beside its avatar.
-            "flex-row flex-wrap [&>:is(span,p):not(.inline-flex)]:min-w-0 [&>:is(span,p):not(.inline-flex)]:flex-[1_1_12rem] [&>p]:my-0"
+          ? // In a row with an avatar (a byline), text takes the rest of the row and wraps beside the avatar instead of
+            // dropping below it. Other rows wrap their items as they are.
+            "flex-row flex-wrap has-[>.art-avatar]:[&>:is(span,p):not(.inline-flex)]:min-w-0 has-[>.art-avatar]:[&>:is(span,p):not(.inline-flex)]:flex-[1_1_12rem] [&>p]:my-0"
           : "flex-col",
         gaps[gap],
         align && aligns[align],
@@ -83,7 +83,7 @@ export function Summary({ children, className }: Children) {
   return (
     <div
       className={cn(
-        "my-8 rounded-xl bg-primary/[0.09] px-5 py-4 text-[1.1875rem] leading-[1.6] text-pretty text-foreground [&_p]:my-0 [&_p+p]:mt-3",
+        "my-8 rounded-xl border border-primary/20 bg-primary/[0.09] px-5 py-4 text-[1.1875rem] leading-[1.6] text-pretty text-foreground [&_p]:my-0 [&_p+p]:mt-3",
         className,
       )}
     >

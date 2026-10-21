@@ -378,8 +378,11 @@
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  /* Initials on a person's ghost stay dark ink (--primary-foreground is white on paper). */
+  /* A person's ghost: its pastel is nearly invisible on paper, so it prints deeper, without the shine, and its
+     initials in white (--primary-foreground is white on paper). */
   [class*="bg-(--who)"] {
-    color: oklch(0.2 0.015 262) !important;
+    background-color: color-mix(in oklab, var(--who) 55%, oklch(0.35 0.05 262)) !important;
+    background-image: none !important;
+    color: #fff !important;
   }
 }

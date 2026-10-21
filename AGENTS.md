@@ -16,8 +16,9 @@ white for the agent (the ghost), iris (`--primary`) for you, aqua
 (`--others`) for other people. Keep these by hand:
 
 - No gradient fills: buttons, rules, rings, text and underlines are solid.
-  Soft radial light (the ghost's halo, the page's top glow) is the only
-  gradient. The shine on a person's ghost is a drawn crescent, not a
+  Soft radial light (the ghost's halo, the page's top glow) and a chart's
+  area fade are the only gradients. Chart series colours carry no meaning
+  about who; they are just series. The shine on a person's ghost is a drawn crescent, not a
   gradient.
 - Fraunces (`--font-display`, soft terminals) is for page and section
   headings and the wordmark only. Controls, labels, tables and numbers stay
