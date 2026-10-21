@@ -55,17 +55,14 @@ export function Stack({
   align,
   children,
   className,
-  ...rest
-}: Children & { direction?: "row" | "col"; gap?: 1 | 2 | 3 | 4 | 6 | 8; align?: "start" | "center" | "end" | "between" } & React.HTMLAttributes<HTMLDivElement>) {
+}: Children & { direction?: "row" | "col"; gap?: 1 | 2 | 3 | 4 | 6 | 8; align?: "start" | "center" | "end" | "between" }) {
   const gaps: Record<number, string> = { 1: "gap-1", 2: "gap-2", 3: "gap-3", 4: "gap-4", 6: "gap-6", 8: "gap-8" };
   const aligns: Record<string, string> = { start: "items-start", center: "items-center", end: "items-end", between: "items-center justify-between" };
-  // A top-level block of a document (it carries the block id) gets the same breathing room as a paragraph.
-  const inDocument = "data-b" in rest;
+  // art-stack: a stack that is a top-level block of a document gets a paragraph's spacing (kit.css).
   return (
     <div
-      {...rest}
       className={cn(
-        "flex",
+        "art-stack flex",
         direction === "row"
           ? // Chips and buttons wrap to a new line when the row is full; text (a plain span or paragraph) takes the
             // rest of the row and wraps inside it instead, so a byline stays beside its avatar.
@@ -73,7 +70,6 @@ export function Stack({
           : "flex-col",
         gaps[gap],
         align && aligns[align],
-        inDocument && "my-4",
         className,
       )}
     >
