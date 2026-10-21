@@ -197,3 +197,20 @@ test("a member's colour reaches their bar and the artifact page", async () => {
   // A guest has no stored colour: pages work theirs out from their email.
   expect((await h.hub.access("guest@example.com")).colour).toBeUndefined();
 });
+
+test("a guest or a link visitor learns only the colours of people the page already shows", async () => {
+  await h.hub.setMember("mia@example.com", "member", OWNER);
+  await h.hub.setMember("quiet@example.com", "member", OWNER);
+  const id = await make();
+  h.hub.share(id, { add: [{ email: "guest@corp.com", role: "edit" }] });
+  await h.hub.setState(id, { "poll/x/mia@example.com": true }, "mia@example.com");
+  const guest = h.hub.openArtifact(id, "guest@corp.com", false) as { colours: Record<string, number> };
+  expect(Object.keys(guest.colours)).toEqual(["mia@example.com"]);
+  // On a presigned link a member gets the same; signed in normally, everyone's, so people who turn up later
+  // already have theirs.
+  h.hub.share(id, { add: [{ email: "mia@example.com", role: "view" }] });
+  const linked = h.hub.openArtifact(id, "mia@example.com", true) as { colours: Record<string, number> };
+  expect(Object.keys(linked.colours)).toEqual(["mia@example.com"]);
+  const full = h.hub.openArtifact(id, "mia@example.com", false) as { colours: Record<string, number> };
+  expect(Object.keys(full.colours)).toContain("quiet@example.com");
+});

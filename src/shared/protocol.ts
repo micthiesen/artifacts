@@ -77,8 +77,8 @@ export type SyncServerMessage =
   | { t: "set"; key: string; value: JsonValue | null; seq: number; by: string | null; cid?: string }
   | { t: "rejected"; cid: string; reason: string }
   | { t: "presence"; viewers: string[]; colours?: Record<string, number> }
-  | { t: "threads"; threads: Thread[]; people: Person[] }
-  | { t: "thread"; thread: Thread; cid?: string }
+  | { t: "threads"; threads: Thread[]; people: Person[]; colours?: Record<string, number> }
+  | { t: "thread"; thread: Thread; cid?: string; colours?: Record<string, number> }
   | { t: "ack"; cid: string }
   | { t: "version"; version: number; note: string };
 

@@ -375,6 +375,7 @@ function connect() {
         if (initSent) post({ t: "presence", viewers: presence, colours: msg.colours });
         break;
       case "threads":
+        rememberColours(msg.colours);
         drawer.setAll(msg.threads, msg.people);
         if (deepLink) {
           drawer.open(deepLink);
@@ -382,6 +383,7 @@ function connect() {
         }
         break;
       case "thread": {
+        rememberColours(msg.colours);
         const own = msg.cid !== undefined && pendingComments.delete(msg.cid);
         if (own) {
           drawer.sent(msg.cid!);

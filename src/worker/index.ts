@@ -560,7 +560,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   }
   if (path === "/me") {
     if (!viewer.email) return signIn("/me");
-    brand.colour = (await hub.access(viewer.email)).colour;
+    // Only a lookup: unlike access(), this never joins someone by their email domain.
+    brand.colour = (await hub.colourOf(viewer.email)).colour;
     return profilePage(viewer.email, "workspace", brand, Boolean(env.VAPID_PUBLIC_KEY), Boolean(env.PUSHOVER_TOKEN));
   }
   if (path === "/api/me" || path.startsWith("/api/me/")) return workspaceMeApi(request, url, env, hub, session);

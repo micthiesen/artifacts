@@ -149,7 +149,7 @@ type AsyncMethods<T> = {
 export type HubApi = AsyncMethods<
   Pick<
     Workspace,
-    | "provision" | "access" | "info" | "rename" | "stats" | "destroy" | "members" | "setMember" | "createToken" | "tokens"
+    | "provision" | "access" | "colourOf" | "info" | "rename" | "stats" | "destroy" | "members" | "setMember" | "createToken" | "tokens"
     | "revokeToken" | "verifyAgentToken" | "signedIn" | "closeSockets" | "allowMail" | "indexData" | "listPage" | "exists" | "forgetPerson" | "spendToken" | "openArtifact" | "recordGrant" | "grants" | "forgetGrants" | "list" | "meta" | "roleFor" | "files" | "grep" | "build" | "history" | "create"
     | "editText" | "writeFiles" | "patchData" | "revert" | "updateMeta" | "share" | "delete" | "state" | "setState"
     | "recordError" | "errors" | "runRenderCheck" | "putAsset" | "deleteAsset" | "assets" | "asset" | "allowedHosts"
@@ -330,7 +330,11 @@ const MIGRATIONS: Migration[] = [
   // Tokens that work once (a render check's frame), remembered until they'd have expired anyway.
   (sql) => sql.exec(`CREATE TABLE used_tokens (id TEXT PRIMARY KEY, until INTEGER NOT NULL)`),
   // Each member's avatar colour (a palette index). Null until first needed; memberColours hands them out.
-  (sql) => sql.exec(`ALTER TABLE members ADD COLUMN colour INTEGER`),
+  (sql) =>
+    sql.exec(`
+      ALTER TABLE members ADD COLUMN colour INTEGER;
+      CREATE INDEX members_colourless ON members (added_at) WHERE colour IS NULL;
+    `),
 ];
 
 /** Links to other artifacts in this workspace, from file contents: /a/<id> (absolute or relative). */
@@ -709,6 +713,8 @@ export class Workspace extends DurableObject {
   memberColours(only?: Iterable<string>): Record<string, number> {
     const missing = this.sql.exec(`SELECT email FROM members WHERE colour IS NULL ORDER BY added_at, email`).toArray();
     if (missing.length) {
+      // Stored with the rest of the workspace, so the next backup keeps them.
+      this.markDirty();
       const counts = new Array<number>(PALETTE.length).fill(0);
       for (const r of this.sql.exec(`SELECT colour, COUNT(*) AS n FROM members WHERE colour IS NOT NULL GROUP BY colour`)) {
         const i = r.colour as number;
@@ -722,16 +728,19 @@ export class Workspace extends DurableObject {
       }
     }
     const out: Record<string, number> = {};
-    const wanted = only ? new Set([...only].map((e) => e.toLowerCase())) : null;
-    for (const r of this.sql.exec(`SELECT email, colour FROM members`)) {
-      const email = r.email as string;
-      if (!wanted || wanted.has(email.toLowerCase())) out[email] = r.colour as number;
+    if (!only) {
+      for (const r of this.sql.exec(`SELECT email, colour FROM members`)) out[r.email as string] = r.colour as number;
+      return out;
+    }
+    for (const email of new Set([...only].map((e) => e.toLowerCase()))) {
+      const r = this.sql.exec(`SELECT colour FROM members WHERE email = ?`, email).toArray()[0];
+      if (r) out[email] = r.colour as number;
     }
     return out;
   }
 
   /** A member's stored colour, for the bar's own avatar ({} for anyone else). */
-  private colourOf(email: string | null): { colour?: number } {
+  colourOf(email: string | null): { colour?: number } {
     if (!email) return {};
     const row = this.sql.exec(`SELECT colour FROM members WHERE email = ?`, email).toArray()[0];
     if (!row) return {};
@@ -740,21 +749,26 @@ export class Workspace extends DurableObject {
   }
 
   /**
-   * The colours an artifact page needs: every member's, or in a big workspace only those of the people who show up
-   * on this page (its owner, people it's shared with, whoever wrote its state or comments, and the viewer).
+   * The colours an artifact page needs. A member (not on a presigned link) gets every member's in a workspace of up
+   * to PAGE_COLOURS_ALL, so anyone who turns up later already has theirs. Anyone else, and everyone in a bigger
+   * workspace, gets only the people this page already shows them: whoever wrote its state or comments, and
+   * themselves. Colours name people, so a guest never learns who else is in the workspace from them.
    */
-  private pageColours(id: string, email: string | null): Record<string, number> {
-    const count = this.sql.exec(`SELECT COUNT(*) AS n FROM members`).one().n as number;
-    if (count <= PAGE_COLOURS_ALL) return this.memberColours();
+  private pageColours(id: string, email: string | null, member: boolean): Record<string, number> {
+    if (member && (this.sql.exec(`SELECT COUNT(*) AS n FROM members`).one().n as number) <= PAGE_COLOURS_ALL) return this.memberColours();
     const people = new Set<string>();
     if (email) people.add(email);
     for (const r of this.sql.exec(
-      `SELECT owner AS e FROM artifacts WHERE id = ?1 UNION SELECT email FROM shares WHERE artifact_id = ?1
-       UNION SELECT "by" FROM state WHERE artifact_id = ?1 AND "by" IS NOT NULL UNION SELECT "by" FROM comments WHERE artifact_id = ?1`,
+      `SELECT "by" AS e FROM state WHERE artifact_id = ?1 AND "by" IS NOT NULL UNION SELECT "by" FROM comments WHERE artifact_id = ?1`,
       id,
     ))
       people.add(r.e as string);
     return this.memberColours(people);
+  }
+
+  /** Members' colours for the people who wrote in these threads. */
+  private threadColours(threads: Thread[]): Record<string, number> {
+    return this.memberColours(threads.flatMap((t) => t.comments.map((c) => c.by)).filter((by) => by.includes("@")));
   }
 
   private memberRole(email: string): WorkspaceRole | null {
@@ -1977,7 +1991,7 @@ export class Workspace extends DurableObject {
       meta,
       member,
       visit: email ? this.visit(id, email) : null,
-      colours: this.pageColours(id, email),
+      colours: this.pageColours(id, email, Boolean(member) && !scoped),
       ...(scoped ? {} : this.linksFor(id, email)),
     };
   }
@@ -2366,7 +2380,10 @@ export class Workspace extends DurableObject {
     const seq = this.sql.exec(`SELECT state_seq FROM artifacts WHERE id = ?`, id).one().state_seq as number;
     send(pair[1], { t: "snapshot", seq, state: this.state(id) });
     // Comments are for signed-in collaborators; anonymous public viewers don't get them.
-    if (email) send(pair[1], { t: "threads", threads: this.threads(id), people });
+    if (email) {
+      const threads = this.threads(id);
+      send(pair[1], { t: "threads", threads, people, colours: this.threadColours(threads) });
+    }
     this.broadcastPresence(id);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -2515,7 +2532,7 @@ export class Workspace extends DurableObject {
       );
     });
     const thread = this.thread(threadId!)!;
-    this.broadcast(id, { t: "thread", thread, cid });
+    this.broadcast(id, { t: "thread", thread, cid, colours: this.threadColours([thread]) });
     this.notifyComment(id, actor, { thread: threadId!, text, participants, reply, origin, onBehalf: input.onBehalf });
     return thread;
   }
@@ -2537,7 +2554,7 @@ export class Workspace extends DurableObject {
       this.logEvent(id, actor, resolved ? "resolve" : "reopen", { thread: threadId });
     });
     const thread = this.thread(threadId)!;
-    this.broadcast(id, { t: "thread", thread, cid: opts.cid });
+    this.broadcast(id, { t: "thread", thread, cid: opts.cid, colours: this.threadColours([thread]) });
     if (resolved) this.notifyResolved(id, actor, thread, opts.origin, opts.onBehalf);
     return thread;
   }
@@ -3439,7 +3456,7 @@ export class Workspace extends DurableObject {
     for (const t of resolves) {
       const thread = this.thread(t);
       if (!thread) continue;
-      this.broadcast(id, { t: "thread", thread });
+      this.broadcast(id, { t: "thread", thread, colours: this.threadColours([thread]) });
       this.notifyResolved(id, actor, thread, opts.origin, opts.onBehalf);
     }
     this.notifyUpdate(id, actor, next, note, opts.origin, opts.onBehalf);

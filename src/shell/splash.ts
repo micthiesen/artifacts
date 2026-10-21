@@ -4,7 +4,8 @@
 // made-up viewer who may write, and keeps whatever the visitor does local to
 // this page. Nothing is sent anywhere, and a reload starts over.
 import type { FrameMessage, JsonValue, ShellMessage } from "../shared/protocol.ts";
-import { seedValue, type SeedEntry } from "../../demo/examples.ts";
+import { PEOPLE, seedValue, type SeedEntry } from "../../demo/examples.ts";
+import { PALETTE } from "../shared/who.ts";
 
 const YOU = "you@example.com";
 const seeds = JSON.parse(document.getElementById("demo-seed")?.textContent ?? "{}") as Record<string, SeedEntry[]>;
@@ -26,7 +27,9 @@ window.addEventListener("message", (ev) => {
   const send = (m: ShellMessage) => frame.contentWindow?.postMessage(m, "*");
   if (msg.t === "ready") {
     const people = [...new Set((seeds[slug] ?? []).map((e) => e.by))];
-    send({ t: "init", viewer: { email: YOU, role: "edit" }, local: {}, shared: sharedFor(slug), presence: [YOU, ...people.slice(0, 2)], theme: "dark" });
+    // Like a workspace's members: everyone on the page gets a different colour.
+    const colours = Object.fromEntries([YOU, ...PEOPLE].map((email, i) => [email, i % PALETTE.length]));
+    send({ t: "init", viewer: { email: YOU, role: "edit" }, local: {}, shared: sharedFor(slug), presence: [YOU, ...people.slice(0, 2)], theme: "dark", colours });
     frame.closest(".showcase-render")?.classList.add("ready");
   } else if (msg.t === "shared:set" && /^(approve|form)\/[^/]+\/./.test(msg.key) && msg.value && typeof msg.value === "object" && !Array.isArray(msg.value)) {
     // Stamped like the hub does, so the visitor's own decision shows who and when.
