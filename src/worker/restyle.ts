@@ -49,5 +49,8 @@ export function retireSignalBlobs(sql: SqlStorage, artifactId: string): number {
       console.error(JSON.stringify({ ops: "restyle_skip", artifact: artifactId, message: String(err) }));
     }
   }
+  // A viewer may have recompiled from the old names before this pass reached the artifact: mark its build stale, so
+  // the next view compiles from the rewritten files (and a rebuild already in flight won't overwrite it).
+  if (changed) sql.exec(`UPDATE builds SET build = json_set(build, '$.stamp', '') WHERE artifact_id = ?`, artifactId);
   return changed;
 }

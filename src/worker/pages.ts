@@ -1081,6 +1081,7 @@ export function frameHtml(boot: FrameBoot, build: Pick<Build, "css" | "imports">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 ${DARK_HEAD}
 <link rel="stylesheet" href="${kit("kit.css", version)}">
+<link rel="preload" href="${KIT}/fonts/fraunces-latin-soft-normal.woff2" as="font" type="font/woff2" crossorigin>
 <style>${build.css.replace(/<\/style/gi, "<\\/style")}</style>
 <script type="importmap">${scriptJson({ imports: { ...kitImports(version), ...build.imports } })}</script>
 <script type="application/json" id="art-boot">${scriptJson(boot)}</script>

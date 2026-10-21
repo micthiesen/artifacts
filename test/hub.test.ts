@@ -139,6 +139,10 @@ test("the restyle pass rewrites stored files that used the retired gradient clas
   const woken = new Workspace(h.ctx as never, h.env as never) as unknown as Restyling & typeof h.hub;
   expect(woken.restylePass()).toBe(false);
   expect(woken.files(r.id)["index.mdx"]).toContain(`<span className="bg-primary px-2">New</span>`);
+  // A build compiled from the old names before the pass ran is stale, so the next view compiles the new files.
+  expect(JSON.parse(sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, r.id).one().build as string).stamp).toBe("");
+  const rebuilt = (await woken.build(r.id))!.build;
+  expect(rebuilt.css).toContain("bg-primary");
   // No schema bump: the release before this one can still run against the data.
   const setting = (k: string) => sql.exec(`SELECT value FROM settings WHERE key = ?`, k).toArray()[0]?.value ?? null;
   expect(setting("restyle_done")).toBe("1");
