@@ -195,7 +195,8 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
           const st = map.get(slug);
           const done = !!st?.done;
           return (
-            <li key={slug} data-slug={slug} className="group flex items-center gap-3 px-4">
+            // Top-aligned: when an item wraps, its done-by avatar and remove button stay on the first line with the box.
+            <li key={slug} data-slug={slug} className="group flex items-start gap-3 px-4">
               {/* The whole row (box and text) is the checkbox, so the text toggles it and names it. */}
               <button
                 type="button"
@@ -227,7 +228,7 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
                     delay={300}
                     render={<button type="button" />}
                     aria-label={`Done by ${displayName(st.by)}`}
-                    className="-m-1 flex cursor-pointer rounded-full p-1 outline-none focus-visible:focus-halo"
+                    className="-m-1 mt-1 flex cursor-pointer rounded-full p-1 outline-none focus-visible:focus-halo"
                   >
                     <Avatar email={st.by} size="sm" />
                   </PopoverTrigger>
@@ -241,7 +242,7 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
                   type="button"
                   aria-label={`Remove ${text}`}
                   onClick={() => map.delete(slug)}
-                  className="relative cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 after:absolute after:-inset-1 after:content-[''] hover:text-negative focus-visible:opacity-100 pointer-coarse:opacity-70"
+                  className="relative mt-[9px] cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 after:absolute after:-inset-1 after:content-[''] hover:text-negative focus-visible:opacity-100 pointer-coarse:opacity-70"
                 >
                   <X className="size-3.5" />
                 </button>
@@ -527,7 +528,7 @@ export function Approval({
               <div className="min-w-0 flex-1">
                 {/* As tall as the avatar, so the name line centers on it. */}
                 <div className="flex flex-wrap items-baseline gap-x-2 text-sm leading-6">
-                  <span className="font-medium">{email === viewer.email ? "You" : displayName(email)}</span>
+                  <span className="min-w-0 font-medium break-words">{email === viewer.email ? "You" : displayName(email)}</span>
                   <span className={stale(d) ? "text-muted-foreground" : d.decision === "approve" ? "text-positive" : "text-caution"}>
                     {d.decision === "approve" ? "approved" : "requested changes"}
                     {stale(d) && ` v${d.version}`}

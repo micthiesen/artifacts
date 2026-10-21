@@ -188,7 +188,7 @@ const avatarSizes = { sm: "size-6 text-[10px]", default: "size-8 text-xs", lg: "
  * A ghost keeps the same height as a round avatar (rows centre their first line on it), is about as wide as tall,
  * and its initials sit small, with room around them.
  */
-const ghostSizes = { sm: "h-6 w-[23px] text-[8.5px]", default: "h-8 w-[31px] text-[10.5px]", lg: "h-10 w-[39px] text-[13px]" } as const;
+const ghostSizes = { sm: "h-6 w-[23px] text-[9px]", default: "h-8 w-[31px] text-[10.5px]", lg: "h-10 w-[39px] text-[13px]" } as const;
 
 /** Avatar from an email (initials) or an image src (data: URLs only inside the frame). */
 export function Avatar({
@@ -215,7 +215,7 @@ export function Avatar({
         "inline-flex shrink-0 items-center justify-center overflow-hidden font-semibold select-none",
         src
           ? "rounded-full bg-accent text-accent-foreground ring-2 ring-background"
-          : "bg-(--who) bg-[radial-gradient(ellipse_22%_11%_at_35%_21%,oklch(1_0_0/0.4)_92%,transparent_100%)] pt-[0.15em] font-semibold tracking-[-0.01em] text-primary-foreground [mask:var(--ghost-mask)_center/contain_no-repeat]",
+          : "bg-(--who) bg-[radial-gradient(ellipse_20%_10%_at_40%_22%,oklch(1_0_0/0.4)_92%,transparent_100%)] pt-[0.15em] font-semibold tracking-[-0.01em] text-primary-foreground [mask:var(--ghost-mask)_center/contain_no-repeat]",
         src ? avatarSizes[size] : ghostSizes[size],
         className,
       )}
@@ -226,7 +226,7 @@ export function Avatar({
   );
 }
 
-/** Overlapping avatars for a list of emails. */
+/** A row of avatars for a list of emails, with a count of the rest. */
 export function AvatarGroup({ emails, max = 5, size = "sm" }: { emails: string[]; max?: number; size?: keyof typeof avatarSizes }) {
   const shown = emails.slice(0, max);
   return (
@@ -234,7 +234,7 @@ export function AvatarGroup({ emails, max = 5, size = "sm" }: { emails: string[]
       {shown.map((e) => (
         <Avatar key={e} email={e} size={size} />
       ))}
-      {emails.length > max && <span className="pl-2.5 text-xs text-muted-foreground">+{emails.length - max}</span>}
+      {emails.length > max && <span className="pl-1 text-xs text-muted-foreground">+{emails.length - max}</span>}
     </span>
   );
 }

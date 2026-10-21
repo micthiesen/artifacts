@@ -94,7 +94,7 @@ export { PRODUCT };
 /** `sounds`: the cookie the apex and every workspace share for the Sounds choice (src/shared/sound.ts). */
 export type Brand = { name: string; home: string; apex: string; sounds?: SoundsCookie };
 
-/** The ghost logo, drawn by CSS (moonlight through an SVG mask, with a halo). */
+/** The ghost logo: logo-small.svg drawn by CSS, with a soft halo behind it. */
 const GHOST = `<span class="logo-ghost" aria-hidden="true"></span>`;
 
 /** The brand's name as a title: the product's own name gets its wordmark. */

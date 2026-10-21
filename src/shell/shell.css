@@ -164,7 +164,7 @@ a.title:hover { text-decoration: none; }
 .bar .status:empty { display: none; }
 /* Other people viewing now: a small overlapping stack, then a hairline before your avatar. */
 .bar .presence { display: flex; align-items: center; }
-.bar .presence:not(:empty) { padding-right: .7rem; margin-right: .1rem; border-right: 1px solid var(--border); height: 1.5rem; }
+.bar .presence:not(:empty) { padding-right: .7rem; margin-right: .1rem; border-right: 1px solid var(--border); height: 1.7rem; }
 .bar .presence .avatar {
   width: 1.5rem; height: 1.5rem; font-size: 10.5px; margin-left: -.35rem; border: 2px solid var(--bg);
   background: var(--muted); color: var(--muted-fg); cursor: default;
@@ -185,9 +185,11 @@ a.title:hover { text-decoration: none; }
 .me .avatar-button {
   position: relative; width: 2rem; height: 2rem; padding: 0; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 650;
 }
-/* 44px touch target around the 32px circle. */
-.me .avatar-button::before { content: ""; position: absolute; inset: -6px; border-radius: 999px; }
-.me .avatar-button[aria-expanded="true"] { box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 35%, transparent); }
+/* 44px touch target around the ghost (::before is the ghost's body, so the target is ::after). */
+.me .avatar-button::after { content: ""; position: absolute; inset: -6px; border-radius: 999px; }
+.me .avatar-button.ghosted { width: 1.95rem; height: 2rem; border: 0; border-radius: .5rem; }
+/* Open: the ghost glows in iris (a ring would draw a circle around a ghost). */
+.me .avatar-button[aria-expanded="true"] { filter: drop-shadow(0 0 5px color-mix(in oklab, var(--primary) 70%, transparent)); }
 /* The bar's popovers (account menu, inbox): under the right end of the bar, never wider than the screen and,
    on short screens (a phone in landscape, Safari's toolbars showing), scrolling inside themselves. */
 .bar-popover {
@@ -243,7 +245,7 @@ a.title:hover { text-decoration: none; }
 .avatar.ghosted::before {
   /* A small shine on the head: soft light, like the logo's halo. */
   content: ""; position: absolute; inset: 0; z-index: -1;
-  background: radial-gradient(ellipse 22% 11% at 35% 21%, oklch(1 0 0 / .4) 92%, transparent 100%), var(--who, var(--others));
+  background: radial-gradient(ellipse 20% 10% at 40% 22%, oklch(1 0 0 / .4) 92%, transparent 100%), var(--who, var(--others));
   -webkit-mask: var(--ghost-mask) center / contain no-repeat; mask: var(--ghost-mask) center / contain no-repeat;
 }
 
@@ -511,8 +513,9 @@ div.thread-anchor { cursor: default; }
 .chip.caution { color: var(--caution); background: color-mix(in oklab, var(--caution) 14%, transparent); }
 .comment { display: grid; gap: .2rem; }
 .comment.is-new .comment-who::after { content: "New"; display: inline-grid; place-items: center; height: 1rem; margin-left: .4rem; padding: 0 .35rem; border-radius: 999px; font-size: 10.5px; line-height: 1; font-weight: 700; color: var(--bg); background: var(--caution); }
-.comment-meta { display: flex; align-items: center; gap: .45rem; font-size: 13px; }
-.comment-who { font-weight: 600; display: inline-flex; align-items: center; gap: .35rem; }
+/* Top-aligned, with a first line as tall as the avatar: a long name that wraps keeps the ghost beside its first line. */
+.comment-meta { display: flex; align-items: flex-start; gap: .45rem; font-size: 13px; line-height: 1.35rem; }
+.comment-who { min-width: 0; font-weight: 600; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 .35rem; overflow-wrap: anywhere; }
 .comment-when { color: var(--muted-fg); font-size: 12px; }
 .comment-text { margin: 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mention-text { color: var(--primary); font-weight: 550; }

@@ -14,6 +14,7 @@ import "./report-errors.ts";
 import { cue, move } from "../shared/motion.ts";
 import { relativeTime } from "../shared/time.ts";
 import { readSoundsCookie, setSoundsEnabled, soundsCookie, soundsScopeOf, unlockAudio } from "../shared/sound.ts";
+import { whoColor } from "../shared/who.ts";
 
 // Short labels for the segmented row; the title says it in full.
 const LEVELS: [WatchLevel, string, string][] = [
@@ -213,7 +214,9 @@ function mountInboxBell(slot: HTMLElement, apex: string, seen?: string) {
 export function mountAccountMenu(slot: HTMLElement, email: string, options: AccountMenuOptions = {}): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "avatar avatar-button";
+  // You are a ghost like everyone else, in your own colour.
+  button.className = "avatar avatar-button ghosted";
+  button.style.setProperty("--who", whoColor(email));
   button.textContent = email.slice(0, 1).toUpperCase();
   button.title = email;
   button.setAttribute("aria-haspopup", "menu");

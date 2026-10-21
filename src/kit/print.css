@@ -378,4 +378,8 @@
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+  /* Initials on a person's ghost stay dark ink (--primary-foreground is white on paper). */
+  [class*="bg-(--who)"] {
+    color: oklch(0.2 0.015 262) !important;
+  }
 }
