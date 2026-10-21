@@ -27,8 +27,9 @@ window.addEventListener("message", (ev) => {
   const send = (m: ShellMessage) => frame.contentWindow?.postMessage(m, "*");
   if (msg.t === "ready") {
     const people = [...new Set((seeds[slug] ?? []).map((e) => e.by))];
-    // Like a workspace's members: everyone on the page gets a different colour.
-    const colours = Object.fromEntries([YOU, ...PEOPLE].map((email, i) => [email, i % PALETTE.length]));
+    // Like a workspace's members: everyone gets a different colour, in the order the demo workspace handed them
+    // out (its people joined in this order), so each person looks the same here as on the public demo pages.
+    const colours = Object.fromEntries([...PEOPLE, YOU].map((email, i) => [email, i % PALETTE.length]));
     send({ t: "init", viewer: { email: YOU, role: "edit" }, local: {}, shared: sharedFor(slug), presence: [YOU, ...people.slice(0, 2)], theme: "dark", colours });
     frame.closest(".showcase-render")?.classList.add("ready");
   } else if (msg.t === "shared:set" && /^(approve|form)\/[^/]+\/./.test(msg.key) && msg.value && typeof msg.value === "object" && !Array.isArray(msg.value)) {
