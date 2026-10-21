@@ -18,6 +18,7 @@ import { createDrawer } from "./threads.ts";
 import { showSince } from "./since.ts";
 import { mountArchiveBar } from "./archive.ts";
 import { setPinned } from "./pins.ts";
+import { whoColor } from "../shared/who.ts";
 import { cue, move, shown } from "../shared/motion.ts";
 import { readSoundsCookie, setSoundsEnabled, soundsEnabled, soundsScopeOf } from "../shared/sound.ts";
 
@@ -464,7 +465,8 @@ function renderPresence() {
   presenceShown = true;
   for (const email of wanted) {
     const el = document.createElement("span");
-    el.className = "avatar";
+    el.className = "avatar ghosted";
+    el.style.setProperty("--who", whoColor(email));
     el.dataset.email = email;
     el.title = `Viewing now: ${email}`;
     el.textContent = email.slice(0, 1).toUpperCase();

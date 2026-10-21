@@ -35,7 +35,7 @@
     background-color: var(--background);
     scrollbar-color: var(--input) transparent;
   }
-  /* Atmosphere: a soft dusk glow at the top of the page. It scrolls with the
+  /* Atmosphere: a soft moonlit glow at the top of the page. It scrolls with the
      content (no fixed attachment, no blur) so scrolling stays cheap. */
   body {
     background-color: var(--background);
@@ -59,6 +59,10 @@
   }
   /* Headings break into even lines; running text avoids a one-word last line.
      Utilities (truncate, whitespace-nowrap, text-wrap) still win. */
+  /* Fraunces with soft terminals, like the ghost's outline. */
+  .font-display {
+    font-variation-settings: "SOFT" 100;
+  }
   :where(h1, h2, h3, h4, h5, h6) {
     text-wrap: balance;
   }

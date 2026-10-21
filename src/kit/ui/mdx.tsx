@@ -44,12 +44,12 @@ export const markdownComponents = {
   // A long page lists its sections under the (first) title.
   h1: ({ className, ...p }: P<"h1">) => (
     <>
-      <h1 className={cn("mt-0 mb-6 text-[2rem] leading-[1.15] font-semibold tracking-[-0.022em] text-balance sm:text-[2.35rem]", className)} {...p} />
+      <h1 className={cn("mt-0 mb-6 font-display text-[2.15rem] leading-[1.1] font-semibold tracking-[-0.012em] text-balance sm:text-[2.6rem]", className)} {...p} />
       <Contents />
     </>
   ),
   h2: ({ className, ...p }: P<"h2">) => (
-    <h2 className={cn("mt-12 mb-4 scroll-mt-6 text-[1.375rem] leading-snug font-semibold tracking-[-0.015em] text-balance first:mt-0", className)} {...p} />
+    <h2 className={cn("mt-12 mb-4 scroll-mt-6 font-display text-[1.6rem] leading-snug font-semibold tracking-[-0.01em] text-balance first:mt-0", className)} {...p} />
   ),
   h3: ({ className, ...p }: P<"h3">) => <h3 className={cn("mt-8 mb-3 text-[1.125rem] leading-snug font-semibold tracking-[-0.01em]", className)} {...p} />,
   h4: ({ className, ...p }: P<"h4">) => <h4 className={cn("mt-6 mb-2 text-base font-semibold", className)} {...p} />,

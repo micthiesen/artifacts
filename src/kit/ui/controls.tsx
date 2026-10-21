@@ -160,7 +160,7 @@ export function Switch({ checked, defaultChecked, onCheckedChange, disabled, lab
       onCheckedChange={(c) => onCheckedChange?.(c)}
       disabled={disabled}
       className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full bg-input p-0.5 transition-colors outline-none focus-visible:focus-halo data-checked:bg-primary data-checked:bg-signal data-disabled:cursor-not-allowed",
+        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full bg-input p-0.5 transition-colors outline-none focus-visible:focus-halo data-checked:bg-primary data-disabled:cursor-not-allowed",
         className,
       )}
       {...rest}
@@ -211,7 +211,7 @@ export function Slider({
     >
       <BaseSlider.Control className="flex w-full cursor-pointer touch-none items-center py-3 select-none">
         <BaseSlider.Track className="relative h-1.5 w-full rounded-full bg-muted">
-          <BaseSlider.Indicator className="rounded-full bg-primary bg-signal" />
+          <BaseSlider.Indicator className="rounded-full bg-primary" />
           {Array.from({ length: thumbs }, (_, i) => (
             <BaseSlider.Thumb
               key={i}
@@ -238,8 +238,8 @@ export function TabsList({ className, children, ...props }: React.ComponentProps
       {...props}
     >
       {children}
-      {/* Active pill with a gradient underline; it slides via translate. */}
-      <BaseTabs.Indicator className="absolute top-0 left-0 -z-10 h-[var(--active-tab-height)] w-[var(--active-tab-width)] translate-x-[var(--active-tab-left)] translate-y-[var(--active-tab-top)] rounded-[calc(var(--radius)-5px)] border border-border bg-popover shadow-card transition-[translate,width] duration-(--motion-base) ease-(--motion-ease) after:absolute after:inset-x-2.5 after:bottom-0 after:h-[2px] after:rounded-full after:bg-signal" />
+      {/* Active pill with an iris underline; it slides via translate. */}
+      <BaseTabs.Indicator className="absolute top-0 left-0 -z-10 h-[var(--active-tab-height)] w-[var(--active-tab-width)] translate-x-[var(--active-tab-left)] translate-y-[var(--active-tab-top)] rounded-[calc(var(--radius)-5px)] border border-border bg-popover shadow-card transition-[translate,width] duration-(--motion-base) ease-(--motion-ease) after:absolute after:inset-x-2.5 after:bottom-0 after:h-[2px] after:rounded-full after:bg-primary" />
     </BaseTabs.List>
   );
 }
@@ -275,7 +275,7 @@ export function DialogContent({ className, children, showClose = true, ...props 
       <BaseDialog.Popup
         className={cn(
           surface,
-          "before:pointer-events-none before:absolute before:inset-x-6 before:top-0 before:h-px before:bg-signal before:opacity-70",
+          "before:pointer-events-none before:absolute before:inset-x-6 before:top-0 before:h-px before:bg-border",
           "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl p-6 shadow-2xl transition-[transform,opacity] duration-(--motion-base)",
           "data-ending-style:scale-[0.97] data-ending-style:opacity-0 data-starting-style:scale-[0.97] data-starting-style:opacity-0",
           className as string,

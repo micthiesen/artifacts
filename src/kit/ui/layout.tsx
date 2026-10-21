@@ -11,7 +11,7 @@ export function Page({ title, subtitle, wide, children, className }: Children & 
     <div className={cn("art-page mx-auto w-full px-5 pt-10 pb-20 sm:px-8 sm:pt-14", wide ? "max-w-5xl" : "max-w-3xl", className)}>
       {(title || subtitle) && (
         <header className="mb-10">
-          {title && <h1 className="text-[2rem] leading-[1.15] font-semibold tracking-[-0.022em] text-balance sm:text-[2.35rem]">{title}</h1>}
+          {title && <h1 className="font-display text-[2.15rem] leading-[1.1] font-semibold tracking-[-0.012em] text-balance sm:text-[2.6rem]">{title}</h1>}
           {subtitle && <p className="mt-3 text-lg leading-relaxed text-pretty text-muted-foreground">{subtitle}</p>}
         </header>
       )}
@@ -25,7 +25,7 @@ export function Section({ title, description, children, className }: Children & 
     <section className={cn("mt-12 first:mt-0 [[data-b]:first-child>&]:mt-0", className)}>
       {(title || description) && (
         <div className="mb-5">
-          {title && <h2 className="text-[1.375rem] leading-snug font-semibold tracking-[-0.015em]">{title}</h2>}
+          {title && <h2 className="font-display text-[1.6rem] leading-snug font-semibold tracking-[-0.01em]">{title}</h2>}
           {description && <p className="mt-1.5 text-[15px] text-muted-foreground">{description}</p>}
         </div>
       )}
@@ -70,8 +70,7 @@ export function Summary({ children, className }: Children) {
   return (
     <div
       className={cn(
-        "relative my-8 rounded-r-lg bg-[linear-gradient(90deg,color-mix(in_oklab,var(--primary)_9%,transparent),transparent_75%)] py-3.5 pr-4 pl-6 text-[1.1875rem] leading-[1.6] text-pretty text-foreground [&_p]:my-0 [&_p+p]:mt-3",
-        "before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:rounded-full before:bg-signal-v",
+        "my-8 rounded-xl bg-primary/[0.09] px-5 py-4 text-[1.1875rem] leading-[1.6] text-pretty text-foreground [&_p]:my-0 [&_p+p]:mt-3",
         className,
       )}
     >
@@ -146,11 +145,21 @@ export function Stat({
   );
 }
 
-/** A responsive row of <Stat>s. */
+/**
+ * A responsive row of <Stat>s, as one panel divided into cells. Each cell draws its own right and bottom rule;
+ * the panel clips the ones on its outer edge, so empty cells in a short last row stay blank.
+ */
 export function Stats({ children, className }: Children) {
   const n = React.Children.count(children);
   return (
-    <div className={cn("my-6 grid gap-3", n >= 4 ? "grid-cols-2 lg:grid-cols-4" : n === 3 ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-2", className)}>
+    <div
+      className={cn(
+        "my-6 grid overflow-hidden rounded-xl border border-border bg-card shadow-card",
+        "*:rounded-none *:border-0 *:bg-transparent *:shadow-[1px_0_0_var(--border),0_1px_0_var(--border)]",
+        n >= 4 ? "grid-cols-2 lg:grid-cols-4" : n === 3 ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-2",
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -189,7 +198,7 @@ export function Timeline({ children, className }: Children) {
 export function TimelineItem({ date, title, tone, children }: Children & { date?: React.ReactNode; title?: React.ReactNode; tone?: "default" | "primary" | "positive" | "caution" | "negative" }) {
   const dot: Record<string, string> = {
     default: "bg-muted-foreground/50",
-    primary: "bg-primary bg-signal",
+    primary: "bg-primary",
     positive: "bg-positive",
     caution: "bg-caution",
     negative: "bg-negative",

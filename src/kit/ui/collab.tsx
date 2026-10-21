@@ -97,7 +97,7 @@ export function Poll({ id, options, multiple = false, question, className }: { i
               {/* Result bar: scaled with transform so it animates without layout. */}
               <span className="absolute inset-0 -z-10 overflow-hidden rounded-[inherit]" aria-hidden>
                 <span
-                  className={cn("absolute inset-0 origin-left transition-transform duration-(--motion-data) ease-(--motion-ease)", chosen ? "bg-signal opacity-25" : "bg-muted")}
+                  className={cn("absolute inset-0 origin-left transition-transform duration-(--motion-data) ease-(--motion-ease)", chosen ? "bg-primary opacity-25" : "bg-muted")}
                   style={{ transform: `scaleX(${who.length ? pct / 100 : 0})` }}
                 />
               </span>
@@ -115,7 +115,7 @@ export function Poll({ id, options, multiple = false, question, className }: { i
                   className={cn(
                     "relative flex size-[18px] shrink-0 items-center justify-center border transition-colors",
                     multiple ? "rounded-[5px]" : "rounded-full",
-                    chosen ? "border-transparent bg-primary bg-signal text-primary-foreground" : "border-input bg-card",
+                    chosen ? "border-transparent bg-primary text-primary-foreground" : "border-input bg-card",
                   )}
                 >
                   {chosen && <Check className="size-3" strokeWidth={3} />}

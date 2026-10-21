@@ -93,7 +93,7 @@ export { PRODUCT };
 /** `sounds`: the cookie the apex and every workspace share for the Sounds choice (src/shared/sound.ts). */
 export type Brand = { name: string; home: string; apex: string; sounds?: SoundsCookie };
 
-/** The ghost logo, drawn by CSS (a gradient through an SVG mask). */
+/** The ghost logo, drawn by CSS (moonlight through an SVG mask, with a halo). */
 const GHOST = `<span class="logo-ghost" aria-hidden="true"></span>`;
 
 /** The brand's name as a title: the product's own name gets its wordmark. */
@@ -102,7 +102,7 @@ function brandName(brand: Brand): string {
 }
 
 function topBar(brand: Brand, right = ""): string {
-  return `<header class="bar"><span class="lead"><a class="mark" href="${escapeHtml(brand.home)}" aria-label="${escapeHtml(brand.name)}">${GHOST}</a><a class="title" href="${escapeHtml(brand.home)}">${brandName(brand)}</a></span>${right}</header>`;
+  return `<header class="bar"><span class="lead"><a class="mark" href="${escapeHtml(brand.home)}" aria-label="${escapeHtml(brand.name)}">${GHOST}</a><a class="title${brand.name === PRODUCT ? " wordmark" : ""}" href="${escapeHtml(brand.home)}">${brandName(brand)}</a></span>${right}</header>`;
 }
 
 /** The avatar slot account.js mounts the menu into. `context` and the flags decide which links it offers. */
@@ -355,7 +355,7 @@ function appJsonLd(brand: Brand, pricing: boolean): string {
  */
 export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }, pricing = false, selfServe = false): Response {
   const card = (title: string, body: string, points: string[]) =>
-    `<div class="splash-card"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(body)}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
+    `<div class="splash-fact"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(body)}</p><ul class="splash-facts">${points.map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
   const host = brand.apex.replace(/^https?:\/\//, "") || PRODUCT;
   return page(
     `${PRODUCT}: live pages your agent builds`,
@@ -370,7 +370,6 @@ export function splashPage(brand: Brand, notice?: string, viewer?: { email: stri
     )}<main class="splash">
 <section class="splash-hero">
 ${notice ? `<p class="splash-notice" role="status">${escapeHtml(notice)}</p>` : ""}
-<p class="splash-kicker">${selfServe ? "Free to start · no card needed" : "Source available · runs on Cloudflare"}</p>
 <h1>${escapeHtml(DESCRIPTION)}</h1>
 <p class="splash-lede muted">Your agent (Claude, Codex, Cursor or any MCP client) writes MDX or React over MCP. People open a link, sign in with an emailed code, and get a live page: shared state, per-person state, presence, comments, approvals and forms built in, with no backend to wire up. What they decide comes back to the agent. Everyone it isn't shared with never sees it.</p>
 <p class="splash-actions">${
@@ -378,6 +377,7 @@ ${notice ? `<p class="splash-notice" role="status">${escapeHtml(notice)}</p>` : 
         ? `<a class="button" href="/workspaces">Start free</a><a class="button secondary" href="#examples">See examples</a>`
         : `<a class="button" href="#examples">See examples</a><a class="button secondary" href="${REPO}">View the source</a>`
     }</p>
+<p class="splash-fine muted">${selfServe ? "Free to start, no card needed." : "Source available, and it runs on your own Cloudflare account."}</p>
 <span class="splash-ghost" aria-hidden="true"></span>
 </section>
 

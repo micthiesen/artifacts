@@ -1,6 +1,8 @@
 /* Shell pages (index, messages, owner sign-in, the bar above an artifact).
    Dark only. Tokens mirror src/kit/theme.css so the shell and artifacts read as
-   one product: midnight-ink surfaces and the iris -> aqua "dusk" gradient. */
+   one product: night-ink surfaces and moonlit text. Light means life: the
+   chrome stays solid and quiet, and only living things glow (the agent's ghost
+   in moon white, you in iris, other people in aqua). */
 @font-face {
   font-family: "Inter Variable";
   font-style: normal;
@@ -8,34 +10,46 @@
   font-weight: 100 900;
   src: url(/kit/v1/fonts/inter-latin-wght-normal.woff2) format("woff2-variations");
 }
+/* Headings: Fraunces with soft, rounded terminals, like the ghost's outline. */
+@font-face {
+  font-family: "Fraunces Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/kit/v1/fonts/fraunces-latin-soft-normal.woff2) format("woff2-variations");
+}
 
 :root {
   color-scheme: dark;
-  --bg: oklch(0.16 0.017 275);
-  --fg: oklch(0.94 0.008 275);
-  --card: oklch(0.192 0.02 275);
-  --popover: oklch(0.215 0.022 275);
-  --muted: oklch(0.232 0.02 275);
-  --muted-fg: oklch(0.73 0.018 275);
-  --secondary: oklch(0.255 0.022 275);
-  --accent: oklch(0.27 0.055 285);
-  --accent-fg: oklch(0.88 0.07 285);
-  --border: oklch(0.29 0.02 275);
+  --bg: oklch(0.155 0.014 262);
+  --fg: oklch(0.95 0.012 85);
+  --card: oklch(0.188 0.016 262);
+  --popover: oklch(0.215 0.018 262);
+  --muted: oklch(0.235 0.016 262);
+  --muted-fg: oklch(0.76 0.014 262);
+  --secondary: oklch(0.255 0.018 262);
+  --accent: oklch(0.27 0.05 292);
+  --accent-fg: oklch(0.88 0.07 292);
+  --border: oklch(0.285 0.016 262);
   /* Field boundaries: at least 3:1 against background, card and popover (WCAG 1.4.11). */
-  --input: oklch(0.52 0.024 275);
-  --primary: oklch(0.74 0.14 285);
-  --primary-fg: oklch(0.17 0.035 285);
-  --ring: oklch(0.76 0.13 285 / 0.4);
+  --input: oklch(0.52 0.02 262);
+  --primary: oklch(0.76 0.12 292);
+  --primary-fg: oklch(0.17 0.03 292);
+  --ring: oklch(0.76 0.12 292 / 0.4);
   --positive: oklch(0.79 0.15 158);
   --caution: oklch(0.84 0.135 80);
   --negative: oklch(0.72 0.17 22);
-  --signal-from: oklch(0.74 0.14 285);
-  --signal-to: oklch(0.82 0.11 200);
-  --signal: linear-gradient(100deg, var(--signal-from), var(--signal-to));
-  --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.62 0.13 285 / 0.16), oklch(0.62 0.1 220 / 0.05) 55%, transparent 75%);
+  /* Light, by who it belongs to: the agent (moon), other people (others). You are --primary. */
+  --moon: oklch(0.97 0.012 85);
+  /* The ghost without eyes, for masks (initials sit where the eyes would be). */
+  --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%22131%20118%20250%20284%22%3E%3Cpath%20d%3D%22M141%20228A115%20100%200%200%201%20371%20228V358A38.333%2033.333%200%200%201%20294.333%20358A38.333%2033.333%200%200%201%20217.667%20358A38.333%2033.333%200%200%201%20141%20358Z%22%2F%3E%3C%2Fsvg%3E");
+  --others: oklch(0.82 0.1 200);
+  --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.6 0.12 292 / 0.16), oklch(0.62 0.09 200 / 0.05) 55%, transparent 75%);
+  /* The ghost's halo: soft iris and aqua light, never a fill. */
+  --halo-light: radial-gradient(closest-side, oklch(0.72 0.14 292 / 0.45), oklch(0.82 0.1 200 / 0.14) 60%, transparent);
   --shadow-card: 0 1px 0 oklch(1 0 0 / 0.035) inset, 0 1px 2px oklch(0 0 0 / 0.35);
   --shadow-pop: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 12px 32px -8px oklch(0 0 0 / 0.6), 0 2px 6px oklch(0 0 0 / 0.35);
-  --halo: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--signal-from), 0 0 0 6px color-mix(in oklab, var(--signal-to) 30%, transparent);
+  --halo: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--primary);
   --radius: 0.7rem;
   /* Motion: the same tokens as src/kit/theme.css (test/motion.test.ts keeps them equal; rules in AGENTS.md). */
   --motion-fast: 120ms;
@@ -45,6 +59,7 @@
   --motion-attention: 1200ms;
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --motion-spring: linear(0, 0.067, 0.22, 0.401, 0.575, 0.725, 0.842, 0.927, 0.983, 1.017, 1.033, 1.038, 1.037, 1.031, 1.024, 1.017, 1.011, 1.007, 1.003, 1.001, 1, 0.999, 0.999, 0.999, 1);
+  --font-display: "Fraunces Variable", Georgia, serif;
   font-family: "Inter Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
@@ -55,7 +70,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background-color: var(--bg); color: var(--fg); }
-/* Atmosphere: a soft dusk glow at the top; scrolls with the page, no blur. */
+/* Atmosphere: a soft moonlit glow at the top; scrolls with the page, no blur. */
 body { font-size: 15px; line-height: 1.5; background-image: var(--glow); background-repeat: no-repeat; }
 ::selection { background: color-mix(in oklab, var(--primary) 34%, transparent); color: var(--fg); }
 a { color: var(--primary); text-decoration: none; }
@@ -71,6 +86,8 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .back-link a, .archived-link a, .policy-nav a, .splash-why a { text-decoration: none; }
 /* Headings break into even lines; paragraphs avoid a one-word last line. Zero specificity: nowrap rules still win. */
 :where(h1, h2, h3, h4) { text-wrap: balance; }
+/* Page and section headings set in Fraunces. Labels, controls and numbers stay Inter. */
+:where(h1, h2, .display) { font-family: var(--font-display); font-variation-settings: "SOFT" 100; font-weight: 580; letter-spacing: -.01em; }
 :where(p, li, dd) { text-wrap: pretty; }
 code { font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted-fg); }
 .muted { color: var(--muted-fg); }
@@ -79,7 +96,7 @@ code { font: 12px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--mute
 .button {
   position: relative; isolation: isolate;
   display: inline-flex; align-items: center; justify-content: center; height: 2.5rem; padding: 0 1rem;
-  border-radius: var(--radius); border: 0; background: var(--primary) var(--signal); color: var(--primary-fg);
+  border-radius: var(--radius); border: 0; background: var(--primary); color: var(--primary-fg);
   font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; box-shadow: var(--shadow-card);
 }
 /* Hover sheen fades in (opacity only). */
@@ -106,7 +123,7 @@ select, input, textarea { max-width: 100%; }
 .input:hover { border-color: color-mix(in oklab, var(--muted-fg) 40%, var(--input)); }
 .input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); }
 
-/* Top bar, shared by every shell page. The hairline carries the gradient. */
+/* Top bar, shared by every shell page. */
 .bar {
   position: relative;
   display: flex; align-items: center; gap: .75rem; height: 3rem; padding: 0 1rem; flex: none;
@@ -114,7 +131,7 @@ select, input, textarea { max-width: 100%; }
 }
 .bar::after {
   content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; pointer-events: none;
-  background: linear-gradient(90deg, var(--border), color-mix(in oklab, var(--signal-from) 70%, var(--border)) 35%, color-mix(in oklab, var(--signal-to) 70%, var(--border)) 65%, var(--border));
+  background: var(--border);
 }
 .shell .bar { background: var(--bg); }
 /* Logo + title: identical on every page. */
@@ -123,16 +140,24 @@ select, input, textarea { max-width: 100%; }
   flex: none; display: grid; place-items: center; width: 1.75rem; height: 1.75rem; margin-left: -.25rem; border-radius: .5rem;
 }
 .bar .mark:hover { text-decoration: none; background-color: var(--muted); }
-/* The ghost logo: the gradient seen through the ghost's shape (eyes cut out). */
+/* The ghost logo: moonlight through the ghost's shape (eyes cut out), with a soft halo behind it. */
 .logo-ghost {
-  display: inline-block; width: 17px; height: 19px; flex: none; background: var(--signal);
+  position: relative; display: inline-block; width: 17px; height: 19px; flex: none;
+}
+.logo-ghost::before {
+  content: ""; position: absolute; inset: -9px; border-radius: 50%; background: var(--halo-light); opacity: .55; pointer-events: none;
+}
+.logo-ghost::after {
+  content: ""; position: absolute; inset: 0; background: var(--moon);
   -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
 }
-.wordmark-tld { background: var(--signal); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.wordmark-tld { color: var(--primary); }
 .bar .title {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--fg); font-weight: 650; letter-spacing: -.005em;
 }
+/* The product's own name is a wordmark, set like the headings. */
+.bar .title.wordmark { font-family: var(--font-display); font-variation-settings: "SOFT" 100; font-size: 17.5px; font-weight: 600; letter-spacing: -.01em; }
 a.title:hover { text-decoration: none; }
 .bar .spacer { flex: 1; }
 /* Never pushes the comments button or your avatar off a phone: long messages end in an ellipsis (full text in its title). */
@@ -147,6 +172,8 @@ a.title:hover { text-decoration: none; }
   background: var(--muted); color: var(--muted-fg); cursor: default;
 }
 .bar .presence .avatar:first-child { margin-left: 0; }
+.bar .presence .avatar.ghosted { width: 1.45rem; height: 1.65rem; margin-left: -.15rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
+.bar .presence .avatar.ghosted:first-child { margin-left: 0; }
 /* Your own avatar: opens the Manage panel (owner) or the account menu. */
 .me { position: relative; flex: none; display: flex; align-items: center; gap: .35rem; }
 /* The inbox bell: its count turns into a badge while anything is unread. */
@@ -162,7 +189,7 @@ a.title:hover { text-decoration: none; }
 }
 /* 44px touch target around the 32px circle. */
 .me .avatar-button::before { content: ""; position: absolute; inset: -6px; border-radius: 999px; }
-.me .avatar-button[aria-expanded="true"] { box-shadow: 0 0 0 3px color-mix(in oklab, var(--signal-from) 35%, transparent); }
+.me .avatar-button[aria-expanded="true"] { box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 35%, transparent); }
 /* The bar's popovers (account menu, inbox): under the right end of the bar, never wider than the screen and,
    on short screens (a phone in landscape, Safari's toolbars showing), scrolling inside themselves. */
 .bar-popover {
@@ -204,7 +231,7 @@ a.title:hover { text-decoration: none; }
 }
 .account-menu .account-primary { color: var(--fg); font-weight: 600; }
 .account-menu .account-primary::before {
-  content: ""; display: inline-block; width: 11.5px; height: 13px; margin-right: .5rem; vertical-align: -1px; background: var(--signal);
+  content: ""; display: inline-block; width: 11.5px; height: 13px; margin-right: .5rem; vertical-align: -1px; background: var(--moon);
   -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
 }
 .account-menu .account-quiet { color: var(--muted-fg); }
@@ -212,9 +239,12 @@ a.title:hover { text-decoration: none; }
 .avatar {
   width: 1.75rem; height: 1.75rem; border-radius: 999px; background: var(--accent); color: var(--accent-fg);
   display: grid; place-items: center; font-size: 12px; font-weight: 600;
-  /* Live viewers: a thin gradient ring. */
-  border: 1.5px solid transparent;
-  background: linear-gradient(var(--accent), var(--accent)) padding-box, var(--signal) border-box;
+}
+/* Someone else on the page now: a small ghost in their colour (--who), initials inside. */
+.avatar.ghosted { position: relative; isolation: isolate; border-radius: 0; background: none; color: var(--primary-fg); font-weight: 700; padding-top: 1px; }
+.avatar.ghosted::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; background: var(--who, var(--others));
+  -webkit-mask: var(--ghost-mask) center / contain no-repeat; mask: var(--ghost-mask) center / contain no-repeat;
 }
 
 /* Artifact page: the bar plus a full-height frame. */
@@ -237,13 +267,8 @@ h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.
   border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: var(--card); box-shadow: var(--shadow-card);
   transition: border-color var(--motion-fast);
 }
-/* Accent edge appears on hover/focus (opacity only). */
-.list li a::before {
-  content: ""; position: absolute; left: 0; top: .75rem; bottom: .75rem; width: 2px; border-radius: 2px;
-  background: linear-gradient(180deg, var(--signal-from), var(--signal-to)); opacity: 0; transition: opacity var(--motion-fast);
-}
-.list li a:hover, .list li a:focus-visible { text-decoration: none; border-color: color-mix(in oklab, var(--input) 40%, var(--border)); }
-.list li a:hover::before, .list li a:focus-visible::before { opacity: 1; }
+.list li a { transition: border-color var(--motion-fast), background-color var(--motion-fast); }
+.list li a:hover, .list li a:focus-visible { text-decoration: none; border-color: color-mix(in oklab, var(--input) 40%, var(--border)); background-color: color-mix(in oklab, var(--muted) 55%, var(--card)); }
 .list .title { font-weight: 600; font-size: 15.5px; letter-spacing: -.005em; }
 .list .desc { color: var(--muted-fg); font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* Block, not flex: an ellipsis only applies to text in a block box. */
@@ -252,7 +277,7 @@ h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.
   color: var(--muted-fg); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .list .sharing::before {
-  content: ""; display: inline-block; margin-right: .45rem; vertical-align: .1em; width: .4rem; height: .4rem; border-radius: 999px; background: var(--signal);
+  content: ""; display: inline-block; margin-right: .45rem; vertical-align: .1em; width: .4rem; height: .4rem; border-radius: 999px; background: var(--input);
 }
 .list .meta { color: var(--muted-fg); font-size: 13px; font-variant-numeric: tabular-nums; }
 .empty { padding: 3.5rem 0 1rem; max-width: 30rem; }
@@ -290,7 +315,7 @@ h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.
   border-left: 1px solid var(--border); box-shadow: var(--shadow-pop); font-size: 14px;
 }
 .om-panel::before {
-  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--signal); opacity: .7; pointer-events: none;
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--border); pointer-events: none;
 }
 .om-panel:focus { outline: none; }
 .om-panel {
@@ -320,7 +345,7 @@ body.om-open { overflow: hidden; }
 }
 .om-tab::after {
   content: ""; position: absolute; left: .5rem; right: .5rem; bottom: -1px; height: 2px; border-radius: 2px;
-  background: var(--signal); opacity: 0; transition: opacity var(--motion-fast);
+  background: var(--primary); opacity: 0; transition: opacity var(--motion-fast);
 }
 .om-tab:hover { color: var(--fg); }
 .om-tab[aria-selected="true"] { color: var(--fg); }
@@ -382,7 +407,7 @@ body.om-open { overflow: hidden; }
   content: ""; position: absolute; top: .1875rem; left: .1875rem; width: 1.125rem; height: 1.125rem;
   border-radius: 999px; background: var(--fg); box-shadow: 0 1px 2px oklch(0 0 0 / 0.4); transition: transform var(--motion-fast) var(--motion-ease);
 }
-.om-switch input:checked { background: var(--primary) var(--signal); }
+.om-switch input:checked { background: var(--primary); }
 .om-switch input:checked::after { transform: translateX(1rem); background: oklch(1 0 0); }
 .om-switch input:focus-visible { outline: none; box-shadow: var(--halo); }
 .om-status.ok { color: var(--positive); }
@@ -452,7 +477,7 @@ body.om-open { overflow: hidden; }
 .tbtn.tab { border-color: transparent; color: var(--muted-fg); }
 .tbtn.tab[aria-pressed="true"] { color: var(--fg); background: var(--muted); }
 .tbtn.icon { width: 1.9rem; padding: 0; border-color: transparent; color: var(--muted-fg); }
-.tbtn.primary { border: 0; background: var(--primary) var(--signal); color: var(--primary-fg); font-weight: 650; }
+.tbtn.primary { border: 0; background: var(--primary); color: var(--primary-fg); font-weight: 650; }
 .tbtn.primary:hover { filter: brightness(1.08); }
 .tbtn.ghost { border-color: transparent; color: var(--muted-fg); }
 .tbtn.ghost:hover { color: var(--fg); }
@@ -542,7 +567,7 @@ div.thread-anchor { cursor: default; }
 
 /* Index: unread and updated markers. */
 .list .title .badge { margin-left: .5rem; padding: .05rem .45rem; border-radius: 999px; font-size: 11.5px; font-weight: 650; vertical-align: 1px; color: var(--bg); background: var(--caution); }
-.list .title .dot { display: inline-block; width: .5rem; height: .5rem; margin-left: .5rem; border-radius: 999px; vertical-align: 2px; background: var(--signal); }
+.list .title .dot { display: inline-block; width: .5rem; height: .5rem; margin-left: .5rem; border-radius: 999px; vertical-align: 2px; background: var(--others); box-shadow: 0 0 8px var(--others); }
 
 /* Profile page. */
 .profile { display: grid; gap: 1.25rem; }
@@ -700,15 +725,12 @@ div.thread-anchor { cursor: default; }
 .splash { max-width: 74rem; margin: 0 auto; padding: 4.5rem 1.25rem 3rem; }
 .splash-hero { max-width: 44rem; }
 .splash-notice { display: inline-block; margin: 0 0 1.25rem; padding: .35rem .7rem; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--muted-fg); }
-.splash-kicker {
-  margin: 0 0 .9rem; font-size: 12.5px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase;
-  background: var(--signal); -webkit-background-clip: text; background-clip: text; color: transparent;
-}
-.splash h1 { font-size: clamp(2rem, 4.4vw, 3rem); line-height: 1.08; letter-spacing: -.035em; margin: 0 0 1.1rem; text-wrap: balance; }
-.splash h2 { font-size: 1.35rem; letter-spacing: -.02em; margin: 0 0 .75rem; }
+.splash h1 { font-size: clamp(2.4rem, 5.6vw, 4rem); line-height: 1.02; letter-spacing: -.015em; margin: 0 0 1.25rem; text-wrap: balance; }
+.splash h2 { font-size: 1.6rem; margin: 0 0 .75rem; }
 .splash-lede { font-size: 17px; line-height: 1.6; margin: 0 0 1.75rem; max-width: 38rem; }
 .splash-actions { margin: 0; display: flex; flex-wrap: wrap; gap: .6rem; }
 .splash-actions .button { height: 2.85rem; padding: 0 1.3rem; font-size: 15.5px; }
+.splash-fine { margin: .9rem 0 0; font-size: 13.5px; }
 .splash-self { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem; align-items: center; margin-top: 4rem; padding-top: 3rem; border-top: 1px solid var(--border); }
 .splash-code { border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: oklch(0.13 0.016 275); box-shadow: var(--shadow-card); overflow: hidden; min-width: 0; }
 .splash-code-head { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem .9rem; border-bottom: 1px solid var(--border); font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg); }
@@ -717,20 +739,20 @@ div.thread-anchor { cursor: default; }
 .splash-card ul, .splash-facts { margin: 0; padding: 0; list-style: none; display: grid; gap: .7rem; }
 .splash-card li, .splash-facts li { position: relative; padding-left: 1.1rem; font-size: 14.5px; line-height: 1.55; color: var(--muted-fg); }
 .splash-card li::before, .splash-facts li::before {
-  content: ""; position: absolute; left: 0; top: .6em; width: .4rem; height: .4rem; border-radius: 999px; background: var(--signal);
+  content: ""; position: absolute; left: 0; top: .6em; width: .4rem; height: .4rem; border-radius: 999px; background: var(--input);
 }
 .splash-facts strong { color: var(--fg); font-weight: 600; }
 .splash li code { font-size: 12.5px; color: var(--accent-fg); }
-.splash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: .9rem; margin-top: 4.5rem; }
+/* What's different: ruled rows under Fraunces headings, not a card kit. */
+.splash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: 0 3.5rem; margin-top: 4.5rem; }
+.splash-fact { padding: 1.5rem 0 1.75rem; border-top: 1px solid var(--border); }
+.splash-fact h3 { margin: 0 0 .4rem; font-family: var(--font-display); font-variation-settings: "SOFT" 100; font-size: 1.5rem; font-weight: 580; letter-spacing: -.01em; line-height: 1.15; }
+.splash-fact > p { margin: 0 0 1rem; font-size: 15.5px; line-height: 1.55; max-width: 34rem; }
 .splash-why { margin: 1.4rem 0 0; font-size: 15px; }
 .splash-why a { color: var(--primary); }
 .splash-card {
   position: relative; padding: 1.2rem 1.2rem 1.3rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px);
   background: var(--card); box-shadow: var(--shadow-card); overflow: hidden;
-}
-.splash-card::before {
-  content: ""; position: absolute; left: 1.2rem; right: 1.2rem; top: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--signal-from) 70%, transparent), color-mix(in oklab, var(--signal-to) 60%, transparent), transparent);
 }
 .splash-card h3, .pricing-card h2 { margin: 0 0 .35rem; font-size: 16px; letter-spacing: -.01em; }
 .splash-card > p { margin: 0 0 .9rem; font-size: 14px; line-height: 1.55; }
@@ -743,13 +765,13 @@ div.thread-anchor { cursor: default; }
   .splash-hero { max-width: none; padding-right: 20rem; }
   .splash-ghost {
     display: block; position: absolute; right: 3.5rem; top: 50%; width: 9.5rem; height: 10.75rem; margin-top: -5.6rem;
-    background: var(--signal); opacity: .92;
+    background: var(--moon);
     -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
     animation: drift 7s ease-in-out infinite;
   }
   .splash-hero::after {
     content: ""; position: absolute; right: 0; top: 50%; width: 15.5rem; height: 15.5rem; margin-top: -8rem; z-index: -1; border-radius: 50%;
-    background: radial-gradient(closest-side, oklch(0.62 0.13 285 / 0.28), transparent);
+    background: var(--halo-light);
   }
 }
 @keyframes drift { 50% { transform: translateY(-10px) rotate(-2deg); } }
@@ -888,7 +910,7 @@ div.thread-anchor { cursor: default; }
 .pricing-price .muted { font-size: 14px; font-weight: 400; letter-spacing: 0; }
 .pricing-notes { max-width: 52rem; margin-top: 2.5rem; font-size: 14.5px; line-height: 1.6; }
 .pricing-notes p { margin: 0 0 .8rem; }
-/* Disabled buttons read as unavailable, not just faded: the accent gradient goes grey. */
+/* Disabled buttons read as unavailable, not just faded: the accent goes grey. */
 .button:disabled, .button[disabled] { filter: grayscale(1); opacity: .5; cursor: not-allowed; }
 /* A submitted form's button while the next page loads (src/shell/forms.ts). */
 .button[aria-busy=true]:not(:disabled) { opacity: .7; cursor: progress; }
@@ -945,15 +967,15 @@ select.input, select.om-select, .profile select {
 @keyframes pill-in { from { opacity: 0; transform: translateY(-.35rem); } }
 
 /* ---- Feedback motion (src/shared/motion.ts; src/kit/motion.css has the same two) ------
-   pop: something you did just landed. glow: someone else changed this. --move-delay holds a
+   pop: something you did just landed. glow: someone else changed this (aqua light). --move-delay holds a
    motion back to land with a sound that is heard late. Keep these last: they override an element's
    own animation for as long as they run. */
 .art-move-pop { animation: art-move-pop var(--motion-slow) var(--motion-spring) var(--move-delay, 0ms) both; }
 @keyframes art-move-pop { from { transform: scale(0.92); opacity: 0.4; } }
 .art-move-glow { animation: art-move-glow var(--motion-attention) var(--motion-ease) var(--move-delay, 0ms); }
 @keyframes art-move-glow {
-  from { outline: 2px solid color-mix(in oklab, var(--primary) 60%, transparent); outline-offset: 2px; }
-  to { outline: 2px solid transparent; outline-offset: 2px; }
+  from { outline: 2px solid color-mix(in oklab, var(--others) 60%, transparent); outline-offset: 2px; box-shadow: 0 0 24px -2px color-mix(in oklab, var(--others) 45%, transparent); }
+  to { outline: 2px solid transparent; outline-offset: 2px; box-shadow: 0 0 24px -2px transparent; }
 }
 /* Rows moving in the list (pinning, undo) glide to their place. */
 ::view-transition-group(*) { animation-duration: var(--motion-slow); animation-timing-function: var(--motion-spring); }

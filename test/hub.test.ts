@@ -106,7 +106,7 @@ test("a build from an older compiler is recompiled on read and saved", async () 
 
   const served = (await h.hub.build(id))!.build;
   expect(served.css).not.toContain("oklch(0.185 0.006 60)");
-  expect(served.css).toContain("--background: oklch(0.16 0.017 275)");
+  expect(served.css).toContain("--background: oklch(0.155 0.014 262)");
   const stored = JSON.parse(sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, id).toArray()[0].build as string);
   expect(stored.stamp).toBe(served.stamp);
   expect(stored.stamp).toBeTruthy();

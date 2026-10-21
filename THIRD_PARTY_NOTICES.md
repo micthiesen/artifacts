@@ -31,6 +31,8 @@ No code from React Bits or Aceternity UI is used.
 
 - **Inter Variable** by Rasmus Andersson, via @fontsource-variable/inter.
   SIL Open Font License 1.1; full text shipped at `/kit/v1/fonts/LICENSE-Inter.txt`.
+- **Fraunces Variable** by Undercase Type, via @fontsource-variable/fraunces.
+  SIL Open Font License 1.1; full text shipped at `/kit/v1/fonts/LICENSE-Fraunces.txt`.
 
 ## MIT License (shadcn/ui)
 

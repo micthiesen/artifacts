@@ -4,10 +4,10 @@
  * class like `bg-muted text-primary` resolves from these tokens alone.
  *
  * Dark only. "Midnight ink" surfaces (cool, low-chroma blue-violet neutrals)
- * with one signature "dusk" gradient, iris -> aqua, used sparingly for the
- * things that matter: primary actions, focus, selection, progress, the lead.
- * --primary is the iris end, so single-color uses (text-primary, bg-primary)
- * stay on-brand. `.dark` is kept as an alias so `dark:` variants still apply.
+ * Night-ink surfaces and moonlit text. Light means life: controls are solid
+ * iris (--primary, which also means "you"), and only living things glow:
+ * the agent's ghost in moon white, other people's changes in aqua (--others).
+ * There are no gradient fills. Headings are Fraunces (--font-display). `.dark` is kept as an alias so `dark:` variants still apply.
  */
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -16,41 +16,41 @@
   :root,
   .dark {
     color-scheme: dark;
-    --background: oklch(0.16 0.017 275);
-    --foreground: oklch(0.94 0.008 275);
-    --card: oklch(0.192 0.02 275);
-    --card-foreground: oklch(0.94 0.008 275);
-    --popover: oklch(0.215 0.022 275);
-    --popover-foreground: oklch(0.94 0.008 275);
-    --muted: oklch(0.232 0.02 275);
-    --muted-foreground: oklch(0.73 0.018 275);
-    --secondary: oklch(0.255 0.022 275);
-    --secondary-foreground: oklch(0.94 0.008 275);
-    --primary: oklch(0.74 0.14 285);
-    --primary-foreground: oklch(0.17 0.035 285);
-    --accent: oklch(0.27 0.055 285);
-    --accent-foreground: oklch(0.88 0.07 285);
-    --border: oklch(0.29 0.02 275);
-    --input: oklch(0.52 0.024 275);
-    --ring: oklch(0.76 0.13 285);
+    --background: oklch(0.155 0.014 262);
+    --foreground: oklch(0.95 0.012 85);
+    --card: oklch(0.188 0.016 262);
+    --card-foreground: oklch(0.95 0.012 85);
+    --popover: oklch(0.215 0.018 262);
+    --popover-foreground: oklch(0.95 0.012 85);
+    --muted: oklch(0.235 0.016 262);
+    --muted-foreground: oklch(0.76 0.014 262);
+    --secondary: oklch(0.255 0.018 262);
+    --secondary-foreground: oklch(0.95 0.012 85);
+    --primary: oklch(0.76 0.12 292);
+    --primary-foreground: oklch(0.17 0.03 292);
+    --accent: oklch(0.27 0.05 292);
+    --accent-foreground: oklch(0.88 0.07 292);
+    --border: oklch(0.285 0.016 262);
+    --input: oklch(0.52 0.02 262);
+    --ring: oklch(0.76 0.12 292);
     --positive: oklch(0.79 0.15 158);
     --caution: oklch(0.84 0.135 80);
     --negative: oklch(0.72 0.17 22);
     /* Charts: six hues spread around the wheel. They differ by hue, not
        lightness (some neighbours match in grayscale), so charts with several
        series rely on the legend or direct labels too. */
-    --chart-1: oklch(0.72 0.15 285);
+    --chart-1: oklch(0.74 0.14 292);
     --chart-2: oklch(0.82 0.12 200);
     --chart-3: oklch(0.85 0.14 78);
     --chart-4: oklch(0.69 0.17 20);
     --chart-5: oklch(0.77 0.15 150);
     --chart-6: oklch(0.76 0.14 335);
-    /* Signature gradient: dusk iris -> moonlit aqua. */
-    --signal-from: oklch(0.74 0.14 285);
-    --signal-to: oklch(0.82 0.11 200);
-    --signal: linear-gradient(100deg, var(--signal-from), var(--signal-to));
-    --signal-v: linear-gradient(180deg, var(--signal-from), var(--signal-to));
-    --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.62 0.13 285 / 0.16), oklch(0.62 0.1 220 / 0.05) 55%, transparent 75%);
+    /* Light, by whose it is: the agent (moon) and other people (others). You are --primary. */
+    --moon: oklch(0.97 0.012 85);
+    --others: oklch(0.82 0.1 200);
+    /* The ghost without eyes, for people's avatars (initials sit where the eyes would be). */
+    --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%22131%20118%20250%20284%22%3E%3Cpath%20d%3D%22M141%20228A115%20100%200%200%201%20371%20228V358A38.333%2033.333%200%200%201%20294.333%20358A38.333%2033.333%200%200%201%20217.667%20358A38.333%2033.333%200%200%201%20141%20358Z%22%2F%3E%3C%2Fsvg%3E");
+    --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.6 0.12 292 / 0.16), oklch(0.62 0.09 200 / 0.05) 55%, transparent 75%);
     --shadow-card: 0 1px 0 oklch(1 0 0 / 0.035) inset, 0 1px 2px oklch(0 0 0 / 0.35);
     --shadow-pop: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 12px 32px -8px oklch(0 0 0 / 0.6), 0 2px 6px oklch(0 0 0 / 0.35);
     --radius: 0.7rem;
@@ -68,26 +68,12 @@
   }
 }
 
-/* Gradient helpers (usable by artifacts too: `bg-signal`, `text-signal`). */
-@utility bg-signal {
-  background-image: var(--signal);
-}
-@utility text-signal {
-  background-image: var(--signal);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-@utility bg-signal-v {
-  background-image: var(--signal-v);
-}
-/* Two-tone focus halo: iris ring with a faint aqua bloom. */
+/* Focus halo: an iris ring just outside the control. */
 @utility focus-halo {
   outline: none;
   box-shadow:
     0 0 0 2px var(--background),
-    0 0 0 3.5px var(--signal-from),
-    0 0 0 6px color-mix(in oklab, var(--signal-to) 30%, transparent);
+    0 0 0 3.5px var(--primary);
 }
 @utility shadow-card {
   box-shadow: var(--shadow-card);
@@ -123,14 +109,15 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
   --color-chart-6: var(--chart-6);
-  --color-signal-from: var(--signal-from);
-  --color-signal-to: var(--signal-to);
+  --color-moon: var(--moon);
+  --color-others: var(--others);
   --radius-sm: calc(var(--radius) - 0.25rem);
   --radius-md: calc(var(--radius) - 0.125rem);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 0.25rem);
   --radius-2xl: calc(var(--radius) + 0.5rem);
   --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Fraunces Variable", Georgia, serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   /* `transition-colors` and friends without a duration use the motion tokens. */
   --default-transition-duration: var(--motion-fast);

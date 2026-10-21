@@ -8,6 +8,24 @@ Checks: `bun run typecheck`, `bun test`, `bun run build`. After UI changes,
 run `spikes/e2e-layout.ts` against a running stage: pages must never scroll
 sideways on a phone.
 
+## Look
+
+Light means life. Night-ink surfaces and moonlit text stay quiet; only
+living things glow, and the colour of the light says whose it is: moon
+white for the agent (the ghost), iris (`--primary`) for you, aqua
+(`--others`) for other people. Keep these by hand:
+
+- No gradient fills: buttons, rules, rings, text and underlines are solid.
+  Soft radial light (the ghost's halo, the page's top glow) is the only
+  gradient.
+- Fraunces (`--font-display`, soft terminals) is for page and section
+  headings and the wordmark only. Controls, labels, tables and numbers stay
+  Inter.
+- No eyebrow labels over headings, no coloured stripes down a card's edge,
+  no rows of identical cards where ruled rows or one divided panel will do.
+- People appear as small ghosts in their own colour (`whoColor` in
+  `src/shared/who.ts`).
+
 ## Controls, type and accessibility
 
 These hold for the shell and the kit alike. They keep slipping back in, so

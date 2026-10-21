@@ -44,8 +44,8 @@
     --chart-4: oklch(0.58 0.19 22);
     --chart-5: oklch(0.58 0.14 150);
     --chart-6: oklch(0.56 0.17 335);
-    --signal-from: oklch(0.5 0.17 285);
-    --signal-to: oklch(0.6 0.12 205);
+    --moon: oklch(0.2 0.015 275);
+    --others: oklch(0.5 0.12 205);
     --glow: none;
     --shadow-card: none;
     --shadow-pop: none;
@@ -363,7 +363,6 @@
   button[role="radio"] *,
   button[role="checkbox"],
   button[role="checkbox"] *,
-  [class*="bg-signal"],
   [class*="bg-positive"],
   [class*="bg-caution"],
   [class*="bg-negative"],
@@ -374,21 +373,8 @@
   [class*="text-positive"],
   [class*="text-negative"],
   [class*="text-caution"],
-  [class*="before:bg-signal"],
   svg {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
-  }
-  /* Gradient text becomes solid ink. */
-  [class*="text-signal"] {
-    background: none !important;
-    -webkit-background-clip: border-box !important;
-    background-clip: border-box !important;
-    color: var(--primary) !important;
-  }
-  /* Summary lead: drop the tinted gradient, keep the rule. */
-  [class*="bg-[linear-gradient"] {
-    background-image: none !important;
-    background-color: var(--accent) !important;
   }
 }

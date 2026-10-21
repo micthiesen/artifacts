@@ -4,7 +4,7 @@
 //   dist/kit/kit/v1/*.js         ESM entries (import-map targets)
 //   dist/kit/kit/v1/chunks/*.js  shared code-split chunks (one React instance)
 //   dist/kit/kit/v1/kit.css      Tailwind v4 (preflight, theme, kit classes) + @font-face
-//   dist/kit/kit/v1/fonts/*      Inter Variable (self-hosted)
+//   dist/kit/kit/v1/fonts/*      Inter Variable and Fraunces Variable (self-hosted)
 import { build } from "esbuild";
 import { createRequire } from "node:module";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -90,6 +90,12 @@ async function buildFonts(): Promise<string> {
     css += src.replace(/url\(\.\/files\//g, "url(./fonts/");
   }
   await copyFile(join(pkg, "LICENSE"), join(OUT, "fonts/LICENSE-Inter.txt"));
+  // Headings: Fraunces with the SOFT axis (rounded terminals), upright only.
+  const fraunces = dirname(require.resolve("@fontsource-variable/fraunces/package.json"));
+  const src = await readFile(join(fraunces, "soft.css"), "utf8");
+  for (const m of src.matchAll(/url\(\.\/files\/([^)]+\.woff2)\)/g)) await copyFile(join(fraunces, "files", m[1]), join(OUT, "fonts", m[1]));
+  css += src.replace(/url\(\.\/files\//g, "url(./fonts/");
+  await copyFile(join(fraunces, "LICENSE"), join(OUT, "fonts/LICENSE-Fraunces.txt"));
   return css;
 }
 

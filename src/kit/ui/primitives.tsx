@@ -4,15 +4,16 @@ import { Progress as BaseProgress } from "@base-ui/react/progress";
 import { Separator as BaseSeparator } from "@base-ui/react/separator";
 import * as React from "react";
 import { cn, displayName, initials } from "./utils.ts";
+import { whoColor } from "../../shared/who.ts";
 
 type Div = React.HTMLAttributes<HTMLDivElement>;
 
 // ---- Button ---------------------------------------------------------------------
 
 const buttonVariants = {
-  // Signature gradient; the hover sheen and the press shade are an overlay that only fades opacity.
+  // Solid iris; the hover sheen and the press shade are an overlay that only fades opacity.
   default:
-    "relative isolate bg-primary bg-signal font-semibold text-primary-foreground shadow-card after:absolute after:inset-0 after:-z-10 after:rounded-[inherit] after:bg-white/15 after:opacity-0 after:transition-opacity hover:after:opacity-100 active:after:bg-black/15 active:after:opacity-100",
+    "relative isolate bg-primary font-semibold text-primary-foreground shadow-card after:absolute after:inset-0 after:-z-10 after:rounded-[inherit] after:bg-white/15 after:opacity-0 after:transition-opacity hover:after:opacity-100 active:after:bg-black/15 active:after:opacity-100",
   secondary: "border border-border bg-secondary text-secondary-foreground hover:border-input hover:bg-input/35 active:bg-input/50",
   outline: "border border-input bg-card text-foreground shadow-card hover:border-muted-foreground/65 hover:bg-muted active:bg-input/40",
   ghost: "text-foreground hover:bg-muted active:bg-input/40",
@@ -170,10 +171,10 @@ export function Progress({ value, max = 100, label, className }: { value: number
       <BaseProgress.Track className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
         {/* Own fill (not Base UI's width-based indicator) so it animates with transform only. */}
         {value == null ? (
-          <div className="absolute inset-y-0 left-0 w-1/3 animate-[art-indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-signal" />
+          <div className="absolute inset-y-0 left-0 w-1/3 animate-[art-indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-primary" />
         ) : (
           <div
-            className="absolute inset-0 origin-left rounded-full bg-signal transition-transform duration-(--motion-data) ease-(--motion-ease)"
+            className="absolute inset-0 origin-left rounded-full bg-primary transition-transform duration-(--motion-data) ease-(--motion-ease)"
             style={{ transform: `scaleX(${Math.min(1, Math.max(0, max ? value / max : 0))})` }}
           />
         )}
@@ -200,11 +201,16 @@ export function Avatar({
 }) {
   const label = name ?? displayName(email);
   const text = name ? name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase() : initials(email);
+  // Without a photo, a person is a little ghost in their own colour, initials where the eyes would be.
   return (
     <BaseAvatar.Root
       title={label}
+      style={src ? undefined : ({ "--who": whoColor(email ?? name) } as React.CSSProperties)}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent font-semibold text-accent-foreground ring-2 ring-background select-none",
+        "inline-flex shrink-0 items-center justify-center overflow-hidden font-semibold select-none",
+        src
+          ? "rounded-full bg-accent text-accent-foreground ring-2 ring-background"
+          : "bg-(--who) pt-px font-bold text-primary-foreground [mask:var(--ghost-mask)_center/contain_no-repeat]",
         avatarSizes[size],
         className,
       )}

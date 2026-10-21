@@ -7,7 +7,7 @@ Every markdown page also gets, with nothing to add: a collapsed **Contents** lis
 
 Give each page one purpose. A page that runs past a dozen or so screens on a phone is better split into several artifacts linked from a short hub page (or from each other), so readers find their part and comments stay on topic.
 
-Style with Tailwind classes and theme tokens (the theme is dark only): `bg-background bg-card bg-muted bg-accent bg-primary text-foreground text-muted-foreground text-primary text-primary-foreground border-border text-positive text-caution text-negative bg-chart-1`…`6`, `bg-signal` (the accent gradient; use sparingly), `rounded-lg`, `font-mono`. Avoid raw colors like `bg-white` or `text-gray-500`. Readers are often on phones (about 390 px): no fixed widths over about 360 px unless behind `md:`.
+Style with Tailwind classes and theme tokens (the theme is dark only): `bg-background bg-card bg-muted bg-accent bg-primary text-foreground text-muted-foreground text-primary text-primary-foreground border-border text-positive text-caution text-negative bg-chart-1`…`6`, `text-others` (other people's light, for something someone else did), `font-display` (Fraunces, for headings only), `rounded-lg`, `font-mono`. There are no gradient fills. Avoid raw colors like `bg-white` or `text-gray-500`. Readers are often on phones (about 390 px): no fixed widths over about 360 px unless behind `md:`.
 
 ## Components (`@a/ui`)
 
