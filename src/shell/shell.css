@@ -41,8 +41,8 @@
   --negative: oklch(0.72 0.17 22);
   /* Light, by who it belongs to: the agent (moon), other people (others). You are --primary. */
   --moon: oklch(0.97 0.012 85);
-  /* People's little ghost (rounder than the agent's page ghost), for avatars: initials sit where the eyes would be. */
-  --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%224%202%2092%20100%22%3E%3Cpath%20d%3D%22M6%2048C6%2022%2025%204%2050%204C75%204%2094%2022%2094%2048L94%2082C94%2094%2086%2099%2077%2095C71%2092%2067%2087%2060%2091C55%2094%2053%20100%2046%20100C39%20100%2037%2093%2031%2091C25%2089%2021%2096%2014%2096C9%2096%206%2091%206%2084Z%22%2F%3E%3C%2Fsvg%3E");
+  /* People's little ghost (soft and pear-shaped, unlike the agent's page ghost), for avatars: initials sit where the eyes would be. */
+  --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%222%203%2096%2091%22%3E%3Cpath%20d%3D%22M50%204C74%204%2090%2022%2091%2046C92%2058%2097%2066%2097%2076C97%2087%2091%2092%2084%2092C78%2092%2075%2087%2069%2087C63%2087%2059%2093%2050%2093C41%2093%2037%2087%2031%2087C25%2087%2022%2092%2016%2092C9%2092%203%2087%203%2076C3%2066%208%2058%209%2046C10%2022%2026%204%2050%204Z%22%2F%3E%3C%2Fsvg%3E");
   --others: oklch(0.82 0.1 200);
   --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.6 0.12 292 / 0.16), oklch(0.62 0.09 200 / 0.05) 55%, transparent 75%);
   /* The ghost's halo: soft iris and aqua light, never a fill. */
@@ -173,7 +173,7 @@ a.title:hover { text-decoration: none; }
   background: var(--muted); color: var(--muted-fg); cursor: default;
 }
 .bar .presence .avatar:first-child { margin-left: 0; }
-.bar .presence .avatar.ghosted { width: 1.55rem; height: 1.65rem; margin-left: .1rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
+.bar .presence .avatar.ghosted { width: 1.75rem; height: 1.66rem; margin-left: .1rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
 .bar .presence .avatar.ghosted:first-child { margin-left: 0; }
 /* Your own avatar: opens the Manage panel (owner) or the account menu. */
 .me { position: relative; flex: none; display: flex; align-items: center; gap: .35rem; }
@@ -242,7 +242,7 @@ a.title:hover { text-decoration: none; }
   display: grid; place-items: center; font-size: 12px; font-weight: 600;
 }
 /* Someone else on the page now: a small ghost in their colour (--who), initials inside. */
-.avatar.ghosted { position: relative; isolation: isolate; border-radius: 0; background: none; color: var(--primary-fg); font-weight: 700; padding-top: 1px; }
+.avatar.ghosted { position: relative; isolation: isolate; border-radius: 0; background: none; color: var(--primary-fg); font-weight: 650; padding-top: .1em; }
 .avatar.ghosted::before {
   content: ""; position: absolute; inset: 0; z-index: -1; background: var(--who, var(--others));
   -webkit-mask: var(--ghost-mask) center / contain no-repeat; mask: var(--ghost-mask) center / contain no-repeat;

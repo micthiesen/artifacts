@@ -391,7 +391,9 @@ export function AccordionTrigger({ className, children, ...props }: React.Compon
 export function AccordionContent({ className, children, ...props }: React.ComponentProps<typeof BaseAccordion.Panel>) {
   return (
     <BaseAccordion.Panel
-      className="overflow-hidden text-sm text-muted-foreground transition-opacity duration-(--motion-base) ease-(--motion-ease) data-ending-style:opacity-0 data-starting-style:opacity-0"
+      // Opens with a fade; closes at once. A fade-out at full height only delays the content below snapping up,
+      // which reads as lag, and animating the height itself would reflow the page.
+      className="overflow-hidden text-sm text-muted-foreground transition-opacity duration-(--motion-base) ease-(--motion-ease) data-ending-style:transition-none data-starting-style:opacity-0"
       {...props}
     >
       <div className={cn("pb-4 leading-relaxed", className as string)}>{children}</div>
