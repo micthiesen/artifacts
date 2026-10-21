@@ -313,9 +313,10 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
       {list.length === 0 && <p className="mb-4 text-sm text-muted-foreground">No comments yet.</p>}
       <ul className="flex flex-col gap-5">
         {list.map(([key, c]) => (
-          <li key={key} data-key={key} className="group flex gap-3">
+          // On a phone the comment runs under the avatar at full width; only the name line sits beside it.
+          <li key={key} data-key={key} className="group grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
             <Avatar email={c.by} />
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 max-sm:contents">
               {/* As tall as the avatar, so the name line centers on it and the comment starts below it. */}
               <div className="flex flex-wrap items-baseline gap-x-2 text-sm leading-8">
                 <span className="font-semibold">{displayName(c.by)}</span>
@@ -333,7 +334,7 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
                   </button>
                 )}
               </div>
-              <p className="-mt-1 text-[15px] leading-relaxed break-words whitespace-pre-wrap">{c.text}</p>
+              <p className="-mt-1 text-[15px] leading-relaxed break-words whitespace-pre-wrap max-sm:col-span-2 max-sm:mt-1">{c.text}</p>
             </div>
           </li>
         ))}
@@ -523,9 +524,10 @@ export function Approval({
       {(decisions.length > 0 || waiting.length > 0) && (
         <ul className="divide-y divide-border/70 border-t border-border">
           {decisions.map(([email, d]) => (
-            <li key={email} data-email={email} className="flex gap-3 px-5 py-2.5">
+            // On a phone the note runs under the avatar at full width; only the name line sits beside it.
+            <li key={email} data-email={email} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 px-5 py-2.5">
               <Avatar email={email} size="sm" />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 max-sm:contents">
                 {/* As tall as the avatar, so the name line centers on it. */}
                 <div className="flex flex-wrap items-baseline gap-x-2 text-sm leading-6">
                   <span className="min-w-0 font-medium break-words">{email === viewer.email ? "You" : displayName(email)}</span>
@@ -539,8 +541,8 @@ export function Approval({
                     </span>
                   )}
                 </div>
-                {d.note && <p className={cn("mt-0.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap", stale(d) && "text-muted-foreground")}>{d.note}</p>}
-                {stale(d) && <p className="mt-0.5 text-[13px] text-muted-foreground">The page has changed since, so this needs a new look.</p>}
+                {d.note && <p className={cn("mt-0.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap max-sm:col-span-2 max-sm:mt-1", stale(d) && "text-muted-foreground")}>{d.note}</p>}
+                {stale(d) && <p className="mt-0.5 text-[13px] text-muted-foreground max-sm:col-span-2">The page has changed since, so this needs a new look.</p>}
               </div>
             </li>
           ))}
