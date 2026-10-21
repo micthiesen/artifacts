@@ -126,3 +126,16 @@ test("recompiling a stale build does not overwrite a build written meanwhile", a
   const stored = JSON.parse(sql.exec(`SELECT build FROM builds WHERE artifact_id = ?`, id).toArray()[0].build as string);
   expect(stored.css).toBe("/* newer */");
 });
+
+test("waking after the restyle rewrites stored files that used the retired gradient classes", async () => {
+  const r = await h.hub.create({ title: "Old", files: { "index.mdx": `# Old\n\n<span className="bg-signal px-2">New</span>\n` }, owner: OWNER });
+  if (!r.ok) throw new Error(JSON.stringify(r.errors));
+  // Pretend the object last ran before the restyle's migration (the last one), then wake it again.
+  const sql = h.ctx.sqlStorage;
+  const version = sql.exec(`SELECT version FROM _schema`).one().version as number;
+  sql.exec(`UPDATE _schema SET version = ?`, version - 1);
+  const { Workspace } = await import("../src/worker/hub.ts");
+  const woken = new Workspace(h.ctx as never, h.env as never);
+  expect(woken.files(r.id)["index.mdx"]).toContain(`<span className="bg-primary px-2">New</span>`);
+  expect(sql.exec(`SELECT version FROM _schema`).one().version).toBe(version);
+});

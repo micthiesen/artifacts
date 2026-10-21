@@ -3,6 +3,7 @@
 // history, sharing, shared state, comments and live sync sockets, and keeps its
 // own alarm for render checks, notifications, live data refreshes and backups.
 import { DurableObject } from "cloudflare:workers";
+import { retireSignal } from "./restyle.ts";
 import { BUILD_STAMP, buildArtifact, type Build, type CompileError } from "./compile.ts";
 import { isDefaultView, renderCheck, type CheckEnv, type CheckOutcome, type CheckView, type RenderCheck } from "./check.ts";
 import { domainOf, isValidPrincipal, sharePrincipal, WORKSPACE_PRINCIPAL } from "./principal.ts";
@@ -325,6 +326,15 @@ const MIGRATIONS: Migration[] = [
     `),
   // Tokens that work once (a render check's frame), remembered until they'd have expired anyway.
   (sql) => sql.exec(`CREATE TABLE used_tokens (id TEXT PRIMARY KEY, until INTEGER NOT NULL)`),
+  // The restyle retired the gradient classes (bg-signal, text-signal…): rewrite stored files to the solid colours.
+  // In place under the same hash: a later save of the old text should land on the new one anyway, and builds
+  // recompile from the files because the theme changed.
+  (sql) => {
+    for (const row of sql.exec(`SELECT artifact_id, hash, content FROM blobs WHERE content LIKE '%signal%'`).toArray()) {
+      const next = retireSignal(row.content as string);
+      if (next !== row.content) sql.exec(`UPDATE blobs SET content = ? WHERE artifact_id = ? AND hash = ?`, next, row.artifact_id, row.hash);
+    }
+  },
 ];
 
 /** Links to other artifacts in this workspace, from file contents: /a/<id> (absolute or relative). */
