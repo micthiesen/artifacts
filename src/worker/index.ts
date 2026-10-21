@@ -728,6 +728,7 @@ async function invite(env: Env, hub: HubApi, to: string, input: { workspace: str
   try {
     if (isTestAddress(to) || !(await hub.allowMail(1))) return false;
     await sendInvite(env, to, input);
+    await Promise.resolve().then(() => directory(env).recordContact(to)).catch((err: unknown) => console.error("recording contact failed", err));
     return true;
   } catch (err) {
     console.error("invite email failed", err);

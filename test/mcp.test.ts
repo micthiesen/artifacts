@@ -86,6 +86,8 @@ test("sharing emails each new person their own link, and never hands it to the s
   expect(JSON.stringify(r)).not.toContain("/s/");
   expect(sent.find((m) => m.to === "new@client.co")!.text).toContain("/s/");
   expect(sent.find((m) => m.to === OLU)!.text).toContain(`/a/${id}`);
+  // Emailed directly, so their notifications may be emailed too.
+  expect(h.directory.channelsFor(["new@client.co"])["new@client.co"]).toHaveLength(1);
   // Re-sharing someone already on the list doesn't email them again; notify: false sends nothing.
   await call(MIA, "artifact_share", { id, add: [{ email: OLU, role: "edit" }] });
   await call(MIA, "artifact_share", { id, add: [{ email: "quiet@client.co", role: "view" }], notify: false });

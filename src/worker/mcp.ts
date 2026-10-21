@@ -188,6 +188,7 @@ async function announceShares(ctx: Ctx, id: string, title: string, emails: strin
     try {
       await sendShare(ctx.env, email, { title, workspace: ctx.workspace ?? ctx.slug, link: fresh ? await signInLink(ctx, id, email) : url(ctx.origin, id), by: ctx.person });
       out[email] = fresh ? "link" : "page";
+      if (fresh) await Promise.resolve().then(() => directoryOf(ctx).recordContact(email)).catch((err: unknown) => console.error("recording contact failed", err));
     } catch (err) {
       console.error("share email failed", err);
       out[email] = "not emailed";

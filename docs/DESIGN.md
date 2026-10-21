@@ -88,7 +88,10 @@ or OAuth grant it uses, with that person's access.
 People sign in once on the apex with an emailed one-time code; workspaces
 receive a short-lived signed hand-off and set their own session cookie.
 Adding a member, creating a workspace and sharing with a person all send an
-email. Someone who has never signed in gets a presigned link that signs them
+email. Notifications are emailed only to people who have signed in or whom one
+of those emails reached; anyone else (say, a colleague mentioned under a
+domain share) finds them in their inbox when they sign in, so we never email
+someone who isn't expecting us. Someone who has never signed in gets a presigned link that signs them
 straight into that one artifact, for no longer than the link lasts; anyone who
 has signed in before gets the page and signs in as themselves. A presigned
 link only ever goes into its own person's inbox, or to an agent for its own

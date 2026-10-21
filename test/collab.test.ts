@@ -331,6 +331,7 @@ test("notifications go by email by default", async () => {
   h.env.APEX_ORIGIN = "https://artifacts.test";
   // owner@example.com is a test address (never mailed), so this artifact belongs to a deliverable one.
   const PAT = "pat@corp.co";
+  h.directory.recordContact(PAT);
   const r = await h.hub.create({ title: "Plan", files, owner: PAT });
   if (!r.ok) throw new Error("create");
   const id = r.id;
@@ -344,4 +345,24 @@ test("notifications go by email by default", async () => {
   h.hub.addComment(id, DANA, { text: "again" }, ORIGIN);
   await h.hub.deliverDue(Date.now() + 3_600_000);
   expect(mails.length).toBe(1);
+});
+
+test("a mention never emails someone we haven't emailed before; it waits in their inbox", async () => {
+  const mails: { to: string }[] = [];
+  h.env.EMAIL = { send: async (m: { to: string }) => void mails.push(m) };
+  h.env.MAIL_FROM = "sign-in@mail.test";
+  const PAT = "pat@corp.co";
+  const BOB = "bob@corp.co";
+  const r = await h.hub.create({ title: "Plan", files, owner: PAT });
+  if (!r.ok) throw new Error("create");
+  h.hub.share(r.id, { add: [{ email: "@corp.co", role: "view" }] });
+  h.hub.addComment(r.id, PAT, { text: "@bob@corp.co can you check?" }, ORIGIN);
+  await h.hub.deliverDue(Date.now() + 3_600_000);
+  expect(mails.map((m) => m.to)).toEqual([]);
+  expect(h.directory.inbox(BOB).items.map((i) => i.title)).toHaveLength(1);
+  // Once we've emailed them directly (say, a share), mentions email them too.
+  h.directory.recordContact(BOB);
+  h.hub.addComment(r.id, PAT, { text: "@bob@corp.co ping" }, ORIGIN);
+  await h.hub.deliverDue(Date.now() + 3_600_000);
+  expect(mails.map((m) => m.to)).toEqual([BOB]);
 });

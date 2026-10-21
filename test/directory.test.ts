@@ -73,8 +73,13 @@ test("the directory exports, imports and backs itself up like a workspace", asyn
   expect(() => dir.exportPage("login_codes")).toThrow("unknown table");
 });
 
-test("everyone gets email notifications unless they turn them off", () => {
+test("email notifications go only to people who signed in or whom we emailed directly, unless they turn them off", async () => {
+  // A stranger (say, mentioned under a domain share) gets nothing by email.
+  expect(h.directory.channelsFor(["dana@corp.com"])["dana@corp.com"]).toEqual([]);
+  h.directory.recordContact("Dana@corp.com");
   expect(h.directory.channelsFor(["dana@corp.com"])["dana@corp.com"]).toEqual([{ id: "email", type: "email", config: { to: "dana@corp.com" } }]);
+  await h.directory.verifyLogin("sam@corp.com", await h.directory.startLogin("sam@corp.com"));
+  expect(h.directory.channelsFor(["sam@corp.com"])["sam@corp.com"]).toHaveLength(1);
   h.directory.setEmailNotifications("dana@corp.com", false);
   expect(h.directory.channelsFor(["dana@corp.com"])["dana@corp.com"]).toEqual([]);
   expect(h.directory.profile("dana@corp.com").emailNotifications).toBe(false);

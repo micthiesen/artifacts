@@ -117,7 +117,7 @@ export type DirectoryApi = AsyncMethods<
     Directory,
     | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "forgetTestPeople" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetInbox" | "inbox" | "unreadCount" | "markInboxRead" | "markInboxReadFor" | "openInbox" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "slugForSubscription" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
-    | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
+    | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordContact" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
   >
 >;
@@ -297,6 +297,14 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX inbox_by_artifact ON inbox (slug, artifact_id);
       CREATE INDEX reports_by_at ON reports (at);
       CREATE INDEX support_by_error_group ON support_cases (error_group);
+    `),
+  // Addresses we've emailed about something meant for them (an invitation or a share), so notifications may email
+  // them before they sign in. Nobody else gets one: a mention alone mustn't email a stranger.
+  // Members were emailed an invitation when they were added, so they start out on it.
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE contacted (email TEXT PRIMARY KEY, at TEXT NOT NULL);
+      INSERT OR IGNORE INTO contacted (email, at) SELECT DISTINCT email, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM memberships WHERE role IN ('admin', 'member');
     `),
 ];
 
@@ -897,7 +905,7 @@ export class Directory extends DurableObject {
    */
   forgetPerson(email: string) {
     this.ctx.storage.transactionSync(() => {
-      for (const table of ["users", "channels", "login_codes", "login_sends", "login_fails", "visits", "channel_tests", "passkeys", "memberships", "inbox"]) {
+      for (const table of ["users", "channels", "login_codes", "login_sends", "login_fails", "visits", "channel_tests", "passkeys", "memberships", "inbox", "contacted"]) {
         this.sql.exec(`DELETE FROM ${table} WHERE email = ?`, email);
       }
     });
@@ -910,7 +918,7 @@ export class Directory extends DurableObject {
    */
   forgetTestPeople(): string[] {
     const emails = new Set<string>();
-    for (const table of ["users", "visits", "login_sends", "login_fails", "login_codes", "channels", "passkeys", "inbox"]) {
+    for (const table of ["users", "visits", "login_sends", "login_fails", "login_codes", "channels", "passkeys", "inbox", "contacted"]) {
       for (const r of this.sql.exec(`SELECT DISTINCT email FROM ${table}`)) emails.add(r.email as string);
     }
     const members = new Set(this.sql.exec(`SELECT DISTINCT email FROM memberships`).toArray().map((r) => r.email as string));
@@ -1080,7 +1088,11 @@ export class Directory extends DurableObject {
     return c ? { id: c.id as string, type: c.type as ChannelType, config: JSON.parse(c.config as string) } : null;
   }
 
-  /** Active channels for each email, for a workspace delivering notifications. Email is one, unless turned off. */
+  /**
+   * Active channels for each email, for a workspace delivering notifications. Email is one, unless turned off, and
+   * only for someone who has signed in or whom we've emailed directly (recordContact): anyone else, say a colleague
+   * mentioned under a domain share, gets it in their inbox only, so we never email someone who doesn't expect us.
+   */
   channelsFor(emails: string[]): Record<string, ChannelRow[]> {
     const out: Record<string, ChannelRow[]> = {};
     for (const e of new Set(emails)) {
@@ -1088,7 +1100,7 @@ export class Directory extends DurableObject {
         .exec(`SELECT id, type, config FROM channels WHERE email = ? AND disabled = 0`, e)
         .toArray()
         .map((c) => ({ id: c.id as string, type: c.type as ChannelType, config: JSON.parse(c.config as string) }));
-      if (this.emailNotifications(e)) out[e].push({ id: EMAIL_CHANNEL, type: "email", config: { to: e } });
+      if (this.emailNotifications(e) && (this.hasSignedIn(e) || this.wasContacted(e))) out[e].push({ id: EMAIL_CHANNEL, type: "email", config: { to: e } });
     }
     return out;
   }
@@ -1305,6 +1317,16 @@ export class Directory extends DurableObject {
   /** Whether this person has ever signed in with a code (so a link must not sign in as them). */
   hasSignedIn(email: string): boolean {
     return this.sql.exec(`SELECT 1 FROM users WHERE email = ?`, email).toArray().length > 0;
+  }
+
+  /** We emailed this address something meant for it (an invitation or a share), so notifications may follow. */
+  recordContact(email: string) {
+    this.sql.exec(`INSERT INTO contacted (email, at) VALUES (?, ?) ON CONFLICT (email) DO NOTHING`, email.trim().toLowerCase(), new Date().toISOString());
+    this.markDirty();
+  }
+
+  private wasContacted(email: string): boolean {
+    return this.sql.exec(`SELECT 1 FROM contacted WHERE email = ?`, email).toArray().length > 0;
   }
 
   /** Someone opened a workspace as a guest: list it among their workspaces on the apex. */

@@ -11,5 +11,5 @@ export const DATA_TABLES = [
 /** The directory's tables worth keeping (sign-in codes, used passkey challenges and their rate limits are not). */
 export const DIRECTORY_TABLES = [
   "workspaces", "memberships", "users", "channels", "visits", "passkeys", "billing", "billing_events", "self_serve_log",
-  "support_cases", "support_drafts", "error_groups", "inbox", "ops_events", "ops_alerts",
+  "support_cases", "support_drafts", "error_groups", "inbox", "ops_events", "ops_alerts", "contacted",
 ];
