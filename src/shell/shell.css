@@ -762,15 +762,19 @@ div.thread-anchor { cursor: default; }
 .splash-hero { position: relative; }
 .splash-ghost { display: none; }
 @media (min-width: 1040px) {
-  .splash-hero { max-width: none; padding-right: 20rem; }
+  /* Two columns: the ghost floats in the space beside the text, not at the page's far edge, so the gap between
+     them stays about the same as the text's ragged right edge on any wide screen. */
+  .splash-hero { max-width: none; display: grid; grid-template-columns: minmax(0, 42rem) minmax(16rem, 1fr); column-gap: 2rem; align-items: center; }
+  .splash-hero > :not(.splash-ghost) { grid-column: 1; }
   .splash-ghost {
-    display: block; position: absolute; right: 3.5rem; top: 50%; width: 9.5rem; height: 10.75rem; margin-top: -5.6rem;
+    display: block; grid-column: 2; grid-row: 1 / span 10; justify-self: center; position: relative; width: 9.5rem; height: 10.75rem;
     background: var(--moon);
     -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
     animation: drift 7s ease-in-out infinite;
   }
+  /* The halo sits behind the ghost, centred on it (the ghost's own mask would clip it). */
   .splash-hero::after {
-    content: ""; position: absolute; right: -2.5rem; top: 50%; width: 21rem; height: 21rem; margin-top: -10.75rem; z-index: -1; border-radius: 50%;
+    content: ""; grid-column: 2; grid-row: 1 / span 10; justify-self: center; align-self: center; width: 21rem; height: 21rem; z-index: -1; border-radius: 50%;
     background: radial-gradient(closest-side, oklch(0.72 0.14 292 / 0.5), oklch(0.82 0.1 200 / 0.16) 55%, transparent);
   }
 }
