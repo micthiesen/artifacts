@@ -15,7 +15,8 @@ const COLOURS = [
 /** Lightness varies a little between colours, so neighbours still differ for colour-blind viewers. */
 export function whoColor(email: string | null | undefined): string {
   if (!email) return COLOURS[0];
+  const key = email.trim().toLowerCase();
   let h = 0;
-  for (let i = 0; i < email.length; i++) h = (h * 31 + email.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
   return COLOURS[h % COLOURS.length];
 }

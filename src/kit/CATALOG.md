@@ -16,7 +16,7 @@ Layout and content
 - `Section({title, description?})`, `Grid({cols: 1-6, gap?})`, `Stack({direction?: "row"|"col", gap?, align?})`
 - `Summary`: the lead answer, set large. Put it first.
 - `Callout({tone?: "info"|"success"|"warning"|"danger", title?})`
-- `Stat({label, value, delta?: "+12%"|number, hint?, invert?})` inside `Stats` (responsive row)
+- `Stat({label, value, delta?: "+12%"|number, hint?, invert?})` inside `Stats` (one panel divided into cells; put the `Stat`s directly inside it, not wrapped)
 - `Steps` > `Step({title})`; `Timeline` > `TimelineItem({date?, title?, tone?})`
 - `Link({href})`: external, opens a new tab. Markdown links do the same.
 
