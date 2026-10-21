@@ -17,11 +17,9 @@
   from {
     outline: 2px solid color-mix(in oklab, var(--others) 60%, transparent);
     outline-offset: 2px;
-    box-shadow: 0 0 24px -2px color-mix(in oklab, var(--others) 45%, transparent);
   }
   to {
     outline: 2px solid transparent;
     outline-offset: 2px;
-    box-shadow: 0 0 24px -2px transparent;
   }
 }

@@ -7,7 +7,7 @@ type MailEnv = { EMAIL?: SendEmail; MAIL_FROM: string; APEX_ORIGIN?: string };
 const DEFAULT_APEX = "https://artifacts.boo";
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif";
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-const C = { page: "#f4f3fb", card: "#ffffff", text: "#1d1b2e", muted: "#6b6880", accent: "#6d5efc", tint: "#efedff", line: "#e6e4f2" };
+const C = { page: "#f3f5f9", card: "#ffffff", text: "#161b24", muted: "#5d646f", accent: "#6d52bc", tint: "#f2f0ff", line: "#dde1ea" };
 
 /** Addresses no real person can hold (RFC 2606 / 6761), used by end-to-end checks. */
 export function isTestAddress(email: string): boolean {
@@ -45,13 +45,13 @@ function layout(input: { apex: string; title: string; preheader: string; body: s
 a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important;font:inherit!important}
 u + #body a{color:inherit;text-decoration:none;font-size:inherit;font-weight:inherit;line-height:inherit}
 @media (prefers-color-scheme: dark){
-.page{background:#0b0d15!important}
-.card{background:#161827!important;border-color:#262940!important}
-.text,.word{color:#ecebf5!important}
-.muted,.muted a{color:#9c99b3!important}
-.codebox{background:#221f45!important;border-color:#37326b!important}
-.code{color:#ecebf5!important}
-.accent{color:#9d93ff!important}
+.page{background:#090c12!important}
+.card{background:#0f131b!important;border-color:#262a32!important}
+.text,.word{color:#f2eee6!important}
+.muted,.muted a{color:#acb1ba!important}
+.codebox{background:#27223d!important;border-color:#3b3360!important}
+.code{color:#f2eee6!important}
+.accent{color:#b3a3f7!important}
 }`;
   return `<!doctype html>
 <html lang="en">
@@ -113,7 +113,7 @@ export async function sendCode(env: MailEnv, to: string, code: string) {
   const ignore = "If you didn't try to sign in, you can ignore this email.";
   const footer = `You got this because someone asked to sign in to ${PRODUCT} with this address.`;
   const text = `Your ${PRODUCT} sign-in code is ${digits}\n\n${lead}\n\n${ignore}\n\n--\n${footer}\n${PRODUCT}\n`;
-  const box = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 20px"><tr><td class="codebox" align="center" bgcolor="${C.tint}" style="background:${C.tint};border:1px solid #dcd8ff;border-radius:12px;padding:18px 12px"><span class="code" style="font-family:${MONO};font-size:32px;line-height:40px;font-weight:600;letter-spacing:6px;padding-left:6px;font-variant-numeric:tabular-nums;color:${C.text};text-decoration:none;white-space:nowrap">${escape(digits)}</span></td></tr></table>`;
+  const box = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 20px"><tr><td class="codebox" align="center" bgcolor="${C.tint}" style="background:${C.tint};border:1px solid #ddd6f7;border-radius:12px;padding:18px 12px"><span class="code" style="font-family:${MONO};font-size:32px;line-height:40px;font-weight:600;letter-spacing:6px;padding-left:6px;font-variant-numeric:tabular-nums;color:${C.text};text-decoration:none;white-space:nowrap">${escape(digits)}</span></td></tr></table>`;
   const body = [
     `<h1 class="text" style="margin:0 0 12px;font-size:20px;line-height:28px;font-weight:700;color:${C.text}">Your sign-in code</h1>`,
     para(escape(lead)),

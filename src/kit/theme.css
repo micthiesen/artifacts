@@ -3,11 +3,11 @@
  * every artifact's per-version stylesheet include this file verbatim, so a
  * class like `bg-muted text-primary` resolves from these tokens alone.
  *
- * Dark only. "Midnight ink" surfaces (cool, low-chroma blue-violet neutrals)
- * Night-ink surfaces and moonlit text. Light means life: controls are solid
- * iris (--primary, which also means "you"), and only living things glow:
- * the agent's ghost in moon white, other people's changes in aqua (--others).
- * There are no gradient fills. Headings are Fraunces (--font-display). `.dark` is kept as an alias so `dark:` variants still apply.
+ * Dark only. Night-ink surfaces and moonlit text. Light means life: controls
+ * are solid iris (--primary, which also means "you"), and only living things
+ * glow: the agent's ghost in moon white, other people's changes in aqua
+ * (--others). There are no gradient fills. Headings are Fraunces
+ * (--font-display). `.dark` is kept as an alias so `dark:` variants still apply.
  */
 
 @custom-variant dark (&:where(.dark, .dark *));

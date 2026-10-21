@@ -271,7 +271,7 @@ export function DialogTrigger({ className, ...props }: React.ComponentProps<type
 export function DialogContent({ className, children, showClose = true, ...props }: React.ComponentProps<typeof BaseDialog.Popup> & { showClose?: boolean }) {
   return (
     <BaseDialog.Portal>
-      <BaseDialog.Backdrop className="fixed inset-0 z-50 bg-[oklch(0.08_0.02_275/0.6)] transition-opacity duration-(--motion-base) data-ending-style:opacity-0 data-starting-style:opacity-0" />
+      <BaseDialog.Backdrop className="fixed inset-0 z-50 bg-[oklch(0.08_0.015_262/0.6)] transition-opacity duration-(--motion-base) data-ending-style:opacity-0 data-starting-style:opacity-0" />
       <BaseDialog.Popup
         className={cn(
           surface,

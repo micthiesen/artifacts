@@ -117,6 +117,9 @@ test("pages with POST forms load the double-submit guard; others don't", async (
   const policy = await policyPage("privacy", brand, "").text();
   expect(policy).not.toContain("/static/forms.js");
   // Both preload shell.css's font at the URL shell.css uses.
-  expect(policy).toContain('<link rel="preload" href="/kit/v1/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>');
-  expect(await Bun.file(new URL("../src/shell/shell.css", import.meta.url)).text()).toContain("url(/kit/v1/fonts/inter-latin-wght-normal.woff2)");
+  const css = await Bun.file(new URL("../src/shell/shell.css", import.meta.url)).text();
+  for (const font of ["inter-latin-wght-normal.woff2", "fraunces-latin-soft-normal.woff2"]) {
+    expect(policy).toContain(`<link rel="preload" href="/kit/v1/fonts/${font}" as="font" type="font/woff2" crossorigin>`);
+    expect(css).toContain(`url(/kit/v1/fonts/${font})`);
+  }
 });

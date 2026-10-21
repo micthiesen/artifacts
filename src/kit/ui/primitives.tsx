@@ -225,7 +225,7 @@ export function Avatar({
 export function AvatarGroup({ emails, max = 5, size = "sm" }: { emails: string[]; max?: number; size?: keyof typeof avatarSizes }) {
   const shown = emails.slice(0, max);
   return (
-    <span className="inline-flex items-center -space-x-1.5">
+    <span className="inline-flex items-center gap-0.5">
       {shown.map((e) => (
         <Avatar key={e} email={e} size={size} />
       ))}

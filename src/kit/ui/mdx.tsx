@@ -107,7 +107,7 @@ export const markdownComponents = {
   // On phones, cells keep a readable width and the table scrolls sideways.
   td: ({ className, ...p }: P<"td">) => <td className={cn("px-4 py-2.5 align-top first:pl-5 last:pr-5 max-sm:min-w-36", className)} {...p} />,
   hr: ({ className, ...p }: P<"hr">) => (
-    <hr className={cn("my-10 h-px border-0 bg-[linear-gradient(90deg,transparent,color-mix(in_oklab,var(--input)_60%,transparent)_20%,color-mix(in_oklab,var(--input)_60%,transparent)_80%,transparent)]", className)} {...p} />
+    <hr className={cn("my-10 h-px border-0 bg-border", className)} {...p} />
   ),
   img: ({ className, alt = "", src, ...p }: P<"img">) => (
     <img

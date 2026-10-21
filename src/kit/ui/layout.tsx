@@ -146,8 +146,9 @@ export function Stat({
 }
 
 /**
- * A responsive row of <Stat>s, as one panel divided into cells. Each cell draws its own right and bottom rule;
- * the panel clips the ones on its outer edge, so empty cells in a short last row stay blank.
+ * A responsive row of <Stat>s, as one panel divided into cells. Each cell keeps its own right and bottom border and
+ * reaches 1px past its track, so the panel clips the rules on its outer edge and empty cells in a short last row
+ * stay blank. Borders, unlike shadows, survive printing.
  */
 export function Stats({ children, className }: Children) {
   const n = React.Children.count(children);
@@ -155,8 +156,8 @@ export function Stats({ children, className }: Children) {
     <div
       className={cn(
         "my-6 grid overflow-hidden rounded-xl border border-border bg-card shadow-card",
-        "*:rounded-none *:border-0 *:bg-transparent *:shadow-[1px_0_0_var(--border),0_1px_0_var(--border)]",
-        n >= 4 ? "grid-cols-2 lg:grid-cols-4" : n === 3 ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-2",
+        "*:-mr-px *:-mb-px *:rounded-none *:border-t-0 *:border-l-0 *:bg-transparent *:shadow-none",
+        n >= 4 ? "grid-cols-2 lg:grid-cols-4" : n === 3 ? "grid-cols-1 sm:grid-cols-3" : n === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1",
         className,
       )}
     >

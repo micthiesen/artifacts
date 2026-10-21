@@ -172,7 +172,7 @@ a.title:hover { text-decoration: none; }
   background: var(--muted); color: var(--muted-fg); cursor: default;
 }
 .bar .presence .avatar:first-child { margin-left: 0; }
-.bar .presence .avatar.ghosted { width: 1.45rem; height: 1.65rem; margin-left: -.15rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
+.bar .presence .avatar.ghosted { width: 1.45rem; height: 1.65rem; margin-left: .1rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
 .bar .presence .avatar.ghosted:first-child { margin-left: 0; }
 /* Your own avatar: opens the Manage panel (owner) or the account menu. */
 .me { position: relative; flex: none; display: flex; align-items: center; gap: .35rem; }
@@ -259,7 +259,7 @@ a.title:hover { text-decoration: none; }
 
 /* Index and message pages. */
 .content { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
-h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.02em; font-weight: 650; }
+h1 { font-size: 1.85rem; line-height: 1.15; margin: 0 0 .5rem; }
 .page-title { margin-bottom: 1.5rem; }
 .list { list-style: none; padding: 0; margin: 0; display: grid; gap: .625rem; }
 .list li a {
@@ -308,7 +308,7 @@ h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -.
 .button.secondary::after { background: oklch(1 0 0 / 0.06); }
 .button:disabled { opacity: .55; cursor: default; }
 .button:disabled::after { opacity: 0; }
-.om-backdrop { position: fixed; inset: 0; z-index: 40; background: oklch(0.08 0.02 275 / 0.6); }
+.om-backdrop { position: fixed; inset: 0; z-index: 40; background: oklch(0.08 0.015 262 / 0.6); }
 .om-panel {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 41; width: min(28rem, 100vw); max-width: 100vw;
   display: flex; flex-direction: column; background: var(--card); color: var(--fg); overflow: hidden;
@@ -567,7 +567,7 @@ div.thread-anchor { cursor: default; }
 
 /* Index: unread and updated markers. */
 .list .title .badge { margin-left: .5rem; padding: .05rem .45rem; border-radius: 999px; font-size: 11.5px; font-weight: 650; vertical-align: 1px; color: var(--bg); background: var(--caution); }
-.list .title .dot { display: inline-block; width: .5rem; height: .5rem; margin-left: .5rem; border-radius: 999px; vertical-align: 2px; background: var(--others); box-shadow: 0 0 8px var(--others); }
+.list .title .dot { display: inline-block; width: .5rem; height: .5rem; margin-left: .5rem; border-radius: 999px; vertical-align: 2px; background: var(--primary); }
 
 /* Profile page. */
 .profile { display: grid; gap: 1.25rem; }
@@ -725,14 +725,14 @@ div.thread-anchor { cursor: default; }
 .splash { max-width: 74rem; margin: 0 auto; padding: 4.5rem 1.25rem 3rem; }
 .splash-hero { max-width: 44rem; }
 .splash-notice { display: inline-block; margin: 0 0 1.25rem; padding: .35rem .7rem; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--muted-fg); }
-.splash h1 { font-size: clamp(2.4rem, 5.6vw, 4rem); line-height: 1.02; letter-spacing: -.015em; margin: 0 0 1.25rem; text-wrap: balance; }
+.splash h1 { font-size: clamp(2.2rem, 4.6vw, 3.4rem); line-height: 1.05; margin: 0 0 1.25rem; text-wrap: balance; }
 .splash h2 { font-size: 1.6rem; margin: 0 0 .75rem; }
 .splash-lede { font-size: 17px; line-height: 1.6; margin: 0 0 1.75rem; max-width: 38rem; }
 .splash-actions { margin: 0; display: flex; flex-wrap: wrap; gap: .6rem; }
 .splash-actions .button { height: 2.85rem; padding: 0 1.3rem; font-size: 15.5px; }
 .splash-fine { margin: .9rem 0 0; font-size: 13.5px; }
 .splash-self { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2rem; align-items: center; margin-top: 4rem; padding-top: 3rem; border-top: 1px solid var(--border); }
-.splash-code { border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: oklch(0.13 0.016 275); box-shadow: var(--shadow-card); overflow: hidden; min-width: 0; }
+.splash-code { border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: oklch(0.125 0.012 262); box-shadow: var(--shadow-card); overflow: hidden; min-width: 0; }
 .splash-code-head { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem .9rem; border-bottom: 1px solid var(--border); font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg); }
 .splash-code pre { margin: 0; padding: .9rem 1rem 1.1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .splash-code code { font: 13px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg); }
@@ -754,7 +754,7 @@ div.thread-anchor { cursor: default; }
   position: relative; padding: 1.2rem 1.2rem 1.3rem; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px);
   background: var(--card); box-shadow: var(--shadow-card); overflow: hidden;
 }
-.splash-card h3, .pricing-card h2 { margin: 0 0 .35rem; font-size: 16px; letter-spacing: -.01em; }
+.pricing-card h2 { margin: 0 0 .35rem; font-size: 16px; letter-spacing: -.01em; }
 .splash-card > p { margin: 0 0 .9rem; font-size: 14px; line-height: 1.55; }
 .splash-self p { line-height: 1.6; margin: 0 0 1.1rem; }
 .splash-self p.splash-license { font-size: 13.5px; margin: 1.1rem 0 0; }
@@ -770,8 +770,8 @@ div.thread-anchor { cursor: default; }
     animation: drift 7s ease-in-out infinite;
   }
   .splash-hero::after {
-    content: ""; position: absolute; right: 0; top: 50%; width: 15.5rem; height: 15.5rem; margin-top: -8rem; z-index: -1; border-radius: 50%;
-    background: var(--halo-light);
+    content: ""; position: absolute; right: -2.5rem; top: 50%; width: 21rem; height: 21rem; margin-top: -10.75rem; z-index: -1; border-radius: 50%;
+    background: radial-gradient(closest-side, oklch(0.72 0.14 292 / 0.5), oklch(0.82 0.1 200 / 0.16) 55%, transparent);
   }
 }
 @keyframes drift { 50% { transform: translateY(-10px) rotate(-2deg); } }
@@ -796,7 +796,7 @@ div.thread-anchor { cursor: default; }
 .showcase-toggle { display: none; }
 .showcase-window {
   display: grid; grid-template-columns: minmax(0, .78fr) minmax(0, 1.22fr); height: 38rem;
-  border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); overflow: hidden; background: oklch(0.13 0.016 275); box-shadow: var(--shadow-pop);
+  border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); overflow: hidden; background: oklch(0.125 0.012 262); box-shadow: var(--shadow-pop);
 }
 .showcase .showcase-code { display: flex; flex-direction: column; min-height: 0; border: 0; border-right: 1px solid var(--border); border-radius: 0; box-shadow: none; }
 .showcase-code pre { flex: 1; min-height: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; }
@@ -824,7 +824,7 @@ div.thread-anchor { cursor: default; }
 .t-c { color: color-mix(in oklab, var(--muted-fg) 75%, transparent); font-style: italic; }
 .t-s { color: oklch(0.83 0.1 195); }
 .t-k { color: oklch(0.76 0.14 310); }
-.t-t { color: oklch(0.77 0.13 270); }
+.t-t { color: oklch(0.78 0.12 292); }
 .t-a { color: oklch(0.85 0.09 85); }
 .t-n { color: oklch(0.8 0.12 45); }
 .t-h { color: var(--fg); font-weight: 700; }
@@ -950,7 +950,7 @@ textarea.input { height: auto; min-height: 7rem; padding: .55rem .8rem; line-hei
 /* Selects draw their own chevron, inset like the text: the native arrow hugs the right border. */
 select.input, select.om-select, .profile select {
   appearance: none; padding-right: 2rem;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='oklch(0.73 0.018 275)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='oklch(0.76 0.014 262)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right .4rem center; background-size: 14px;
 }
 
@@ -974,8 +974,8 @@ select.input, select.om-select, .profile select {
 @keyframes art-move-pop { from { transform: scale(0.92); opacity: 0.4; } }
 .art-move-glow { animation: art-move-glow var(--motion-attention) var(--motion-ease) var(--move-delay, 0ms); }
 @keyframes art-move-glow {
-  from { outline: 2px solid color-mix(in oklab, var(--others) 60%, transparent); outline-offset: 2px; box-shadow: 0 0 24px -2px color-mix(in oklab, var(--others) 45%, transparent); }
-  to { outline: 2px solid transparent; outline-offset: 2px; box-shadow: 0 0 24px -2px transparent; }
+  from { outline: 2px solid color-mix(in oklab, var(--others) 60%, transparent); outline-offset: 2px; }
+  to { outline: 2px solid transparent; outline-offset: 2px; }
 }
 /* Rows moving in the list (pinning, undo) glide to their place. */
 ::view-transition-group(*) { animation-duration: var(--motion-slow); animation-timing-function: var(--motion-spring); }

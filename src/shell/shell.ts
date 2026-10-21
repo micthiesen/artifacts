@@ -469,6 +469,8 @@ function renderPresence() {
     el.style.setProperty("--who", whoColor(email));
     el.dataset.email = email;
     el.title = `Viewing now: ${email}`;
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", `Viewing now: ${email}`);
     el.textContent = email.slice(0, 1).toUpperCase();
     presenceEl.append(el);
   }

@@ -51,10 +51,11 @@ const PAGE_CSP =
 // its white default canvas until the stylesheet arrives, and a frame that is
 // still "light" inside the dark shell gets an opaque white backdrop.
 const DARK_HEAD = `<meta name="color-scheme" content="dark">
-<style>html{background:oklch(0.16 0.017 275)}</style>`;
+<style>html{background:oklch(0.155 0.014 262)}</style>`;
 
-/** shell.css's face, fetched with the stylesheet instead of after it: the same URL, so the two share one cache entry. */
-const INTER_PRELOAD = `<link rel="preload" href="/kit/v1/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>`;
+/** shell.css's faces, fetched with the stylesheet instead of after it: the same URLs, so they share one cache entry each. */
+const INTER_PRELOAD = `<link rel="preload" href="/kit/v1/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/kit/v1/fonts/fraunces-latin-soft-normal.woff2" as="font" type="font/woff2" crossorigin>`;
 
 function page(title: string, body: string, init: ResponseInit = {}, head = ""): Response {
   // Pages with server-rendered POST forms load the double-submit guard (src/shell/forms.ts).
@@ -67,7 +68,7 @@ function page(title: string, body: string, init: ResponseInit = {}, head = ""): 
 ${DARK_HEAD}
 <meta name="referrer" content="no-referrer">
 <title>${escapeHtml(title)}</title>
-<meta name="theme-color" content="#0b0d15">
+<meta name="theme-color" content="#090c12">
 <meta name="apple-mobile-web-app-title" content="${PRODUCT}">
 <link rel="icon" href="${asset("/static/icons/icon.svg")}" type="image/svg+xml">
 <link rel="icon" href="${asset("/static/icons/favicon-32.png")}" sizes="32x32" type="image/png">
@@ -245,7 +246,7 @@ function list(artifacts: ListedArtifact[], summaries: Record<string, ShareSummar
 function activityBadge(a: { unseen?: boolean; unread?: number }): string {
   const parts: string[] = [];
   if (a.unread) parts.push(`<span class="badge" title="Unread comments">${a.unread} new ${a.unread === 1 ? "comment" : "comments"}</span>`);
-  else if (a.unseen) parts.push(`<span class="dot" title="Updated since you last looked" aria-label="Updated since you last looked"></span>`);
+  else if (a.unseen) parts.push(`<span class="dot" role="img" title="Updated since you last looked" aria-label="Updated since you last looked"></span>`);
   return parts.join("");
 }
 
@@ -264,7 +265,7 @@ export function previewPage(p: { url: string; origin: string; title?: string; de
 <title>${escapeHtml(title)}</title>
 <meta name="robots" content="noindex, nofollow">
 <meta name="description" content="${escapeHtml(description)}">
-<meta name="theme-color" content="#7c6cff">
+<meta name="theme-color" content="#090c12">
 <meta property="og:site_name" content="${PRODUCT}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${escapeHtml(p.url)}">
@@ -354,7 +355,7 @@ function appJsonLd(brand: Brand, pricing: boolean): string {
  * workspaces (/workspaces).
  */
 export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }, pricing = false, selfServe = false): Response {
-  const card = (title: string, body: string, points: string[]) =>
+  const fact = (title: string, body: string, points: string[]) =>
     `<div class="splash-fact"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(body)}</p><ul class="splash-facts">${points.map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
   const host = brand.apex.replace(/^https?:\/\//, "") || PRODUCT;
   return page(
@@ -384,22 +385,22 @@ ${notice ? `<p class="splash-notice" role="status">${escapeHtml(notice)}</p>` : 
 ${showcase(host)}
 
 <section class="splash-grid" aria-label="What's different">
-${card("Live pages, not static HTML", "State, people and data are part of the page, not something to wire up.", [
+${fact("Live pages, not static HTML", "State, people and data are part of the page, not something to wire up.", [
   "<code>useShared</code>, <code>useSharedMap</code> and <code>useLocal</code> sync over a WebSocket; <code>useViewer</code> and <code>usePresence</code> know who's looking",
   "Polls, approvals, forms, checklists, notes and comments work out of the box, alongside tables, charts and Mermaid diagrams",
   "A data file can refresh from a JSON URL on a schedule, once a person approves the host",
 ])}
-${card("An edit-and-check loop for agents", "Agents change artifacts the way they change code, and find out when they broke something.", [
+${fact("An edit-and-check loop for agents", "Agents change artifacts the way they change code, and find out when they broke something.", [
   "Ranged reads, grep, exact find-and-replace edits and JSON Patch, with version guards against stale writes",
   "Imports, components and syntax validated before anything is saved",
   "Every write rendered in a headless browser; runtime errors and a screenshot come back in the tool result",
 ])}
-${card("People answer, agents close the loop", "An artifact can ask for a decision and get it back, not just be read.", [
+${fact("People answer, agents close the loop", "An artifact can ask for a decision and get it back, not just be read.", [
   "Approvals, form responses and comments anchored to exact text, each signed with the person's verified email",
   "The agent reads every answer over MCP, and MCP events or a webhook can wake it when one arrives; fixes are marked addressed in the version that made them",
   "Owners and agents see who has read which version; readers see what changed since their last visit",
 ])}
-${card("Isolated by construction", "Tenancy and untrusted code are handled by the platform, not by convention.", [
+${fact("Isolated by construction", "Tenancy and untrusted code are handled by the platform, not by convention.", [
   "Each workspace is its own Durable Object with its own SQLite database, on its own subdomain and browser origin",
   "Artifact code runs in a sandboxed, opaque-origin frame with no network access",
   "Comments live outside the frame and collab writes are stamped server-side, so votes and authorship can't be forged",
