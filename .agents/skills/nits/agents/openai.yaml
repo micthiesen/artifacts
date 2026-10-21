@@ -1,0 +1,5 @@
+interface:
+  display_name: "Nits"
+
+policy:
+  allow_implicit_invocation: false

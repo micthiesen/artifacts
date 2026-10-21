@@ -8,6 +8,20 @@ Checks: `bun run typecheck`, `bun test`, `bun run build`. After UI changes,
 run `spikes/e2e-layout.ts` against a running stage: pages must never scroll
 sideways on a phone.
 
+Michael's own nits about the product (screenshots and notes tagged
+"Artifacts Nits" in Karakeep) are worked by `$nits`.
+
+## Cost
+
+- Add no fixed cost. Something that costs money while nobody uses it (an
+  always-on process, a cron that runs regardless, a paid tier) needs
+  Michael's say-so. Cost should follow use, as `docs/DESIGN.md` describes
+  for workspaces.
+- Don't keep what has served its purpose. Data that's only useful once
+  (uploads for a single task, scratch files, handled nits) is deleted
+  when its job is done, not archived, and anything stored gets a size limit
+  and a way to be removed.
+
 ## Look
 
 Light means life. Night-ink surfaces and moonlit text stay quiet; only
