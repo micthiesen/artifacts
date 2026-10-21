@@ -13,7 +13,7 @@
   </defs>
   <rect width="1200" height="630" fill="url(#glow)"/>
   <circle cx="600" cy="245" r="190" fill="url(#halo)"/>
-  <path fill="#f6f2ea" fill-rule="evenodd" transform="translate(600 245) scale(0.78) translate(-256 -260)" d="M141 228A115 100 0 0 1 371 228V358A38.333 33.333 0 0 1 294.333 358A38.333 33.333 0 0 1 217.667 358A38.333 33.333 0 0 1 141 358Z M193 244a18 25 0 1 0 36 0a18 25 0 1 0 -36 0Z M283 244a18 25 0 1 0 36 0a18 25 0 1 0 -36 0Z"/>
+  <g transform="translate(600 245) scale(0.95) translate(-126 -149)"><path fill="#f6f2ea" fill-rule="evenodd" d="M58 120C58 64 94 28 140 28L166 28L210 72L210 214C210 244 194 262 174 262C158 262 152 246 138 246C124 246 118 262 98 262C82 262 72 270 52 264C36 259 32 245 42 237C56 225 58 208 58 188ZM103.5 126a10.5 15.5 0 1 0 21.0 0a10.5 15.5 0 1 0 -21.0 0ZM147.5 126a10.5 15.5 0 1 0 21.0 0a10.5 15.5 0 1 0 -21.0 0Z"/><path fill="#c9bff0" d="M166 28L166 62C166 68 170 72 176 72L210 72Z"/></g>
   <text x="600" y="478" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="700" font-size="64" letter-spacing="-1" fill="#f6f2ea">artifacts<tspan fill="#b6a8f5">.boo</tspan></text>
   <text x="600" y="532" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="25" fill="#8b8fa8">Live pages your agent builds and maintains</text>
 </svg>

@@ -42,7 +42,7 @@
   /* Light, by who it belongs to: the agent (moon), other people (others). You are --primary. */
   --moon: oklch(0.97 0.012 85);
   /* The ghost without eyes, for masks (initials sit where the eyes would be). */
-  --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%22131%20118%20250%20284%22%3E%3Cpath%20d%3D%22M141%20228A115%20100%200%200%201%20371%20228V358A38.333%2033.333%200%200%201%20294.333%20358A38.333%2033.333%200%200%201%20217.667%20358A38.333%2033.333%200%200%201%20141%20358Z%22%2F%3E%3C%2Fsvg%3E");
+  --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%2228%2022%20196%20254%22%3E%3Cpath%20d%3D%22M58%20120C58%2064%2094%2028%20140%2028L166%2028L210%2072L210%20214C210%20244%20194%20262%20174%20262C158%20262%20152%20246%20138%20246C124%20246%20118%20262%2098%20262C82%20262%2072%20270%2052%20264C36%20259%2032%20245%2042%20237C56%20225%2058%20208%2058%20188Z%22%2F%3E%3C%2Fsvg%3E");
   --others: oklch(0.82 0.1 200);
   --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.6 0.12 292 / 0.16), oklch(0.62 0.09 200 / 0.05) 55%, transparent 75%);
   /* The ghost's halo: soft iris and aqua light, never a fill. */
@@ -142,7 +142,7 @@ select, input, textarea { max-width: 100%; }
 .bar .mark:hover { text-decoration: none; background-color: var(--muted); }
 /* The ghost logo: moonlight through the ghost's shape (eyes cut out), with a soft halo behind it. */
 .logo-ghost {
-  position: relative; display: inline-block; width: 17px; height: 19px; flex: none;
+  position: relative; display: inline-block; width: 16px; height: 20px; flex: none;
 }
 .logo-ghost::before {
   content: ""; position: absolute; inset: -9px; border-radius: 50%; background: var(--halo-light); opacity: .55; pointer-events: none;
@@ -172,7 +172,7 @@ a.title:hover { text-decoration: none; }
   background: var(--muted); color: var(--muted-fg); cursor: default;
 }
 .bar .presence .avatar:first-child { margin-left: 0; }
-.bar .presence .avatar.ghosted { width: 1.45rem; height: 1.65rem; margin-left: .1rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
+.bar .presence .avatar.ghosted { width: 1.35rem; height: 1.7rem; margin-left: .1rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
 .bar .presence .avatar.ghosted:first-child { margin-left: 0; }
 /* Your own avatar: opens the Manage panel (owner) or the account menu. */
 .me { position: relative; flex: none; display: flex; align-items: center; gap: .35rem; }
@@ -231,7 +231,7 @@ a.title:hover { text-decoration: none; }
 }
 .account-menu .account-primary { color: var(--fg); font-weight: 600; }
 .account-menu .account-primary::before {
-  content: ""; display: inline-block; width: 11.5px; height: 13px; margin-right: .5rem; vertical-align: -1px; background: var(--moon);
+  content: ""; display: inline-block; width: 11px; height: 14px; margin-right: .5rem; vertical-align: -2px; background: var(--moon);
   -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
 }
 .account-menu .account-quiet { color: var(--muted-fg); }
@@ -774,7 +774,7 @@ div.thread-anchor { cursor: default; }
   .splash-hero { max-width: none; display: grid; grid-template-columns: minmax(0, 42rem) minmax(16rem, 1fr); column-gap: 2rem; align-items: center; }
   .splash-hero > :not(.splash-ghost) { grid-column: 1; }
   .splash-ghost {
-    display: block; grid-column: 2; grid-row: 1 / span 10; justify-self: center; position: relative; width: 9.5rem; height: 10.75rem;
+    display: block; grid-column: 2; grid-row: 1 / span 10; justify-self: center; position: relative; width: 9rem; height: 11.65rem;
     background: var(--moon);
     -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
     animation: drift 7s ease-in-out infinite;
