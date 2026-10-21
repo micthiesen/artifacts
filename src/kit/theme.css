@@ -48,8 +48,8 @@
     /* Light, by whose it is: the agent (moon) and other people (others). You are --primary. */
     --moon: oklch(0.97 0.012 85);
     --others: oklch(0.82 0.1 200);
-    /* People's little ghost (soft and pear-shaped, unlike the agent's page ghost), for avatars: initials sit where the eyes would be. */
-    --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%222%203%2096%2091%22%3E%3Cpath%20d%3D%22M50%204C74%204%2090%2022%2091%2046C92%2058%2097%2066%2097%2076C97%2087%2091%2092%2084%2092C78%2092%2075%2087%2069%2087C63%2087%2059%2093%2050%2093C41%2093%2037%2087%2031%2087C25%2087%2022%2092%2016%2092C9%2092%203%2087%203%2076C3%2066%208%2058%209%2046C10%2022%2026%204%2050%204Z%22%2F%3E%3C%2Fsvg%3E");
+    /* People's ghost: the logo's silhouette without its face, so initials sit where the face would be. */
+    --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%225%202%2090%2093%22%3E%3Cpath%20d%3D%22M50%204C70%204%2084%2020%2085%2044C86%2058%2092%2066%2093%2076C94%2087%2088%2092%2081%2092C76%2092%2073%2087%2067%2087C61%2087%2058%2093%2050%2093C42%2093%2039%2087%2033%2087C27%2087%2024%2092%2019%2092C12%2092%206%2087%207%2076C8%2066%2014%2058%2015%2044C16%2020%2030%204%2050%204Z%22%2F%3E%3C%2Fsvg%3E");
     --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.6 0.12 292 / 0.16), oklch(0.62 0.09 200 / 0.05) 55%, transparent 75%);
     --shadow-card: 0 1px 0 oklch(1 0 0 / 0.035) inset, 0 1px 2px oklch(0 0 0 / 0.35);
     --shadow-pop: 0 1px 0 oklch(1 0 0 / 0.05) inset, 0 12px 32px -8px oklch(0 0 0 / 0.6), 0 2px 6px oklch(0 0 0 / 0.35);

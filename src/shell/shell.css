@@ -41,8 +41,8 @@
   --negative: oklch(0.72 0.17 22);
   /* Light, by who it belongs to: the agent (moon), other people (others). You are --primary. */
   --moon: oklch(0.97 0.012 85);
-  /* People's little ghost (soft and pear-shaped, unlike the agent's page ghost), for avatars: initials sit where the eyes would be. */
-  --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%222%203%2096%2091%22%3E%3Cpath%20d%3D%22M50%204C74%204%2090%2022%2091%2046C92%2058%2097%2066%2097%2076C97%2087%2091%2092%2084%2092C78%2092%2075%2087%2069%2087C63%2087%2059%2093%2050%2093C41%2093%2037%2087%2031%2087C25%2087%2022%2092%2016%2092C9%2092%203%2087%203%2076C3%2066%208%2058%209%2046C10%2022%2026%204%2050%204Z%22%2F%3E%3C%2Fsvg%3E");
+  /* People's ghost: the logo's silhouette without its face, so initials sit where the face would be. */
+  --ghost-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%225%202%2090%2093%22%3E%3Cpath%20d%3D%22M50%204C70%204%2084%2020%2085%2044C86%2058%2092%2066%2093%2076C94%2087%2088%2092%2081%2092C76%2092%2073%2087%2067%2087C61%2087%2058%2093%2050%2093C42%2093%2039%2087%2033%2087C27%2087%2024%2092%2019%2092C12%2092%206%2087%207%2076C8%2066%2014%2058%2015%2044C16%2020%2030%204%2050%204Z%22%2F%3E%3C%2Fsvg%3E");
   --others: oklch(0.82 0.1 200);
   --glow: radial-gradient(60rem 26rem at 50% -8rem, oklch(0.6 0.12 292 / 0.16), oklch(0.62 0.09 200 / 0.05) 55%, transparent 75%);
   /* The ghost's halo: soft iris and aqua light, never a fill. */
@@ -140,18 +140,15 @@ select, input, textarea { max-width: 100%; }
   flex: none; display: grid; place-items: center; width: 1.75rem; height: 1.75rem; margin-left: -.25rem; border-radius: .5rem;
 }
 .bar .mark:hover { text-decoration: none; background-color: var(--muted); }
-/* The ghost logo: moonlight through the ghost's shape (eyes cut out), with a soft halo behind it. */
+/* The ghost logo (moon white, happy eyes, blush), with a soft halo behind it. */
 .logo-ghost {
-  position: relative; display: inline-block; width: 17px; height: 22px; flex: none;
+  position: relative; display: inline-block; width: 21px; height: 22px; flex: none;
 }
 .logo-ghost::before {
   content: ""; position: absolute; inset: -9px; border-radius: 50%; background: var(--halo-light); opacity: .55; pointer-events: none;
 }
-/* At this size the fold reads as the clipped corner alone, and the eyes are drawn bigger (ghost-small.svg). */
-.logo-ghost::after {
-  content: ""; position: absolute; inset: 0; background: var(--moon);
-  -webkit-mask: url(/static/icons/ghost-small.svg) center / contain no-repeat; mask: url(/static/icons/ghost-small.svg) center / contain no-repeat;
-}
+/* Small sizes use logo-small.svg, whose eyes and blush are drawn heavier so they survive at 16 to 24 px. */
+.logo-ghost::after { content: ""; position: absolute; inset: 0; background: url(/static/icons/logo-small.svg) center / contain no-repeat; }
 .wordmark-tld { color: var(--primary); }
 .bar .title {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -173,7 +170,7 @@ a.title:hover { text-decoration: none; }
   background: var(--muted); color: var(--muted-fg); cursor: default;
 }
 .bar .presence .avatar:first-child { margin-left: 0; }
-.bar .presence .avatar.ghosted { width: 1.75rem; height: 1.66rem; margin-left: .1rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
+.bar .presence .avatar.ghosted { width: 1.65rem; height: 1.7rem; margin-left: .1rem; border: 0; background: none; color: var(--primary-fg); font-size: 10px; }
 .bar .presence .avatar.ghosted:first-child { margin-left: 0; }
 /* Your own avatar: opens the Manage panel (owner) or the account menu. */
 .me { position: relative; flex: none; display: flex; align-items: center; gap: .35rem; }
@@ -232,8 +229,8 @@ a.title:hover { text-decoration: none; }
 }
 .account-menu .account-primary { color: var(--fg); font-weight: 600; }
 .account-menu .account-primary::before {
-  content: ""; display: inline-block; width: 11px; height: 14px; margin-right: .5rem; vertical-align: -2px; background: var(--moon);
-  -webkit-mask: url(/static/icons/ghost-small.svg) center / contain no-repeat; mask: url(/static/icons/ghost-small.svg) center / contain no-repeat;
+  content: ""; display: inline-block; width: 14px; height: 14.5px; margin-right: .5rem; vertical-align: -2px;
+  background: url(/static/icons/logo-small.svg) center / contain no-repeat;
 }
 .account-menu .account-quiet { color: var(--muted-fg); }
 .account-menu form { margin: 0; }
@@ -244,7 +241,9 @@ a.title:hover { text-decoration: none; }
 /* Someone else on the page now: a small ghost in their colour (--who), initials inside. */
 .avatar.ghosted { position: relative; isolation: isolate; border-radius: 0; background: none; color: var(--primary-fg); font-weight: 650; padding-top: .1em; }
 .avatar.ghosted::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; background: var(--who, var(--others));
+  /* A small shine on the head: soft light, like the logo's halo. */
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: radial-gradient(ellipse 22% 11% at 35% 21%, oklch(1 0 0 / .4) 92%, transparent 100%), var(--who, var(--others));
   -webkit-mask: var(--ghost-mask) center / contain no-repeat; mask: var(--ghost-mask) center / contain no-repeat;
 }
 
@@ -519,10 +518,7 @@ div.thread-anchor { cursor: default; }
 .mention-text { color: var(--primary); font-weight: 550; }
 .avatar.small { width: 1.35rem; height: 1.35rem; font-size: 10px; }
 .avatar.agent { position: relative; border: 0; border-radius: 0; background: none; }
-.avatar.agent::after {
-  content: ""; position: absolute; inset: 0; background: var(--moon);
-  -webkit-mask: url(/static/icons/ghost-small.svg) center / contain no-repeat; mask: url(/static/icons/ghost-small.svg) center / contain no-repeat;
-}
+.avatar.agent::after { content: ""; position: absolute; inset: 0; background: url(/static/icons/logo-small.svg) center / contain no-repeat; }
 .thread-input {
   width: 100%; min-height: 2.6rem; resize: vertical; padding: .5rem .6rem; border-radius: .55rem; border: 1px solid var(--input);
   background: color-mix(in oklab, var(--bg) 60%, transparent); color: var(--fg); font: inherit; font-size: 14px; line-height: 1.45;
@@ -775,12 +771,11 @@ div.thread-anchor { cursor: default; }
   .splash-hero { max-width: none; display: grid; grid-template-columns: minmax(0, 42rem) minmax(16rem, 1fr); column-gap: 2rem; align-items: center; }
   .splash-hero > :not(.splash-ghost) { grid-column: 1; }
   .splash-ghost {
-    display: block; grid-column: 2; grid-row: 1 / span 10; justify-self: center; position: relative; width: 9rem; height: 11.65rem;
-    background: var(--moon);
-    -webkit-mask: url(/static/icons/ghost.svg) center / contain no-repeat; mask: url(/static/icons/ghost.svg) center / contain no-repeat;
+    display: block; grid-column: 2; grid-row: 1 / span 10; justify-self: center; position: relative; width: 11rem; height: 11.35rem;
+    background: url(/static/icons/logo.svg) center / contain no-repeat;
     animation: drift 7s ease-in-out infinite;
   }
-  /* The halo sits behind the ghost, centred on it (the ghost's own mask would clip it). */
+  /* The halo sits behind the ghost, centred on it. */
   .splash-hero::after {
     content: ""; grid-column: 2; grid-row: 1 / span 10; justify-self: center; align-self: center; width: 21rem; height: 21rem; z-index: -1; border-radius: 50%;
     background: radial-gradient(closest-side, oklch(0.72 0.14 292 / 0.5), oklch(0.82 0.1 200 / 0.16) 55%, transparent);

@@ -184,8 +184,11 @@ export function Progress({ value, max = 100, label, className }: { value: number
 }
 
 const avatarSizes = { sm: "size-6 text-[10px]", default: "size-8 text-xs", lg: "size-10 text-sm" } as const;
-/** A ghost is a little wider than tall, and its initials sit small, with room around them. */
-const ghostSizes = { sm: "h-6 w-[26px] text-[8.5px]", default: "h-8 w-[34px] text-[10.5px]", lg: "h-10 w-[42px] text-[13px]" } as const;
+/**
+ * A ghost keeps the same height as a round avatar (rows centre their first line on it), is about as wide as tall,
+ * and its initials sit small, with room around them.
+ */
+const ghostSizes = { sm: "h-6 w-[23px] text-[8.5px]", default: "h-8 w-[31px] text-[10.5px]", lg: "h-10 w-[39px] text-[13px]" } as const;
 
 /** Avatar from an email (initials) or an image src (data: URLs only inside the frame). */
 export function Avatar({
@@ -212,7 +215,7 @@ export function Avatar({
         "inline-flex shrink-0 items-center justify-center overflow-hidden font-semibold select-none",
         src
           ? "rounded-full bg-accent text-accent-foreground ring-2 ring-background"
-          : "bg-(--who) pt-[0.15em] font-semibold tracking-[-0.01em] text-primary-foreground [mask:var(--ghost-mask)_center/contain_no-repeat]",
+          : "bg-(--who) bg-[radial-gradient(ellipse_22%_11%_at_35%_21%,oklch(1_0_0/0.4)_92%,transparent_100%)] pt-[0.15em] font-semibold tracking-[-0.01em] text-primary-foreground [mask:var(--ghost-mask)_center/contain_no-repeat]",
         src ? avatarSizes[size] : ghostSizes[size],
         className,
       )}

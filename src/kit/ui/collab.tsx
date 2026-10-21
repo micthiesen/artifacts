@@ -315,7 +315,8 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
           <li key={key} data-key={key} className="group flex gap-3">
             <Avatar email={c.by} />
             <div className="min-w-0 flex-1">
-              <div className="flex items-baseline gap-2 text-sm">
+              {/* As tall as the avatar, so the name line centers on it and the comment starts below it. */}
+              <div className="flex flex-wrap items-baseline gap-x-2 text-sm leading-8">
                 <span className="font-semibold">{displayName(c.by)}</span>
                 <span className="text-[13px] text-muted-foreground" title={new Date(c.at).toLocaleString()}>
                   {relativeTime(c.at, now)}
@@ -331,7 +332,7 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
                   </button>
                 )}
               </div>
-              <p className="mt-0.5 text-[15px] leading-relaxed break-words whitespace-pre-wrap">{c.text}</p>
+              <p className="-mt-1 text-[15px] leading-relaxed break-words whitespace-pre-wrap">{c.text}</p>
             </div>
           </li>
         ))}
@@ -422,7 +423,8 @@ export function Notes({ id, placeholder = "Write shared notes…", rows = 6, cla
           {remote || <span className="text-muted-foreground">No notes yet.</span>}
         </div>
       )}
-      <div className="mt-1.5 flex items-center gap-1.5 text-[13px] text-muted-foreground">
+      {/* The avatar lines up with the first line when "Last edited by…" wraps on a phone. */}
+      <div className="mt-1.5 flex items-start gap-1.5 text-[13px] leading-6 text-muted-foreground">
         {dirty ? (
           "Saving…"
         ) : note ? (

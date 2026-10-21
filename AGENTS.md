@@ -16,15 +16,20 @@ white for the agent (the ghost), iris (`--primary`) for you, aqua
 (`--others`) for other people. Keep these by hand:
 
 - No gradient fills: buttons, rules, rings, text and underlines are solid.
-  Soft radial light (the ghost's halo, the page's top glow) is the only
-  gradient.
+  Soft radial light (the ghost's halo, the page's top glow, the shine on a
+  person's ghost) is the only gradient.
 - Fraunces (`--font-display`, soft terminals) is for page and section
   headings and the wordmark only. Controls, labels, tables and numbers stay
   Inter.
 - No eyebrow labels over headings, no coloured stripes down a card's edge,
   no rows of identical cards where ruled rows or one divided panel will do.
-- People appear as small ghosts in their own colour (`whoColor` in
-  `src/shared/who.ts`).
+- The logo is the ghost in moon white with happy closed eyes and blush
+  (`src/shell/icons/logo.svg`; `logo-small.svg` draws the face heavier for
+  16 to 24 px). The agent appears as the logo.
+- People appear as the same ghost without a face, in their own colour
+  (`whoColor` in `src/shared/who.ts`), with their initials. A ghost avatar
+  is as tall as the round one it replaced, and rows centre their first
+  line on it, so wrapped text never floats the avatar.
 
 ## Controls, type and accessibility
 
