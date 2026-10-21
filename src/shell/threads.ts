@@ -3,6 +3,7 @@
 // frame only reports anchors and clicks; everything here runs in the trusted
 // shell, so artifact code can't read or forge comments.
 import type { Anchor, AnchorStatus, Person, SyncClientMessage, Thread } from "../shared/protocol.ts";
+import { whoColor } from "../shared/who.ts";
 
 export type DrawerOptions = {
   me: string | null;
@@ -201,9 +202,12 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       const row = el("div", `comment${cm.seq > readSeq && cm.by !== opts.me ? " is-new" : ""}`);
       row.dataset.comment = cm.id;
       const meta = el("div", "comment-meta");
-      const av = el("span", `avatar small${cm.by === "agent" ? " agent" : ""}`);
-      if (cm.by === "agent") av.innerHTML = SPARKLE_ICON;
-      else av.textContent = cm.by.slice(0, 1).toUpperCase();
+      // The agent is the moonlit ghost; people are small ghosts in their own colour.
+      const av = el("span", `avatar small ${cm.by === "agent" ? "agent" : "ghosted"}`);
+      if (cm.by !== "agent") {
+        av.style.setProperty("--who", whoColor(cm.by));
+        av.textContent = cm.by.slice(0, 1).toUpperCase();
+      }
       const who = el("span", "comment-who");
       who.textContent = nameOf(cm.by);
       // Display names are self-chosen; the address is always one hover away.
@@ -470,7 +474,6 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
 
 // Drawn, not typed: "✕" and "✦" come from fallback fonts and sit off-center in their boxes.
 const X_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
-const SPARKLE_ICON = `<svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M12 2c.5 5.2 4.8 9.5 10 10-5.2.5-9.5 4.8-10 10-.5-5.2-4.8-9.5-10-10 5.2-.5 9.5-4.8 10-10z" fill="currentColor"/></svg>`;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = ""): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
