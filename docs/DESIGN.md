@@ -66,7 +66,11 @@ The same examples are published as public artifacts in a `demo` workspace
   join domains (email domains whose people join as members when they sign in;
   public mail providers are refused, and someone an admin removed stays removed),
   and can manage every artifact in the workspace, so nothing is stranded when
-  someone leaves.
+  someone leaves. A workspace always keeps an admin who has signed in: an
+  admin can't leave or step down while every other admin is an address that
+  never has (it may be mistyped), and whoever pays can't leave while the
+  subscription still charges them, though they manage billing whatever their
+  role.
 - **Member**: connects their own agent and creates artifacts. Sees artifacts
   they own and ones shared with them or with the whole workspace.
 - **Guest**: anyone with a verified email who has been shared on a specific

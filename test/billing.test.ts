@@ -339,6 +339,31 @@ test("only the person who paid opens the billing portal; settings says who that 
   expect((await send("/api/settings/billing/portal", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })).status).toBe(403);
 });
 
+test("whoever pays can't leave while it charges them, and still manages billing if they're made a member", async () => {
+  Object.assign(env, KEYS);
+  await h.hub.setMember("payer@example.com", "admin", ADMIN);
+  await h.hub.signedIn(ADMIN, false);
+  // Paid as a +tag address: the same person.
+  await webhook(event("subscription.active", { ...sub("active"), customer: { id: "cust_1", email: "payer+cards@example.com" } }));
+  const json = { method: "POST", headers: { "Content-Type": "application/json" } };
+  const left = await send("/api/me/leave", { as: "payer@example.com", ...json, body: "{}" });
+  expect(left.status).toBe(409);
+  expect(((await left.json()) as { error: string }).error).toContain("You pay for this workspace");
+  // Removing yourself from settings is leaving, with the same check.
+  expect((await send("/api/settings/members", { as: "payer@example.com", ...json, body: JSON.stringify({ email: "payer@example.com", role: null }) })).status).toBe(409);
+  // Made a member, they still see billing and open the portal; other members don't.
+  await h.hub.setMember("payer@example.com", "member", ADMIN);
+  const settings = (await (await send("/api/settings", { as: "payer@example.com" })).json()) as { billing: { subscription: { yours: boolean; payerMember: string } } | null };
+  expect(settings.billing?.subscription).toMatchObject({ yours: true, payerMember: "payer@example.com" });
+  expect(((await (await send("/api/settings", { as: MEMBER })).json()) as { billing: unknown }).billing).toBeNull();
+  creemAnswer = () => Response.json({ customer_portal_link: "https://creem.io/portal/cust_1" });
+  expect((await send("/api/settings/billing/portal", { as: "payer@example.com", ...json, body: "{}" })).status).toBe(200);
+  expect((await send("/api/settings/billing/portal", { as: MEMBER, ...json, body: "{}" })).status).toBe(403);
+  // Once it's canceled for good, they can go.
+  await webhook(event("subscription.expired", sub("expired")));
+  expect((await send("/api/me/leave", { as: "payer@example.com", ...json, body: "{}" })).status).toBe(200);
+});
+
 test("whoever made a self-serve workspace can delete it, once nothing is billed, and then make another", async () => {
   Object.assign(env, KEYS);
   const del = (confirm: string, as = ADMIN) => send("/api/settings/delete", { as, method: "POST", body: JSON.stringify({ confirm }), headers: { "Content-Type": "application/json" } });
@@ -346,6 +371,9 @@ test("whoever made a self-serve workspace can delete it, once nothing is billed,
   expect(((await (await send("/api/settings", { as: ADMIN })).json()) as { canDelete: boolean }).canDelete).toBe(false);
   expect((await del("acme")).status).toBe(403);
   h.directory.ctx.storage.sql.exec(`UPDATE workspaces SET created_by = ? WHERE slug = 'acme'`, ADMIN);
+  // Inherited (its maker left): it doesn't use up the one they may make themselves.
+  expect(h.directory.canMakeWorkspace(ADMIN)).toBe(true);
+  h.directory.ctx.storage.sql.exec(`INSERT INTO self_serve_log (person, slug, at) VALUES (?, 'acme', ?)`, ADMIN, new Date().toISOString());
   expect(h.directory.canMakeWorkspace(ADMIN)).toBe(false);
   expect(((await (await send("/api/settings", { as: ADMIN })).json()) as { canDelete: boolean }).canDelete).toBe(true);
   expect((await del("acme", MEMBER)).status).toBe(403);
@@ -357,7 +385,7 @@ test("whoever made a self-serve workspace can delete it, once nothing is billed,
   expect(r.status).toBe(200);
   expect(await r.json()).toEqual({ location: `${APEX}/workspaces?deleted=Acme` });
   expect(h.directory.workspace("acme")).toBeNull();
-  // The operator-made workspace wasn't in the self-serve log, so there's room for one.
+  // Once it's gone, there's room for another.
   expect(h.directory.canMakeWorkspace(ADMIN)).toBe(true);
 });
 

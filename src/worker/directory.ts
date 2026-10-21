@@ -342,10 +342,14 @@ export class Directory extends DurableObject {
    * recorded in one step, so two requests at once can't both pass. Records
    * the version of the terms they agreed to.
    */
-  /** Whether this person may still make a workspace themselves: one at a time, and a few a month. */
+  /** Whether this person may still make a workspace themselves: one of their own at a time, and a few a month. */
   canMakeWorkspace(email: string): boolean {
     const person = personKey(email);
-    const now = (this.sql.exec(`SELECT COUNT(*) AS n FROM workspaces WHERE created_by = ?`, person).one().n as number) < SELF_SERVE_PER_PERSON;
+    // Only ones they made themselves: inheriting a workspace (its maker left) doesn't use up theirs.
+    const now =
+      (this.sql
+        .exec(`SELECT COUNT(*) AS n FROM workspaces w WHERE created_by = ?1 AND EXISTS (SELECT 1 FROM self_serve_log l WHERE l.person = ?1 AND l.slug = w.slug)`, person)
+        .one().n as number) < SELF_SERVE_PER_PERSON;
     const month = new Date(Date.now() - 30 * 86_400_000).toISOString();
     return now && (this.sql.exec(`SELECT COUNT(*) AS n FROM self_serve_log WHERE person = ? AND at > ?`, person, month).one().n as number) < SELF_SERVE_PER_PERSON_MONTH;
   }

@@ -390,7 +390,7 @@ function leaveSection(): HTMLElement {
       if (!armed) {
         armed = true;
         b.textContent = `Yes, leave ${name}`;
-        note.textContent = "Press again to leave. Your agents lose access here, and artifacts you own pass to an admin.";
+        note.textContent = "Press again to leave. Your agents lose access here, artifacts you own pass to an admin, and to come back an admin adds you again.";
         return;
       }
       // The refusal (say, the last admin) shows here, next to the button, not in a banner far above.

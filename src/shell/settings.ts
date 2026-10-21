@@ -17,11 +17,12 @@ type Settings = {
   hosts: string[];
   /** Email domains whose people join as members when they first sign in. */
   joinDomains: string[];
-  /** Admins, while billing is on: the price, whether checkout works, and the subscription. */
+  /** Admins and the payer, while billing is on: the price, whether checkout works, and the subscription. */
   billing: {
     ready: boolean;
     price: { amount: number; currency: string; period: string };
-    subscription: { status: string; periodEnd: string | null; manageable: boolean; payer: string | null } | null;
+    /** `yours`: you pay for it; `payerMember`: the member who pays, if they still are one (as the server matches people). */
+    subscription: { status: string; periodEnd: string | null; manageable: boolean; payer: string | null; yours: boolean; payerMember: string | null } | null;
   } | null;
   /** You made this workspace yourself, so you can delete it. */
   canDelete: boolean;
@@ -157,11 +158,10 @@ const AFTER_FREE = `After that, this workspace keeps everything but can't add an
 /** Statuses after which a subscription can't charge again. */
 const ENDED = ["canceled", "expired", "scheduled_cancel"];
 
-/** Whether you see Manage billing: the payer does, and so does every admin once the payer is no longer one. */
+/** Whether you see Manage billing (matching the server): only the payer, whatever their role; with no payer on record, admins. */
 function seesBilling(): boolean {
-  const payer = data.billing?.subscription?.payer ?? null;
-  const payerAdmin = payer !== null && data.members.some((m) => m.email === payer && m.role === "admin");
-  return !payerAdmin || payer === data.you.email.toLowerCase();
+  const sub = data.billing?.subscription;
+  return sub?.payer ? sub.yours : data.you.role === "admin";
 }
 
 /** Admins, while billing is on: upgrade to Team, or manage the subscription with the payment provider. */
@@ -199,7 +199,7 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
   const notes: HTMLElement[] = [];
   // Canceled with paid time left: subscribing again keeps Team past the date (the new subscription takes over).
   const resubscribe = team && sub?.status === "canceled" && Boolean(data.plan.until);
-  if ((!team && !live) || resubscribe) {
+  if (((!team && !live) || resubscribe) && data.you.role === "admin") {
     const b = btn(resubscribe ? "Subscribe again" : "Upgrade to Team", () => go("/api/settings/billing/checkout"));
     if (!billing.ready || checkout !== "idle") {
       b.setAttribute("disabled", "");
@@ -218,7 +218,15 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
     actions.append(btn("Manage billing", () => go("/api/settings/billing/portal"), "button small secondary"));
     notes.push(h("p", { class: "muted small" }, "Receipts and invoices are in Manage billing."));
   }
-  if (payer) notes.push(h("p", { class: "muted small" }, payer === data.you.email.toLowerCase() ? `Billed to you (${payer}).` : mine ? `Billed to ${payer}.` : `Billed to ${payer}: they can change the card or cancel.`));
+  if (payer) {
+    notes.push(
+      sub?.yours
+        ? h("p", { class: "muted small" }, `Billed to you (${payer}).`)
+        : !sub?.payerMember
+          ? h("p", { class: "muted small" }, `Billed to ${payer}, who is no longer a member. `, h("a", { href: "/support" }, "Ask us"), " to move billing to you.")
+          : h("p", { class: "muted small" }, `Billed to ${payer}: they can change the card or cancel.`),
+    );
+  }
   return h(
     "section",
     { class: "card-section" },
@@ -579,7 +587,11 @@ function render(opts: { keepTyped?: boolean } = {}) {
           btn("Remove", () => {
             const question = self
               ? `Remove yourself from ${data.workspace.name}? You lose access to it and your agents stop working here.`
-              : `Remove ${m.email}? Their agents lose access, and artifacts they own pass to you.`;
+              : `Remove ${m.email}? Their agents lose access, and artifacts they own pass to you.${
+                  data.billing?.subscription && m.email === data.billing.subscription.payerMember && !ENDED.includes(data.billing.subscription.status)
+                    ? " They pay for this workspace: once they're gone, only we can move billing to someone else."
+                    : ""
+                }`;
             if (!confirm(question)) return;
             if (self) return leave();
             return act(() => api("/api/settings/members", { body: { email: m.email, role: null } }), `Removed ${m.email}. Artifacts they owned now belong to you.`);
@@ -678,6 +690,9 @@ function render(opts: { keepTyped?: boolean } = {}) {
     if (data.billing && data.plan.id !== "free") sections.push(billingSection(data.billing));
     sections.push(exportSection());
     if (data.canDelete) sections.push(...deleteSection());
+  } else if (data.billing?.subscription && !ENDED.includes(data.billing.subscription.status)) {
+    // A payer who is no longer an admin still manages (and can cancel) what they pay for.
+    sections.push(billingSection(data.billing));
   }
   // A re-render (say, a payment confirmed while you type) keeps what's typed in each field, and where you were.
   const fieldKey = (el: HTMLInputElement | HTMLTextAreaElement) => el.name || el.getAttribute("aria-label") || el.placeholder;
@@ -715,15 +730,13 @@ function setMember(email: string, role: "admin" | "member") {
   );
 }
 
-/** Removing yourself: there's nothing left to show here afterwards, so go to the workspace's front page. */
+/** Removing yourself is leaving, with its checks: there's nothing left to show here afterwards, so go where it says. */
 async function leave() {
   try {
-    await api("/api/settings/members", { body: { email: data.you.email, role: null } });
+    location.href = (await api<{ location: string }>("/api/me/leave", { body: {} })).location;
   } catch (err) {
     flash(failed(err));
-    return;
   }
-  location.href = "/";
 }
 
 function tokenRow(t: Settings["tokens"][number], showOwner = false) {

@@ -159,11 +159,54 @@ test("a report is kept in the ops log even when its email can't be sent; alerts 
 
 test("another admin can't remove the person who made the workspace; they leave (handing it over) themselves", async () => {
   await h.hub.setMember(MEMBER, "admin", ADMIN);
+  await h.hub.signedIn(ADMIN, false);
   h.directory.ctx.storage.sql.exec(`UPDATE workspaces SET created_by = ? WHERE slug = 'acme'`, MEMBER);
   expect((await post("/api/settings/members", ADMIN, { email: MEMBER, role: null })).status).toBe(409);
   expect((await post("/api/settings/members", ADMIN, { email: MEMBER, role: "member" })).status).toBe(409);
   expect((await post("/api/me/leave", MEMBER, {})).status).toBe(200);
   expect(h.directory.workspace("acme")?.createdBy).toBe(ADMIN);
+});
+
+test("an admin can't step down or leave while no other admin has signed in (it may be a mistyped address)", async () => {
+  const TYPO = "admn@example.com";
+  await h.hub.setMember(TYPO, "admin", ADMIN);
+  const leave = await post("/api/me/leave", ADMIN, {});
+  expect(leave.status).toBe(409);
+  expect(((await leave.json()) as { error: string }).error).toContain(`${TYPO} hasn't signed in yet`);
+  expect((await post("/api/settings/members", ADMIN, { email: ADMIN, role: "member" })).status).toBe(409);
+  expect((await post("/api/settings/members", ADMIN, { email: ADMIN, role: null })).status).toBe(409);
+  expect((await (await send("/api/me/delete", { as: ADMIN, host: APEX })).json()) as { blockers: string[] }).toMatchObject({ blockers: [expect.stringContaining("has signed in yet")] });
+  // Removing the typo is still fine: that strands nobody.
+  expect((await post("/api/settings/members", ADMIN, { email: TYPO, role: null })).status).toBe(200);
+  // Once another admin has signed in, stepping down works.
+  await h.hub.setMember(MEMBER, "admin", ADMIN);
+  await h.hub.signedIn(MEMBER, false);
+  expect((await post("/api/settings/members", ADMIN, { email: ADMIN, role: "member" })).status).toBe(200);
+  expect(h.hub.members().find((m) => m.email === ADMIN)?.role).toBe("member");
+});
+
+test("what a leaver owned passes to an admin who has signed in, not one who never has", async () => {
+  await h.hub.setMember("aaa@example.com", "admin", ADMIN);
+  await h.hub.signedIn(ADMIN, false);
+  const r = await h.hub.create({ title: "Mine", files, owner: MEMBER });
+  if (!r.ok) throw new Error("create");
+  expect((await post("/api/me/leave", MEMBER, {})).status).toBe(200);
+  expect(h.hub.meta(r.id)?.owner).toBe(ADMIN);
+});
+
+test("the person who made a workspace, stepping down to member, hands it to an admin who can delete it", async () => {
+  h.directory.ctx.storage.sql.exec(`UPDATE workspaces SET created_by = ? WHERE slug = 'acme'`, ADMIN);
+  await h.hub.setMember(MEMBER, "admin", ADMIN);
+  await h.hub.signedIn(MEMBER, false);
+  expect((await post("/api/settings/members", ADMIN, { email: ADMIN, role: "member" })).status).toBe(200);
+  expect(h.directory.workspace("acme")?.createdBy).toBe(MEMBER);
+  expect(((await (await send("/api/settings", { as: MEMBER })).json()) as { canDelete: boolean }).canDelete).toBe(true);
+});
+
+test("the only admin of a workspace they didn't make is told to email us, not to delete it", async () => {
+  const r = await post("/api/me/leave", ADMIN, {});
+  expect(r.status).toBe(409);
+  expect(((await r.json()) as { error: string }).error).toContain("email op@corp.com to close it");
 });
 
 test("once the day's self-serve workspaces are made, /workspaces says so before the form", async () => {

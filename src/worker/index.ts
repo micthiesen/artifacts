@@ -895,13 +895,43 @@ async function accountDeletion(env: Env, email: string) {
       else deletes.push({ slug: w.slug, name: w.name });
     } else if (w.role === "admin" && !otherAdmins.length) {
       blockers.push(`You're the only admin of ${w.name}: make someone else an admin there first.`);
+    } else if (w.role === "admin" && !otherAdmins.some((m) => m.lastSeenAt)) {
+      // An admin who has never signed in may be a mistyped address: nobody could manage it.
+      blockers.push(`No other admin of ${w.name} has signed in yet: wait until one has, or make someone who has an admin.`);
     } else {
-      if (billed && record?.payerEmail === email) blockers.push(`You pay for ${w.name}: cancel it in its settings (Manage billing), or ask us to move billing.`);
+      if (billed && record?.payerEmail && personKey(record.payerEmail) === personKey(email)) blockers.push(`You pay for ${w.name}: cancel it in its settings (Manage billing), or ask us to move billing.`);
       const mine = (await dir.workspace(w.slug))?.createdBy === personKey(email);
-      leaves.push({ slug: w.slug, name: w.name, heir: mine ? (otherAdmins[0]?.email ?? null) : null });
+      leaves.push({ slug: w.slug, name: w.name, heir: mine ? (otherAdmins.find((m) => m.lastSeenAt)?.email ?? null) : null });
     }
   }
   return { blockers, deletes, leaves, guestOf };
+}
+
+/**
+ * Why this person can't step down (from admin to member, or out of the workspace) right now, or null if they
+ * can. An admin has to leave someone who can run the workspace: another admin who has signed in at least once, since an invited
+ * address that never has may be mistyped. And whoever pays can't leave while it still charges them, since
+ * only they can cancel it.
+ */
+async function steppingDownBlocker(env: Env, hub: HubApi, slug: string, email: string, leaving: boolean): Promise<string | null> {
+  const members = await hub.members();
+  const admins = members.filter((m) => m.role === "admin" && m.email !== email);
+  const admin = members.some((m) => m.email === email && m.role === "admin");
+  if (admin && !admins.length) {
+    const fix = (await ownWorkspace(env, slug, email)) ? "or delete the workspace in settings" : `or email ${contactEmail(env)} to close it`;
+    return `You're the only admin. Make someone else an admin first, ${fix}.`;
+  }
+  if (admin && !admins.some((m) => m.lastSeenAt)) {
+    const who = admins.length === 1 ? `${admins[0].email} hasn't` : "The other admins haven't";
+    return `${who} signed in yet, so nobody could manage the workspace. Once another admin has signed in, you can ${leaving ? "leave" : "step down"}.`;
+  }
+  if (leaving) {
+    const record = await directory(env).billing(slug);
+    if (record && subscriptionMayCharge(record.status) && record.payerEmail && personKey(record.payerEmail) === personKey(email)) {
+      return `You pay for this workspace, and only you can cancel it. Cancel it in Manage billing first, or email ${contactEmail(env)} to move billing.`;
+    }
+  }
+  return null;
 }
 
 /** Self-serve workspaces belong to whoever made them. */
@@ -1479,18 +1509,28 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
   try {
     const path = url.pathname;
     if (path === "/api/settings" && request.method === "GET") {
+      // Whoever pays sees billing whatever their role, so being made a member never leaves them unable to cancel.
+      // Matched as people (name+tag@ is the same person), so the page needn't: whether it's you, and which member pays.
+      const members = await hub.members();
+      const state = billingOn(env) ? await billingState(env, slug) : null;
+      const payer = state?.subscription?.payer ?? null;
+      const yours = Boolean(payer && personKey(payer) === personKey(email));
+      const billing = state && {
+        ...state,
+        subscription: state.subscription && { ...state.subscription, yours, payerMember: (payer && members.find((m) => personKey(m.email) === personKey(payer))?.email) ?? null },
+      };
       return Response.json({
         workspace: { slug, name, url: url.origin },
         you: { email, role: member },
         mcpUrl: `${url.origin}/mcp`,
         mcpName: `artifacts-${slug}`,
-        members: await hub.members(),
+        members,
         tokens: await hub.tokens(admin ? undefined : email),
         apps: (await hub.grants(email)).map((g) => ({ id: g.id, client: g.client, createdAt: g.createdAt })),
         hosts: await hub.allowedHosts(),
         joinDomains: await hub.joinDomains(),
         plan: await hub.plan(),
-        billing: billingOn(env) && admin ? await billingState(env, slug) : null,
+        billing: admin || yours ? billing : null,
         canDelete: admin && (await ownWorkspace(env, slug, email)),
       });
     }
@@ -1550,10 +1590,10 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       }
     }
     if (path === "/api/settings/billing/portal" && request.method === "POST") {
-      if (!admin) return adminOnly();
       const record = await directory(env).billing(slug);
+      if (!admin && !(record?.payerEmail && personKey(record.payerEmail) === personKey(email))) return adminOnly();
       if (!record?.customerId) return Response.json({ error: "This workspace has no subscription to manage." }, { status: 400 });
-      // The portal shows the payer's card and everything they pay for, so it's theirs alone.
+      // The portal shows the payer's card and everything they pay for, so it's theirs alone, whatever their role.
       // Whoever paid, and only them (removing them doesn't hand it to anyone else). With no payer on record,
       // any admin; for anything else, we move it by hand.
       if (record.payerEmail && personKey(record.payerEmail) !== personKey(email)) {
@@ -1605,11 +1645,19 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       if (made && made === personKey(target) && role !== "admin" && target !== email) {
         return Response.json({ error: `${target} made this workspace. They can hand it over (or leave) themselves; email ${contactEmail(env)} if that's not possible.` }, { status: 409 });
       }
+      // Your own step down goes through the same checks as leaving, so it can't strand the workspace either.
+      if (target === email && role !== "admin") {
+        const blocker = await steppingDownBlocker(env, hub, slug, email, role === null);
+        if (blocker) return Response.json({ error: blocker }, { status: 409 });
+        // Whoever made it and is no longer an admin can't hand it over or delete it, so an admin takes it now.
+        const heir = (await hub.members()).find((m) => m.role === "admin" && m.email !== email && m.lastSeenAt);
+        if (role === "member" && made === personKey(email) && heir) await directory(env).setCreator(slug, heir.email);
+      }
       const members = await hub.setMember(target, role, email);
       if (role === null) await revokeGrants(env, url.origin, slug, target, hub);
       // Whoever made a self-serve workspace owns it; if they're removed (or remove themselves), an admin does.
       if (role === null && (await directory(env).workspace(slug))?.createdBy === personKey(target)) {
-        const heir = members.find((m) => m.role === "admin");
+        const heir = members.find((m) => m.role === "admin" && m.lastSeenAt) ?? members.find((m) => m.role === "admin");
         if (heir) await directory(env).setCreator(slug, heir.email);
       }
       const emailed = role !== null && !existed && (await invite(env, hub, target, { workspace: name, url: url.origin, by: email, role }));
@@ -1724,13 +1772,12 @@ async function workspaceMeApi(request: Request, url: URL, env: Env, hub: HubApi,
       const slug = (await hub.info()).slug;
       const { member } = await hub.access(email);
       if (!member) return Response.json({ error: "You're not a member here." }, { status: 400 });
-      const admins = (await hub.members()).filter((m) => m.role === "admin" && m.email !== email);
-      if (member === "admin" && !admins.length) {
-        return Response.json({ error: "You're the only admin. Make someone else an admin first, or delete the workspace in settings." }, { status: 409 });
-      }
+      const blocker = await steppingDownBlocker(env, hub, slug, email, true);
+      if (blocker) return Response.json({ error: blocker }, { status: 409 });
       // Handed over first, so a failure partway never leaves the workspace owned by someone who's gone.
       const record = await directory(env).workspace(slug);
-      if (record?.createdBy === personKey(email) && admins[0]) await directory(env).setCreator(slug, admins[0].email);
+      const heir = (await hub.members()).find((m) => m.role === "admin" && m.email !== email && m.lastSeenAt);
+      if (record?.createdBy === personKey(email) && heir) await directory(env).setCreator(slug, heir.email);
       await revokeGrants(env, url.origin, slug, email, hub);
       await hub.setMember(email, null, null);
       return Response.json({ location: `${apexOrigin(env)}/workspaces?left=${encodeURIComponent((await hub.access(null)).name)}` });

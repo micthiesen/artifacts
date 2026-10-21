@@ -211,7 +211,7 @@ const ARTIFACT_TABLES = [
   "comments", "watches", "seen", "outbox", "pins",
 ];
 
-const MIGRATIONS: Migration[] = [
+export const MIGRATIONS: Migration[] = [
   (sql) =>
     sql.exec(`
       CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -334,6 +334,16 @@ const MIGRATIONS: Migration[] = [
     sql.exec(`
       ALTER TABLE members ADD COLUMN colour INTEGER;
       CREATE INDEX members_colourless ON members (added_at) WHERE colour IS NULL;
+    `),
+  // Members from before last_seen_at was recorded: whoever has opened an artifact here, or connected an agent,
+  // has signed in, so stepping down can count them as an admin who can run the workspace.
+  (sql) =>
+    sql.exec(`
+      UPDATE members SET last_seen_at = COALESCE(
+        (SELECT MAX(at) FROM seen WHERE seen.email = members.email),
+        (SELECT MIN(created_at) FROM grants WHERE grants.email = members.email),
+        (SELECT MIN(created_at) FROM tokens WHERE tokens.email = members.email))
+      WHERE last_seen_at IS NULL;
     `),
 ];
 
@@ -807,7 +817,7 @@ export class Workspace extends DurableObject {
         this.sql.exec(`DELETE FROM tokens WHERE email = ?`, clean);
         // Their event subscriptions end on the next alarm, with a terminated notice.
         this.sql.exec(`UPDATE event_subs SET next_at = ?, suspended = 0 WHERE principal = ?`, Date.now(), clean);
-        const heir = by && by !== clean ? by : (this.sql.exec(`SELECT email FROM members WHERE role = 'admin' ORDER BY email LIMIT 1`).toArray()[0]?.email as string);
+        const heir = by && by !== clean ? by : (this.sql.exec(`SELECT email FROM members WHERE role = 'admin' ORDER BY last_seen_at IS NULL, email LIMIT 1`).toArray()[0]?.email as string);
         if (heir) this.sql.exec(`UPDATE artifacts SET owner = ? WHERE owner = ?`, heir, clean);
         this.sql.exec(
           `INSERT INTO removed_members (email, removed_by, removed_at) VALUES (?, ?, ?) ON CONFLICT (email) DO UPDATE SET removed_by = excluded.removed_by, removed_at = excluded.removed_at`,
