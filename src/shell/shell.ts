@@ -18,11 +18,13 @@ import { createDrawer } from "./threads.ts";
 import { showSince } from "./since.ts";
 import { mountArchiveBar } from "./archive.ts";
 import { setPinned } from "./pins.ts";
-import { whoColor } from "../shared/who.ts";
+import { rememberColours, whoColor } from "../shared/who.ts";
 import { cue, move, shown } from "../shared/motion.ts";
 import { readSoundsCookie, setSoundsEnabled, soundsEnabled, soundsScopeOf } from "../shared/sound.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
+// Members' stored colours, before anything draws an avatar.
+rememberColours(boot.colours);
 const localKey = `art:${boot.artifactId}:local:${boot.viewer.email ?? "anon"}`;
 const cacheKey = `art:${boot.artifactId}:shared`;
 const canWrite = boot.viewer.role !== "view" && boot.viewer.email !== null;
@@ -145,7 +147,7 @@ function post(msg: ShellMessage) {
 function maybeInit() {
   if (!frameReady || initSent || !snapshotReceived) return;
   initSent = true;
-  post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme(), backlinks: boot.backlinks, linkTitles: boot.linkTitles, sounds: soundsEnabled() });
+  post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme(), backlinks: boot.backlinks, linkTitles: boot.linkTitles, sounds: soundsEnabled(), colours: boot.colours });
   // A link to a section (/a/<id>#<section>) scrolls there once the page has rendered.
   const section = sectionOf(location.hash);
   if (section) post({ t: "scroll", target: section });
@@ -367,9 +369,10 @@ function connect() {
         break;
       }
       case "presence":
+        rememberColours(msg.colours);
         presence = msg.viewers;
         renderPresence();
-        if (initSent) post({ t: "presence", viewers: presence });
+        if (initSent) post({ t: "presence", viewers: presence, colours: msg.colours });
         break;
       case "threads":
         drawer.setAll(msg.threads, msg.people);

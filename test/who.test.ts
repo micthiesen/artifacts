@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
-import { whoColor } from "../src/shared/who.ts";
+import { PALETTE, hashedColour, rememberColours, whoColor } from "../src/shared/who.ts";
 
 test("a person keeps one colour however their address is written", () => {
   expect(whoColor(" Priya.Shah@Example.com ")).toBe(whoColor("priya.shah@example.com"));
   expect(whoColor(null)).toBe(whoColor(undefined));
 });
 
-test("different people spread across the colours", () => {
-  const colours = new Set(["a@x.com", "b@x.com", "c@x.com", "d@x.com", "e@x.com", "f@x.com", "g@x.com", "h@x.com"].map(whoColor));
-  expect(colours.size).toBeGreaterThan(2);
+test("a stored colour wins over the email's own", () => {
+  const email = "stored@example.com";
+  const other = (hashedColour(email) + 1) % PALETTE.length;
+  rememberColours({ [email]: other, "bad@example.com": 99 });
+  expect(whoColor(email)).toBe(PALETTE[other]);
+  expect(whoColor("bad@example.com")).toBe(PALETTE[hashedColour("bad@example.com")]);
 });

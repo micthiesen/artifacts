@@ -92,7 +92,8 @@ export { PRODUCT };
 
 /** Whose pages these are: the apex (PRODUCT) or a workspace (its name). */
 /** `sounds`: the cookie the apex and every workspace share for the Sounds choice (src/shared/sound.ts). */
-export type Brand = { name: string; home: string; apex: string; sounds?: SoundsCookie };
+/** `colour`: the signed-in viewer's stored avatar colour in this workspace (a palette index), for the bar. */
+export type Brand = { name: string; home: string; apex: string; sounds?: SoundsCookie; colour?: number };
 
 /** The ghost logo: logo-small.svg drawn by CSS, with a soft halo behind it. */
 const GHOST = `<span class="logo-ghost" aria-hidden="true"></span>`;
@@ -113,6 +114,7 @@ function avatar(email: string, brand: Brand, context: "account" | "workspace", f
     `data-apex="${escapeHtml(brand.apex)}"`,
     `data-context="${context}"`,
     ...(brand.sounds ? [`data-sounds-cookie="${escapeHtml(brand.sounds.name)}"`, `data-sounds-domain="${escapeHtml(brand.sounds.domain)}"`] : []),
+    ...(brand.colour !== undefined ? [`data-colour="${brand.colour}"`] : []),
     ...(flags.member ? ['data-member="1"'] : []),
     ...(flags.scoped ? ['data-scoped="1"'] : []),
     ...(flags.operator ? ['data-operator="1"'] : []),

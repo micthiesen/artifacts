@@ -555,17 +555,20 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
     if (!viewer.email) return signIn(path);
     const archived = path === "/archived";
     const data = await hub.indexData(viewer.email, { archived, q: url.searchParams.get("q"), page: url.searchParams.get("page") });
+    brand.colour = data.colour;
     return indexPage({ email: viewer.email, member: data.member }, data, brand, data.summaries, archived, { mcpUrl: `${url.origin}/mcp`, name: `artifacts-${slug}` });
   }
   if (path === "/me") {
     if (!viewer.email) return signIn("/me");
+    brand.colour = (await hub.access(viewer.email)).colour;
     return profilePage(viewer.email, "workspace", brand, Boolean(env.VAPID_PUBLIC_KEY), Boolean(env.PUSHOVER_TOKEN));
   }
   if (path === "/api/me" || path.startsWith("/api/me/")) return workspaceMeApi(request, url, env, hub, session);
   if (path === "/settings") {
     if (!viewer.email) return signIn("/settings");
-    const { member } = await hub.access(viewer.email);
+    const { member, colour } = await hub.access(viewer.email);
     if (!member) return messagePage("Members only", `${viewer.email} isn't a member of ${record.name}. Ask a workspace admin to add you.`, 403, undefined, brand);
+    brand.colour = colour;
     return settingsPage(viewer.email, brand);
   }
   if (path === "/api/settings" || path.startsWith("/api/settings/")) return settingsApi(request, url, env, hub, viewer, slug);
@@ -685,7 +688,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
       if (body?.message) await hub.recordError(id, here.email, String(body.message).slice(0, 2000), body.stack ? String(body.stack).slice(0, 4000) : undefined);
       return new Response(null, { status: 204 });
     }
-    const { meta, visit, member, backlinks, linkTitles } = opened as Extract<typeof opened, { meta: unknown }>;
+    const { meta, visit, member, backlinks, linkTitles, colours } = opened as Extract<typeof opened, { meta: unknown }>;
+    if (here.email && colours[here.email] !== undefined) brand.colour = colours[here.email];
     const token = await signToken(env.SESSION_SECRET, "frame", FRAME_TTL, { id, e: here.email, w: slug });
     return shellPage(
       {
@@ -701,6 +705,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
         member: Boolean(member),
         admin: member === "admin" && !scoped,
         scoped,
+        colours,
         ...(meta.archivedAt ? { archivedAt: meta.archivedAt } : {}),
         ...(visit ? { since: visit.since, readSeq: visit.readSeq, watch: visit.watch, ...(scoped ? {} : { pinned: visit.pinned }) } : {}),
       },

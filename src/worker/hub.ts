@@ -3,6 +3,7 @@
 // history, sharing, shared state, comments and live sync sockets, and keeps its
 // own alarm for render checks, notifications, live data refreshes and backups.
 import { DurableObject } from "cloudflare:workers";
+import { PALETTE } from "../shared/who.ts";
 import { retireSignalBlobs } from "./restyle.ts";
 import { BUILD_STAMP, buildArtifact, type Build, type CompileError } from "./compile.ts";
 import { isDefaultView, renderCheck, type CheckEnv, type CheckOutcome, type CheckView, type RenderCheck } from "./check.ts";
@@ -111,6 +112,8 @@ export type Access = {
   offline: boolean;
   /** When this workspace was made: a grant names it, so one from a deleted workspace of the same name doesn't carry over. */
   createdAt?: string | null;
+  /** The person's stored avatar colour, when they're a member (a palette index, src/shared/who.ts). */
+  colour?: number;
 };
 
 export type AgentToken = { id: string; email: string; label: string; createdAt: string; lastUsedAt: string | null };
@@ -326,12 +329,16 @@ const MIGRATIONS: Migration[] = [
     `),
   // Tokens that work once (a render check's frame), remembered until they'd have expired anyway.
   (sql) => sql.exec(`CREATE TABLE used_tokens (id TEXT PRIMARY KEY, until INTEGER NOT NULL)`),
+  // Each member's avatar colour (a palette index). Null until first needed; memberColours hands them out.
+  (sql) => sql.exec(`ALTER TABLE members ADD COLUMN colour INTEGER`),
 ];
 
 /** Links to other artifacts in this workspace, from file contents: /a/<id> (absolute or relative). */
 const LINK_RE = /\/a\/(a[a-z0-9]{12})(?![a-z0-9])/g;
 /** Artifacts whose links one alarm step reads while backfilling. */
 const LINKS_BATCH = 100;
+/** Up to this many members, an artifact page gets every member's colour; past it, only the people on that page. */
+const PAGE_COLOURS_ALL = 200;
 /** Artifacts per alarm step of the restyle pass (src/worker/restyle.ts). */
 const RESTYLE_BATCH = 50;
 
@@ -511,8 +518,9 @@ export class Workspace extends DurableObject {
     if (origin && slug && this.setting("origin") !== origin) this.setSetting("origin", origin);
     const offline = this.offline();
     const member = email ? this.memberRole(email) : null;
-    if (email && !member && this.joinsByDomain(email)) return this.autoJoin(email).then((joined) => ({ slug, name, member: joined, offline, createdAt }));
-    return { slug, name, member, offline, createdAt };
+    if (email && !member && this.joinsByDomain(email))
+      return this.autoJoin(email).then((joined) => ({ slug, name, member: joined, offline, createdAt, ...this.colourOf(joined ? email : null) }));
+    return { slug, name, member, offline, createdAt, ...this.colourOf(member ? email : null) };
   }
 
   stats(): WorkspaceStats {
@@ -692,6 +700,62 @@ export class Workspace extends DurableObject {
   }
 
   // ---- members and agent tokens ----------------------------------------------------
+
+  /**
+   * Members' avatar colours (palette indexes) by email: all of them, or only those among `only`. A member without one
+   * gets one first: the least-used colour, in the order people joined, so everyone in a small workspace looks
+   * different and a big one spreads evenly. Guests have none stored; pages work theirs out from their email.
+   */
+  memberColours(only?: Iterable<string>): Record<string, number> {
+    const missing = this.sql.exec(`SELECT email FROM members WHERE colour IS NULL ORDER BY added_at, email`).toArray();
+    if (missing.length) {
+      const counts = new Array<number>(PALETTE.length).fill(0);
+      for (const r of this.sql.exec(`SELECT colour, COUNT(*) AS n FROM members WHERE colour IS NOT NULL GROUP BY colour`)) {
+        const i = r.colour as number;
+        if (i >= 0 && i < counts.length) counts[i] = r.n as number;
+      }
+      for (const r of missing) {
+        let best = 0;
+        for (let i = 1; i < counts.length; i++) if (counts[i] < counts[best]) best = i;
+        this.sql.exec(`UPDATE members SET colour = ? WHERE email = ?`, best, r.email);
+        counts[best]++;
+      }
+    }
+    const out: Record<string, number> = {};
+    const wanted = only ? new Set([...only].map((e) => e.toLowerCase())) : null;
+    for (const r of this.sql.exec(`SELECT email, colour FROM members`)) {
+      const email = r.email as string;
+      if (!wanted || wanted.has(email.toLowerCase())) out[email] = r.colour as number;
+    }
+    return out;
+  }
+
+  /** A member's stored colour, for the bar's own avatar ({} for anyone else). */
+  private colourOf(email: string | null): { colour?: number } {
+    if (!email) return {};
+    const row = this.sql.exec(`SELECT colour FROM members WHERE email = ?`, email).toArray()[0];
+    if (!row) return {};
+    const colour = row.colour === null ? this.memberColours([email])[email] : (row.colour as number);
+    return colour === undefined ? {} : { colour };
+  }
+
+  /**
+   * The colours an artifact page needs: every member's, or in a big workspace only those of the people who show up
+   * on this page (its owner, people it's shared with, whoever wrote its state or comments, and the viewer).
+   */
+  private pageColours(id: string, email: string | null): Record<string, number> {
+    const count = this.sql.exec(`SELECT COUNT(*) AS n FROM members`).one().n as number;
+    if (count <= PAGE_COLOURS_ALL) return this.memberColours();
+    const people = new Set<string>();
+    if (email) people.add(email);
+    for (const r of this.sql.exec(
+      `SELECT owner AS e FROM artifacts WHERE id = ?1 UNION SELECT email FROM shares WHERE artifact_id = ?1
+       UNION SELECT "by" FROM state WHERE artifact_id = ?1 AND "by" IS NOT NULL UNION SELECT "by" FROM comments WHERE artifact_id = ?1`,
+      id,
+    ))
+      people.add(r.e as string);
+    return this.memberColours(people);
+  }
 
   private memberRole(email: string): WorkspaceRole | null {
     return (this.sql.exec(`SELECT role FROM members WHERE email = ?`, email).toArray()[0]?.role as WorkspaceRole | undefined) ?? null;
@@ -1867,7 +1931,7 @@ export class Workspace extends DurableObject {
   async indexData(email: string, view: { archived?: boolean; q?: unknown; page?: unknown } = {}) {
     const member = await this.autoJoin(email);
     const page = listing(this.list(email), { archived: view.archived === true, q: view.q, page: view.page, inContent: this.contentSearch(view.q) });
-    return { member, ...page, summaries: this.shareSummaries(email, page.rows) };
+    return { member, ...page, summaries: this.shareSummaries(email, page.rows), ...this.colourOf(member ? email : null) };
   }
 
   /**
@@ -1908,7 +1972,14 @@ export class Workspace extends DurableObject {
     const meta = this.meta(id)!;
     const member = email ? this.memberRole(email) : null;
     // A presigned link opens one artifact only, so it learns nothing about others.
-    return { role, meta, member, visit: email ? this.visit(id, email) : null, ...(scoped ? {} : this.linksFor(id, email)) };
+    return {
+      role,
+      meta,
+      member,
+      visit: email ? this.visit(id, email) : null,
+      colours: this.pageColours(id, email),
+      ...(scoped ? {} : this.linksFor(id, email)),
+    };
   }
 
   /**
@@ -3486,10 +3557,11 @@ export class Workspace extends DurableObject {
     }
     // Who's here is for people signed in to it; an anonymous visitor on a public link sees nobody.
     const list = [...viewers].sort();
+    const colours = list.length ? this.memberColours(list) : {};
     for (const ws of sockets) {
       const tag = ws.deserializeAttachment() as SocketTag;
       try {
-        send(ws, { t: "presence", viewers: tag.email ? list : [] });
+        send(ws, tag.email ? { t: "presence", viewers: list, colours } : { t: "presence", viewers: [] });
       } catch {
         // closing
       }

@@ -44,11 +44,13 @@ export type ShellMessage =
       linkTitles?: Record<string, string>;
       /** The viewer turned Sounds on for this device. */
       sounds?: boolean;
+      /** Members' stored avatar colours (palette indexes, src/shared/who.ts) by email. */
+      colours?: Record<string, number>;
     }
   /** `remote`: someone else (or another tab) made these changes, so the page shows them arriving. */
   | { t: "shared"; changes: Record<string, JsonValue | null>; remote?: boolean; reverted?: boolean }
   | { t: "sounds"; on: boolean }
-  | { t: "presence"; viewers: string[] }
+  | { t: "presence"; viewers: string[]; colours?: Record<string, number> }
   | { t: "theme"; theme: "light" | "dark" }
   /** Threads to highlight (open ones; resolved ones are not drawn). */
   | { t: "threads"; threads: { id: string; anchor: Anchor | null; active?: boolean }[]; canComment: boolean }
@@ -74,7 +76,7 @@ export type SyncServerMessage =
   | { t: "snapshot"; seq: number; state: Record<string, JsonValue> }
   | { t: "set"; key: string; value: JsonValue | null; seq: number; by: string | null; cid?: string }
   | { t: "rejected"; cid: string; reason: string }
-  | { t: "presence"; viewers: string[] }
+  | { t: "presence"; viewers: string[]; colours?: Record<string, number> }
   | { t: "threads"; threads: Thread[]; people: Person[] }
   | { t: "thread"; thread: Thread; cid?: string }
   | { t: "ack"; cid: string }
@@ -184,6 +186,8 @@ export type ShellBoot = {
   admin: boolean;
   /** The session came from a presigned link: it opens this artifact only. */
   scoped: boolean;
+  /** Members' stored avatar colours (palette indexes, src/shared/who.ts) by email. */
+  colours?: Record<string, number>;
 };
 
 export type WatchLevel = "all" | "participating" | "mute";

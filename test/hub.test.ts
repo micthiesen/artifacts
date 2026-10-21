@@ -161,3 +161,39 @@ test("a restore from before the restyle loses the retired gradient classes too",
   hub.restylePass();
   expect(h.hub.files(r.id)["index.mdx"]).toContain(`<b className="text-primary">Hi</b>`);
 });
+
+test("members get different avatar colours, then the least-used ones, and a leaver's colour is freed", async () => {
+  const { PALETTE } = await import("../src/shared/who.ts");
+  const counts = () => {
+    const c = new Array<number>(PALETTE.length).fill(0);
+    for (const i of Object.values(h.hub.memberColours())) c[i]++;
+    return c;
+  };
+  // Up to a full palette, everyone differs.
+  for (let i = 0; Object.keys(h.hub.memberColours()).length < PALETTE.length; i++) await h.hub.setMember(`p${i}@example.com`, "member", OWNER);
+  expect(counts().every((n) => n === 1)).toBe(true);
+  // Past it, colours spread evenly: no colour is used twice before every other is.
+  for (let i = 0; i < 5; i++) await h.hub.setMember(`q${i}@example.com`, "member", OWNER);
+  const spread = counts();
+  expect(Math.max(...spread) - Math.min(...spread)).toBeLessThanOrEqual(1);
+  // Stored: asking again changes nothing.
+  expect(h.hub.memberColours()).toEqual(h.hub.memberColours());
+  // Someone who leaves frees their colour; the next person takes the least-used one, which is now theirs.
+  const leaver = "q0@example.com";
+  const freed = h.hub.memberColours([leaver])[leaver];
+  await h.hub.setMember(leaver, null, OWNER);
+  await h.hub.setMember("new@example.com", "member", OWNER);
+  expect(h.hub.memberColours(["new@example.com"])["new@example.com"]).toBe(freed);
+});
+
+test("a member's colour reaches their bar and the artifact page", async () => {
+  await h.hub.setMember("mia@example.com", "member", OWNER);
+  const id = await make();
+  h.hub.share(id, { add: [{ email: "mia@example.com", role: "view" }] });
+  const access = await h.hub.access("mia@example.com");
+  expect(access.colour).toBeNumber();
+  const opened = h.hub.openArtifact(id, "mia@example.com", false) as { colours: Record<string, number> };
+  expect(opened.colours["mia@example.com"]).toBe(access.colour!);
+  // A guest has no stored colour: pages work theirs out from their email.
+  expect((await h.hub.access("guest@example.com")).colour).toBeUndefined();
+});

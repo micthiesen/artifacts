@@ -11,6 +11,7 @@ import { LinkedFrom } from "./ui/page-extras.tsx";
 import { focusThread, installAnnotations, markChanged, setThreads } from "./annotate.ts";
 import { preparePrint } from "./print.ts";
 import { setSoundsEnabled } from "../shared/sound.ts";
+import { rememberColours } from "../shared/who.ts";
 
 const LS_PREFIX = "ls:";
 
@@ -266,6 +267,8 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     if (!msg || typeof msg !== "object" || typeof msg.t !== "string") return;
     switch (msg.t) {
       case "init":
+        // Before the first render, so every avatar already has its stored colour.
+        rememberColours(msg.colours);
         store.init({ ...msg, theme: THEME });
         setSoundsEnabled(msg.sounds === true);
         applyTheme();
@@ -279,6 +282,7 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         setSoundsEnabled(msg.on === true);
         break;
       case "presence":
+        rememberColours(msg.colours);
         store.setPresence(msg.viewers);
         break;
       case "theme":
