@@ -14,7 +14,7 @@ import { motionMs } from "../shared/motion.ts";
 /** The head, then three tail dots, each following the same path a little later. */
 const DOTS = 4;
 /** How high a hop rises above where the wisp rests, at most (px): the gap between lines leaves little more. */
-const MAX_LIFT = 5;
+const MAX_LIFT = 3;
 /** Out and back in, for a jump to the next line. */
 const BLINK: Keyframe[] = [{ opacity: 1 }, { opacity: 0, offset: 0.5 }, { opacity: 1 }];
 

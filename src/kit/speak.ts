@@ -273,6 +273,23 @@ const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && userScroll();
 const following = () => Date.now() - userScrolledAt > FOLLOW_PAUSE_MS;
 const scrollBehavior = (): ScrollBehavior => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
 
+/**
+ * What glows for a block: the block itself, or, when it is a plain wrapper around one shaped box (a Summary,
+ * a card), that box, so the glow follows its rounded corners instead of squaring them off.
+ */
+function glowTarget(el: Element): Element {
+  let target = el;
+  for (let depth = 0; depth < 3; depth++) {
+    const only = target.children.length === 1 ? target.children[0]! : null;
+    if (!only || parseFloat(getComputedStyle(target).borderTopLeftRadius) > 0) break;
+    const a = target.getBoundingClientRect();
+    const b = only.getBoundingClientRect();
+    if (Math.abs(a.width - b.width) > 2 || Math.abs(a.height - b.height) > 2) break;
+    target = only;
+  }
+  return target;
+}
+
 /** Marks the block being read and keeps it in view. */
 export function markSpeaking(i: number | null) {
   current?.removeAttribute("data-speaking");
@@ -286,6 +303,7 @@ export function markSpeaking(i: number | null) {
   // sentences markWord(null) deliberately leaves the wisp parked, so it hops on from there.)
   if (!unit.spoken.nodes.some(Boolean)) wispTo(null);
   if (!current) return;
+  current = glowTarget(current);
   current.setAttribute("data-speaking", "");
   const r = current.getBoundingClientRect();
   if (following() && (r.top < 0 || r.bottom > innerHeight)) {

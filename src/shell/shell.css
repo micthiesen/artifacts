@@ -1077,13 +1077,14 @@ select.input, select.om-select, .profile select {
 .listen .listen-play:focus-visible { outline-offset: 8px; }
 @media (hover: none) { .listen-icon:hover:not(:disabled) { background: none; color: var(--muted-fg); } }
 
-/* Narrow screens: what's being read on top, then speed on the left and the controls centred in the rest. */
+/* Narrow screens: what's being read on top, then the controls centred under it, with a compact speed stepper
+   at the left that fits beside them down to 360px. */
 @media (max-width: 640px) {
   .listen { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "now close" "deck deck"; row-gap: .4rem; padding: .5rem .75rem calc(.5rem + env(safe-area-inset-bottom)); }
-  .listen-deck { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; }
-  .listen-speed { grid-column: 1; }
-  .listen-controls { grid-column: 2; justify-self: center; gap: .5rem; }
-  .listen-speed .listen-icon { width: 1.75rem; height: 1.75rem; }
-  .listen-rate { min-width: 2.4rem; }
+  .listen-deck { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: .5rem; }
+  .listen-speed { grid-column: 1; justify-self: start; }
+  .listen-controls { grid-column: 2; gap: .5rem; }
+  .listen-speed .listen-icon { width: 1.5rem; height: 1.5rem; }
+  .listen-rate { min-width: 2.2rem; font-size: 12.5px; }
   .listen-play { width: 2.5rem; height: 2.5rem; }
 }
