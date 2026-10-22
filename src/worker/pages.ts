@@ -45,7 +45,7 @@ export function scriptJson(value: unknown): string {
 // Cloudflare injects its Web Analytics beacon into shell pages; the CSP lets it
 // load and report. Artifact frames opt out with no-transform (see frameDocument).
 const PAGE_CSP =
-  "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://cloudflareinsights.com; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+  "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob: data:; font-src 'self'; connect-src 'self' https://cloudflareinsights.com; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 // Declared inline so the very first paint is dark: without it the browser shows
 // its white default canvas until the stylesheet arrives, and a frame that is

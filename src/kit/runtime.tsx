@@ -10,6 +10,7 @@ import { Page } from "./ui/layout.tsx";
 import { LinkedFrom } from "./ui/page-extras.tsx";
 import { focusThread, installAnnotations, markChanged, setThreads } from "./annotate.ts";
 import { preparePrint } from "./print.ts";
+import { collectSpeech, markSpeaking, speakMode } from "./speak.ts";
 import { setSoundsEnabled } from "../shared/sound.ts";
 import { rememberColours } from "../shared/who.ts";
 
@@ -303,6 +304,15 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         break;
       case "print":
         whenRendered(() => void printDocument(msg.title, msg.meta));
+        break;
+      case "speak:collect":
+        whenRendered(() => send({ t: "speak:units", units: collectSpeech(rootEl) }));
+        break;
+      case "speak:at":
+        markSpeaking(msg.i);
+        break;
+      case "speak:mode":
+        speakMode(msg.on, (i) => send({ t: "speak:jump", i }));
         break;
     }
   });

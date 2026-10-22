@@ -303,7 +303,7 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
   }
 
   return (
-    <section ref={root} className={cn("my-8", className)}>
+    <section ref={root} className={cn("my-8", className)} data-speak="skip">
       {title && (
         <h3 className="mb-4 flex items-baseline gap-2 text-base font-semibold">
           {title}

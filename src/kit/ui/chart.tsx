@@ -36,7 +36,7 @@ function ChartInner({ type = "line", data, x, y, height = 280, stacked, legend, 
   // "users teams" is two series; a key that itself has spaces ("Daily median") is one; commas always separate.
   const ys = Array.isArray(y) ? y : y.includes(",") ? y.split(",").map((k) => k.trim()).filter(Boolean) : rows.some((r) => y in r) ? [y] : y.split(/\s+/).filter(Boolean);
   return (
-    <figure className={cn("my-6 rounded-xl border border-border bg-card px-4 pt-4 pb-3 shadow-card", className)}>
+    <figure className={cn("my-6 rounded-xl border border-border bg-card px-4 pt-4 pb-3 shadow-card", className)} data-speak="chart">
       {title && <figcaption className="mb-3 px-1 text-sm font-medium">{title}</figcaption>}
       <React.Suspense fallback={<Skeleton style={{ height }} />}>
         <ChartImpl {...({ type, rows, x, y: ys, height, stacked, legend, colors } satisfies ChartImplProps)} />

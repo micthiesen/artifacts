@@ -26,6 +26,26 @@ await build({ ...common, entryPoints: ["src/shell/settings.ts"], outfile: "dist/
 await build({ ...common, entryPoints: ["src/shell/admin.ts"], outfile: "dist/kit/static/admin.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/layout-check.ts"], outfile: "dist/kit/static/layout-check.js", platform: "browser" });
 await build({ ...common, entryPoints: ["src/shell/forms.ts"], outfile: "dist/kit/static/forms.js", platform: "browser" });
+// Listen's speech worker, on the shell's origin. scripts/build-tts.ts has put the model, voices and lexicon
+// under /kit/v1/tts/ and written their hashed names to the manifest; the ONNX runtime's WebAssembly goes beside them.
+{
+  const ortVersion = (await Bun.file("node_modules/onnxruntime-web/package.json").json()).version as string;
+  const ortDir = `dist/kit/kit/v1/tts/ort-${ortVersion}`;
+  await mkdir(ortDir, { recursive: true });
+  await cp("node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm", `${ortDir}/ort-wasm-simd-threaded.wasm`);
+  await cp("node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs", `${ortDir}/ort-wasm-simd-threaded.mjs`);
+  const manifest = await Bun.file("node_modules/.cache/tts/manifest.json").json();
+  await build({
+    ...common,
+    entryPoints: ["src/tts/worker.ts"],
+    outfile: "dist/kit/static/tts-worker.js",
+    platform: "browser",
+    define: {
+      __TTS_MANIFEST__: JSON.stringify(manifest),
+      __ORT_WASM__: JSON.stringify({ wasm: `/kit/v1/tts/ort-${ortVersion}/ort-wasm-simd-threaded.wasm`, mjs: `/kit/v1/tts/ort-${ortVersion}/ort-wasm-simd-threaded.mjs` }),
+    },
+  });
+}
 // The service worker must be served from the root to control every page.
 await build({ ...common, entryPoints: ["src/shell/sw/sw.ts"], outfile: "dist/kit/sw.js", platform: "browser" });
 await cp("src/shell/shell.css", "dist/kit/static/shell.css");

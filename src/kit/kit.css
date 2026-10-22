@@ -216,3 +216,18 @@
     display: none;
   }
 }
+
+/* Listen: the block being read glows moon white, the agent's light (the ghost is reading). */
+[data-speak-i] {
+  transition:
+    background-color var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease);
+}
+[data-speaking] {
+  border-radius: 6px;
+  background-color: color-mix(in oklch, var(--foreground) 7%, transparent);
+  box-shadow: 0 0 0 6px color-mix(in oklch, var(--foreground) 7%, transparent);
+}
+:root[data-listening] [data-speak-i] {
+  cursor: pointer;
+}

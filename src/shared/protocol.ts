@@ -24,7 +24,14 @@ export type FrameMessage =
   /** The viewer clicked highlighted text belonging to a thread. */
   | { t: "comment:open"; thread: string }
   /** Where each thread's anchor landed, in document order. */
-  | { t: "anchors"; placed: { id: string; status: AnchorStatus }[] };
+  | { t: "anchors"; placed: { id: string; status: AnchorStatus }[] }
+  /** Listen: the page's readable text, in reading order, one unit per block. */
+  | { t: "speak:units"; units: SpeakUnit[] }
+  /** Listen: the viewer tapped a block while listening; start reading there. */
+  | { t: "speak:jump"; i: number };
+
+/** One block of the page as Listen reads it; `i` names the element in the frame. */
+export type SpeakUnit = { i: number; text: string };
 
 /** Shell -> frame. */
 export type ShellMessage =
@@ -60,7 +67,12 @@ export type ShellMessage =
   | { t: "scroll"; target: string }
   /** Mark blocks that changed since the viewer's last visit (empty clears). */
   | { t: "changes"; blocks: string[] }
-  | { t: "print"; title: string; meta: string };
+  | { t: "print"; title: string; meta: string }
+  /** Listen: collect the page's readable text (the frame answers speak:units). */
+  | { t: "speak:collect" }
+  /** Listen: mark the block being read (null clears); `on` turns tap-to-jump on or off. */
+  | { t: "speak:at"; i: number | null }
+  | { t: "speak:mode"; on: boolean };
 
 /** Shell <-> Worker sync WebSocket (one per open artifact tab). */
 export type SyncClientMessage =

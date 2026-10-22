@@ -13,6 +13,7 @@ import type {
   WatchLevel,
 } from "../shared/protocol.ts";
 import { mountAccountMenu } from "./account.ts";
+import { createListen } from "./listen.ts";
 import { initOwnerMenu } from "./owner-menu.ts";
 import { createDrawer } from "./threads.ts";
 import { showSince } from "./since.ts";
@@ -69,6 +70,7 @@ if (meSlot && boot.viewer.email) {
   const common = {
     seen: boot.artifactId,
     print: printArtifact,
+    listen: () => listen.open(),
     markdownUrl: `/a/${boot.artifactId}.md`,
     watch: { level: boot.watch ?? "participating", set: setWatch },
     onSounds: (on: boolean) => post({ t: "sounds", on }),
@@ -139,6 +141,8 @@ iframe.addEventListener("load", () => {
   iframe.replaceWith(notice);
 });
 document.getElementById("frame-host")!.append(iframe);
+
+const listen = createListen({ title: boot.title, post: (msg) => post(msg), host: document.querySelector(".shell")! });
 
 function post(msg: ShellMessage) {
   iframe.contentWindow?.postMessage(msg, "*");
@@ -281,6 +285,12 @@ window.addEventListener("message", (event) => {
       break;
     case "anchors":
       drawer.setPlacement(msg.placed);
+      break;
+    case "speak:units":
+      listen.units(msg.units);
+      break;
+    case "speak:jump":
+      listen.jump(msg.i);
       break;
   }
 });

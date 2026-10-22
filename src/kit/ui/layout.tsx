@@ -103,7 +103,7 @@ export function Callout({ tone = "info", title, children, className }: Children 
   const t = calloutTones[tone] ?? calloutTones.info;
   const Icon = t.icon;
   return (
-    <div className={cn("my-6 flex gap-3 rounded-lg border px-4 py-3.5 text-[15px] leading-relaxed", t.box, className)} role="note">
+    <div className={cn("my-6 flex gap-3 rounded-lg border px-4 py-3.5 text-[15px] leading-relaxed", t.box, className)} role="note" data-tone={tone}>
       <Icon className={cn("mt-[3px] size-[18px] shrink-0", t.icon_)} />
       {/* Lists sit under the title, with the callout's own size and spacing rather than the article's. */}
       <div className="min-w-0 flex-1 [&_p]:my-0 [&_p+p]:mt-2 [&_ol]:my-2 [&_ol]:pl-[1.1rem] [&_ol]:text-[15px] [&_ol]:leading-relaxed [&_ul]:my-2 [&_ul]:pl-[1.1rem] [&_ul]:text-[15px] [&_ul]:leading-relaxed [&_li]:my-1 [&_li]:pl-0.5">
@@ -136,7 +136,7 @@ export function Stat({
   const good = invert ? sign < 0 : sign > 0;
   const deltaText = typeof delta === "number" ? (delta > 0 ? `+${delta}` : String(delta)) : delta;
   return (
-    <div className={cn("rounded-xl border border-border bg-card px-5 py-4 shadow-card", className)}>
+    <div className={cn("rounded-xl border border-border bg-card px-5 py-4 shadow-card", className)} data-speak="stat">
       <div className="text-[13px] font-medium tracking-[0.01em] text-muted-foreground">{label}</div>
       {/* A long delta drops under the value rather than breaking inside itself; the value never breaks. */}
       <div className="mt-1 flex flex-wrap items-baseline gap-x-2">

@@ -207,6 +207,12 @@ are the `.art-move-*` classes in `src/kit/motion.css` and `shell.css`.
   back.
 - Own-action cues follow the optimistic write, like the rest of the UI.
 
+**Listen is media, not a cue.** Reading an artifact aloud (`src/shell/listen.ts`)
+is something the reader asked for, so it plays through an `<audio>` element,
+ignores the Sounds setting, and never uses Web Audio. Its speech is made on the
+reader's device by a worker on the shell's origin (`src/tts/`); the model and
+everything it ships stay MIT, Apache-2.0 or BSD, never GPL (so no eSpeak).
+
 **Haptics: none.** iOS Safari has no vibration API, and Apple closed the
 scripted switch workaround in iOS 26.5. `navigator.vibrate` is blocked in the
 cross-origin frames artifacts run in. Revisit when a web haptics standard

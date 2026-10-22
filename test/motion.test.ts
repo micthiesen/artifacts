@@ -89,11 +89,15 @@ describe("motion tokens", () => {
 describe("sound", () => {
   const sources = files("src", /\.(tsx?|js|mjs|html)$/).map((path) => ({ path, text: stripTs(read(path)) }));
 
-  test("only src/shared/sound.ts makes audio or vibrates", () => {
+  test("only src/shared/sound.ts makes audio or vibrates (and Listen plays the speech it was asked for)", () => {
     const makers = sources
       .filter((s) => /AudioContext|HTMLAudioElement|new\s+Audio\s*\(|<audio\b|createOscillator|\.vibrate\b|\bvibrate\s*\(/.test(s.text))
-      .map((s) => s.path);
-    expect(makers).toEqual([join("src", "shared", "sound.ts")]);
+      .map((s) => s.path)
+      .sort();
+    expect(makers).toEqual([join("src", "shared", "sound.ts"), join("src", "shell", "listen.ts")]);
+    // Listen uses an <audio> element, never Web Audio.
+    const listen = sources.find((s) => s.path.endsWith("listen.ts"))!.text;
+    expect(listen).not.toMatch(/AudioContext|createOscillator/);
   });
 
   test("only cue() plays a sound, so none plays without its motion", () => {

@@ -25,7 +25,7 @@ export function Diagram(props: DiagramProps) {
 function DiagramInner({ code, children, title, className }: DiagramProps) {
   const source = (code ?? textOf(children)).trim();
   return (
-    <figure className={cn("my-6 rounded-xl border border-border bg-card p-4 shadow-card", className)}>
+    <figure className={cn("my-6 rounded-xl border border-border bg-card p-4 shadow-card", className)} data-speak="diagram">
       {title && <figcaption className="mb-3 px-1 text-sm font-medium">{title}</figcaption>}
       <React.Suspense fallback={<Skeleton className="h-48" />}>
         <DiagramImpl code={source} />

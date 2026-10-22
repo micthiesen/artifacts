@@ -26,6 +26,8 @@ const LEVELS: [WatchLevel, string, string][] = [
 export type AccountMenuOptions = {
   /** Print the artifact (or save it as PDF). */
   print?: () => void;
+  /** Read the artifact aloud. */
+  listen?: () => void;
   /** This artifact's notification level and a setter. */
   watch?: { level: WatchLevel; set: (level: WatchLevel) => Promise<WatchLevel> };
   /** Opens the Manage panel (owner on an artifact page). */
@@ -316,6 +318,13 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
         el.textContent = label;
         busy = false;
       }, 1600);
+    });
+  }
+  if (options.listen) {
+    const listen = options.listen;
+    item("Listen", () => {
+      setOpen(false);
+      listen();
     });
   }
   if (options.print) {

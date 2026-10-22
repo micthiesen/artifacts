@@ -8,7 +8,7 @@
     "typecheck": "tsc -p . && tsc -p src/shell && tsc -p src/shell/sw && tsc -p src/kit",
     "test": "bun test test/ src/",
     "deploy": "bun run build && alchemy deploy --stage prod",
-    "build": "bun run build:kit && bun --preload ./spikes/text-loader.ts scripts/kit-exports.ts && bun --preload ./spikes/text-loader.ts scripts/build-demos.ts && bun scripts/build.ts",
+    "build": "bun run build:kit && bun scripts/build-tts.ts && bun --preload ./spikes/text-loader.ts scripts/kit-exports.ts && bun --preload ./spikes/text-loader.ts scripts/build-demos.ts && bun scripts/build.ts",
     "build:kit": "bun scripts/build-kit.ts",
     "e2e": "bun spikes/e2e.ts"
   },
@@ -21,6 +21,7 @@
     "clsx": "^2.1.1",
     "es-module-lexer": "^3.0.4",
     "lucide-react": "^1.57.0",
+    "onnxruntime-web": "1.30.0",
     "pele": "^1.6.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
