@@ -9,7 +9,7 @@ import { Phonemizer } from "./phonemize.ts";
 import { planParts, wordTimes } from "./plan.ts";
 import { styleFor, STYLE_WIDTH } from "./style.ts";
 import { toWav, SAMPLE_RATE } from "./dsp.ts";
-import type { FromWorker, TimedWord, ToWorker, TtsManifest } from "./types.ts";
+import { MAX_SENTENCE, type FromWorker, type TimedWord, type ToWorker, type TtsManifest } from "./types.ts";
 
 declare const __TTS_MANIFEST__: TtsManifest;
 declare const __ORT_WASM__: { wasm: string; mjs: string; bytes: number };
@@ -23,8 +23,11 @@ const TAIL_SAMPLES = 5000;
 const scope = self as unknown as { postMessage(msg: FromWorker, transfer?: Transferable[]): void; onmessage: ((e: MessageEvent<ToWorker>) => void) | null };
 const reply = (msg: FromWorker, transfer: Transferable[] = []) => scope.postMessage(msg, transfer);
 
+/** Where the files live: the apex origin, so every workspace shares one cached copy. */
+let base = "";
+
 /** Fetches the files the voice needs, reporting progress against their known sizes (bodies arrive decompressed). */
-async function fetchAll(files: { url: string; bytes: number }[]): Promise<ArrayBuffer[]> {
+async function fetchAll(files: { url: string; bytes: number }[]): Promise<Uint8Array[]> {
   const total = files.reduce((n, f) => n + f.bytes, 0);
   const loaded = files.map(() => 0);
   let last = 0;
@@ -36,24 +39,24 @@ async function fetchAll(files: { url: string; bytes: number }[]): Promise<ArrayB
   };
   return Promise.all(
     files.map(async ({ url }, i) => {
-      const res = await fetch(url);
+      const res = await fetch(base + url);
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      // Written straight into one buffer of the known size, so the model never sits in memory twice.
+      let out = new Uint8Array(files[i]!.bytes);
       const reader = res.body.getReader();
-      const chunks: Uint8Array[] = [];
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        chunks.push(value);
+        if (loaded[i]! + value.byteLength > out.length) {
+          const grown = new Uint8Array(Math.max(out.length * 2, loaded[i]! + value.byteLength));
+          grown.set(out.subarray(0, loaded[i]!));
+          out = grown;
+        }
+        out.set(value, loaded[i]!);
         loaded[i]! += value.byteLength;
         report();
       }
-      const out = new Uint8Array(loaded[i]!);
-      let at = 0;
-      for (const c of chunks) {
-        out.set(c, at);
-        at += c.byteLength;
-      }
-      return out.buffer;
+      return out.subarray(0, loaded[i]!);
     }),
   );
 }
@@ -71,12 +74,14 @@ function load(): Promise<Engine> {
       { url: manifest.voice.url, bytes: manifest.bytes.voice },
     ]);
     ort.env.wasm.numThreads = 1; // no cross-origin isolation, so no SharedArrayBuffer threads
-    ort.env.wasm.wasmBinary = wasm;
-    ort.env.wasm.wasmPaths = { mjs: __ORT_WASM__.mjs, wasm: __ORT_WASM__.wasm };
-    const session = await ort.InferenceSession.create(new Uint8Array(model!), { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
-    const phonemizer = new Phonemizer(new TextDecoder().decode(lexicon), g2p!);
+    ort.env.wasm.wasmBinary = wasm!;
+    ort.env.wasm.wasmPaths = { mjs: base + __ORT_WASM__.mjs, wasm: base + __ORT_WASM__.wasm };
+    const session = await ort.InferenceSession.create(model!, { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
+    // The runtime has compiled its copy; let go of ours.
+    ort.env.wasm.wasmBinary = undefined;
+    const phonemizer = new Phonemizer(new TextDecoder().decode(lexicon), g2p!.slice().buffer);
     reply({ t: "ready" });
-    return { session, phonemizer, voice: new Float32Array(voice!) };
+    return { session, phonemizer, voice: new Float32Array(voice!.slice().buffer) };
   })();
   // A failed download can be retried: the next load starts over.
   engine.catch(() => (engine = null));
@@ -129,6 +134,7 @@ let cancelledBefore = 0;
 scope.onmessage = (e) => {
   const msg = e.data;
   if (msg.t === "load") {
+    base = msg.base;
     load().catch((err: Error) => reply({ t: "error", message: err.message, fatal: true }));
   } else if (msg.t === "cancel") {
     cancelledBefore = Math.max(cancelledBefore, msg.before);
@@ -136,7 +142,7 @@ scope.onmessage = (e) => {
     queue = queue.then(async () => {
       if (msg.id < cancelledBefore) return reply({ t: "error", id: msg.id, message: "cancelled" });
       try {
-        const { pcm, words } = await synth(msg.text);
+        const { pcm, words } = await synth(msg.text.slice(0, MAX_SENTENCE));
         const wav = toWav(pcm, SAMPLE_RATE);
         reply({ t: "audio", id: msg.id, wav, seconds: pcm.length / SAMPLE_RATE, words }, [wav]);
       } catch (err) {

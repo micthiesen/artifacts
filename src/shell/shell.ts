@@ -184,7 +184,7 @@ listenButton.setAttribute("aria-pressed", "false");
 listenButton.setAttribute("aria-label", "Listen");
 listenButton.title = "Listen: read this page aloud";
 listenButton.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 14v-2a8 8 0 0 1 16 0v2M4 14h2.5A1.5 1.5 0 0 1 8 15.5v3A1.5 1.5 0 0 1 6.5 20H5.5A1.5 1.5 0 0 1 4 18.5zM20 14h-2.5a1.5 1.5 0 0 0-1.5 1.5v3a1.5 1.5 0 0 0 1.5 1.5h1a1.5 1.5 0 0 0 1.5-1.5z"/></svg>`;
-const listen = listenSupported() ? createListen({ title: boot.title, post, host: document.querySelector(".shell")!, trigger: listenButton }) : null;
+const listen = listenSupported() ? createListen({ title: boot.title, apex: boot.apex, post, host: document.querySelector(".shell")!, trigger: listenButton }) : null;
 if (listen) toggle.before(listenButton);
 
 const drawer = createDrawer(document.getElementById("threads")!, toggle, {
@@ -250,6 +250,7 @@ window.addEventListener("message", (event) => {
       frameReady = true;
       initSent = false;
       maybeInit();
+      listen?.frameReady();
       break;
     case "local:set":
       if (msg.value === undefined) delete local[msg.key];

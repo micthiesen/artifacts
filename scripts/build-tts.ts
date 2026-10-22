@@ -70,9 +70,18 @@ async function fetchPinned(name: keyof typeof SOURCES): Promise<Uint8Array> {
     const cached = new Uint8Array(await readFile(path));
     if (sha256(cached) === want) return cached;
   }
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  const data = new Uint8Array(await res.arrayBuffer());
+  // A cold cache downloads from Hugging Face, GitHub and PyPI: don't hang on a slow one, and ride out a blip.
+  let data: Uint8Array | null = null;
+  for (let attempt = 1; !data; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      data = new Uint8Array(await res.arrayBuffer());
+    } catch (err) {
+      if (attempt >= 3) throw new Error(`${url}: ${(err as Error).message} after ${attempt} tries`);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
   const got = sha256(data);
   if (got !== want) throw new Error(`${url}: sha256 ${got}, expected ${want}`);
   await mkdir(SRC, { recursive: true });
@@ -230,6 +239,28 @@ CMU Pronouncing Dictionary (lexicon.txt)
 
 ${cmudictLicense.trim()}
 
+onnxruntime-web (tts-worker.js, ort-wasm-simd-threaded.wasm)
+  Copyright (c) Microsoft Corporation. Licensed under the MIT License.
+  https://github.com/microsoft/onnxruntime
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
 ------------------------------------------------------------------------
 Apache License, Version 2.0 (applies to Kitten TTS and g2p_en)
 ------------------------------------------------------------------------
@@ -277,6 +308,8 @@ export async function buildTts(): Promise<Manifest> {
   await mkdir(DIST, { recursive: true });
   const urls = new Map<string, string>();
   for (const [name, data] of outputs) {
+    // Workers static assets refuse files over 25 MiB at deploy time; fail the build instead.
+    if (data.byteLength > 25 * 1024 * 1024) throw new Error(`${name} is ${data.byteLength} bytes, over the 25 MiB static asset limit`);
     await writeFile(join(OUT, name), data);
     const dot = name.lastIndexOf(".");
     const hashed = `${name.slice(0, dot)}.${shortHash(data)}${name.slice(dot)}`;

@@ -53,3 +53,18 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Listen (read aloud)
+
+The speech worker (`src/tts/`, served at `/static/tts-worker.js`) and its
+files under `/kit/v1/tts/` bundle the following. The full texts ship as
+`/kit/v1/tts/NOTICES.<hash>.txt` beside the model. Nothing GPL is used:
+pronunciation comes from CMUdict and g2p_en, not eSpeak.
+
+| Component | License |
+|---|---|
+| Kitten TTS nano 0.8 (model and Bruno voice), KittenML | Apache-2.0 |
+| g2p_en (neural model for words not in the dictionary, re-implemented in TypeScript), Kyubyong Park | Apache-2.0 |
+| CMU Pronouncing Dictionary, Carnegie Mellon University | BSD-2-Clause style |
+| onnxruntime-web (and its WebAssembly runtime), Microsoft Corporation | MIT |
+| Text normalisation rules adapted from KittenTTS `preprocess.py` | Apache-2.0 |

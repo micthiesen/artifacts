@@ -46,9 +46,13 @@ export function scriptJson(value: unknown): string {
 // load and report. Artifact frames opt out with no-transform (see frameDocument).
 const PAGE_CSP =
   "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://cloudflareinsights.com; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
-// The artifact page also hosts Listen: its speech worker compiles WebAssembly (a browser that gives a
-// dedicated worker its page's policy needs it here), and the spoken sentences play from blob: URLs.
-const SHELL_CSP = PAGE_CSP.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'").replace("font-src", "media-src 'self' blob: data:; font-src");
+// The artifact page also hosts Listen: its speech worker compiles WebAssembly and fetches the voice from the
+// apex (a browser that gives a dedicated worker its page's policy needs both here), and the spoken sentences
+// play from blob: URLs.
+const shellCsp = (apex: string) =>
+  PAGE_CSP.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
+    .replace("font-src", "media-src 'self' blob: data:; font-src")
+    .replace("connect-src 'self'", `connect-src 'self' ${apex}`);
 
 // Declared inline so the very first paint is dark: without it the browser shows
 // its white default canvas until the stylesheet arrives, and a frame that is
@@ -1013,7 +1017,7 @@ export function shellPage(boot: ShellBoot, brand: Brand, reportUrl?: string): Re
 </div>
 <script type="application/json" id="shell-boot">${scriptJson(boot)}</script>
 <script type="module" src="${asset("/static/shell.js")}"></script>`,
-    { headers: { "Content-Security-Policy": SHELL_CSP } },
+    { headers: { "Content-Security-Policy": shellCsp(boot.apex) } },
   );
 }
 

@@ -16,15 +16,19 @@ export const SAMPLE_RATE = 24000;
 /** Kitten nano 0.8 fails on more input ids than this (its BERT's position table). */
 export const MAX_IDS = 512;
 
-/** One spoken word: `src` is a half-open UTF-16 range of the original text, `tokens` a half-open range of `ids`. */
-export type PlannedWord = { src: [number, number]; tokens: [number, number] };
+/**
+ * One spoken word: `src` is a half-open UTF-16 range of the original text,
+ * `tokens` a half-open range of `ids`, `spoken` the range of the plan's
+ * normalised text that says it.
+ */
+export type PlannedWord = { src: [number, number]; tokens: [number, number]; spoken: [number, number] };
 
 export type Plan = {
   ids: number[];
   words: PlannedWord[];
-  /** The normalised text that was phonemised (for a part from planParts, the source text it covers). */
+  /** The normalised text this plan says (for a part from planParts, its share of the sentence's). */
   spoken: string;
-  /** What to pass styleFor: the code-point length of `spoken` (of the source covered, for a part from planParts). */
+  /** What to pass styleFor: the code-point length of `spoken`. */
   styleLength: number;
 };
 
@@ -53,17 +57,21 @@ export function plan(phonemizer: Phonemizer, text: string): Plan {
       hi = Math.max(hi, norm.end[i]);
     }
     if (lo === Infinity) continue;
+    // Without surrounding spaces or the sentence's own punctuation (a rewrite can take a
+    // full stop along: "3:30pm."), but keeping an abbreviation's dots ("U.S.").
     while (lo < hi && /\s/.test(text[lo])) lo++;
-    while (hi > lo && /\s/.test(text[hi - 1])) hi--;
+    while (hi > lo && (/[\s,;:!?\u2026]/.test(text[hi - 1]) || (text[hi - 1] === "." && !text.slice(lo, hi - 1).includes(".")))) hi--;
     if (hi <= lo) hi = Math.min(text.length, lo + 1);
     const prev = words[words.length - 1];
-    // Words made from overlapping source ("Oct 21, 2026" -> "October twenty-first, ...") are one word.
-    if (prev && lo < prev.src[1]) {
+    // Words made from overlapping or touching source are one word: "Oct 21, 2026" ->
+    // "October twenty-first, ...", "R2-D2's" -> "R two-D two's", "R&D" -> "R and D".
+    if (prev && lo <= prev.src[1]) {
       prev.src = [Math.min(prev.src[0], lo), Math.max(prev.src[1], hi)];
       prev.tokens = [prev.tokens[0], Math.max(prev.tokens[1], t1)];
+      prev.spoken = [prev.spoken[0], Math.max(prev.spoken[1], w.text[1])];
       continue;
     }
-    words.push({ src: [lo, hi], tokens: [t0, t1] });
+    words.push({ src: [lo, hi], tokens: [t0, t1], spoken: [w.text[0], w.text[1]] });
   }
   return { ids, words, spoken: norm.text, styleLength: [...norm.text].length };
 }
@@ -105,17 +113,17 @@ export function planParts(phonemizer: Phonemizer, text: string, maxIds = MAX_IDS
     }
     const ids = [0, ...body.slice(a, b), whole.ids[whole.ids.length - 2], 0];
     const words: PlannedWord[] = [];
-    let lo = Infinity;
-    let hi = 0;
     for (const w of whole.words) {
       const t0 = Math.max(w.tokens[0] - 1, a);
       const t1 = Math.min(w.tokens[1] - 1, b);
       if (t1 <= t0) continue;
-      words.push({ src: w.src, tokens: [t0 - a + 1, t1 - a + 1] });
-      lo = Math.min(lo, w.src[0]);
-      hi = Math.max(hi, w.src[1]);
+      words.push({ src: w.src, tokens: [t0 - a + 1, t1 - a + 1], spoken: w.spoken });
     }
-    const spoken = lo < hi ? text.slice(lo, hi) : "";
+    // This part's share of the normalised text: from its first word to the next part's first word.
+    const from = parts.length === 0 ? 0 : (words[0]?.spoken[0] ?? 0);
+    const next = whole.words.find((w) => w.tokens[0] - 1 >= b);
+    const to = b >= body.length || !next ? whole.spoken.length : next.spoken[0];
+    const spoken = whole.spoken.slice(from, Math.max(from, to)).trim();
     parts.push({ ids, words, spoken, styleLength: [...spoken].length });
     a = b;
   }
@@ -130,7 +138,7 @@ export function planParts(phonemizer: Phonemizer, text: string, maxIds = MAX_IDS
  * Times past `limitSeconds` (e.g. the audio after trimming its tail) are clamped.
  */
 export function wordTimes(
-  words: PlannedWord[],
+  words: Pick<PlannedWord, "src" | "tokens">[],
   durations: Float32Array | ArrayLike<number>,
   totalSamples: number,
   sampleRate = SAMPLE_RATE,

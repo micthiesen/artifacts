@@ -73,7 +73,10 @@ describe.skipIf(!built)("plan (needs bun scripts/build-tts.ts)", () => {
       ["We met on Oct 21, 2026 at 3:30pm.", ["We", "met", "on", "Oct 21, 2026", "at", "3:30pm"]],
       ["The build took 6m 10s (v1.2.3).", ["The", "build", "took", "6m", "10s", "v1.2.3"]],
       ["“Quoted” words… and ★ stars ☃!", ["Quoted", "words", "and", "stars"]],
-      ["GPT-4 & R2-D2's 1920×1080 screen", ["GPT-4", "&", "R", "2-D", "2's", "1920×1080", "screen"]],
+      ["Our R&D team uses M3 chips.", ["Our", "R&D", "team", "uses", "M3", "chips"]],
+      ["Costs $5-10/mo, <2% fees.", ["Costs", "$5-10/mo", "<2%", "fees"]],
+      ["Edit ./src/speak.ts at 9am-5pm.", ["Edit", "src", "speak.ts", "at", "9am-5pm"]],
+      ["GPT-4 & R2-D2's 1920×1080 screen", ["GPT-4", "&", "R2-D2's", "1920×1080", "screen"]],
     ];
     for (const [text, words] of cases) {
       const pl = plan(p, text);
@@ -141,9 +144,12 @@ describe.skipIf(!built)("plan (needs bun scripts/build-tts.ts)", () => {
       expect(part.ids.length).toBeLessThanOrEqual(MAX_IDS);
       expect(part.ids[0]).toBe(0);
       expect(part.ids.slice(-2)).toEqual([10, 0]);
-      expect([3, 4, 5, 6]).toContain(part.ids[part.ids.length - 3]);
+      expect(part.styleLength).toBe([...part.spoken].length);
+      expect(part.spoken.length).toBeGreaterThan(0);
     }
     expect(parts.flatMap((part) => said(text, part))).toEqual(said(text, whole));
+    // Each part's style length comes from the normalised text it says, which together make the whole.
+    expect(parts.map((part) => part.spoken).join(" ")).toBe(whole.spoken);
     expect(planParts(p, "Short.")).toEqual([plan(p, "Short.")]);
   });
 });

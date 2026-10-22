@@ -136,6 +136,7 @@ const MINOR: Record<string, [string, string]> = {
 const SCALE_SUFFIX: Record<string, string> = {
   k: "thousand", K: "thousand", m: "million", M: "million", mm: "million", MM: "million",
   b: "billion", B: "billion", bn: "billion", T: "trillion", t: "trillion",
+  thousand: "thousand", million: "million", billion: "billion", trillion: "trillion",
 };
 
 function money(amount: string, scale: string | undefined, names: [string, string]): string {
@@ -207,7 +208,7 @@ function emailWords(local: string, domain: string): string {
 const ABBREVIATIONS: [RegExp, string][] = [
   [/\be\.g\.(?=\s|,|$)/gi, "for example"],
   [/\bi\.e\.(?=\s|,|$)/gi, "that is"],
-  [/\betc\.(?=\s*$)/gi, "et cetera."],
+  [/\b[Ee]tc\.(?=\s*$|\s+[A-Z])/g, "et cetera."],
   [/\betc\./gi, "et cetera"],
   [/\bvs\.?(?=\s|$)/gi, "versus"],
   [/\bapprox\.(?=\s)/gi, "approximately"],
@@ -228,9 +229,22 @@ const ABBREVIATIONS: [RegExp, string][] = [
   [/\bpp\.(?=\s*\d)/g, "pages"],
   [/\bw\/o\b/gi, "without"],
   [/\bw\/(?=\s)/gi, "with"],
-  [/\ba\.m\.(?=\s|$)/gi, "AM"],
-  [/\bp\.m\.(?=\s|$)/gi, "PM"],
 ];
+
+/** Where an abbreviation's own full stop also ends the sentence: at the end, or before a capital. */
+const ENDS_SENTENCE = /^\s*$|^\s+[A-Z]/;
+
+/** Units a price or rate can be per: "$12/mo", "10 MB/s", "$5/user". */
+const PER: Record<string, string> = {
+  s: "second", sec: "second", second: "second", ms: "millisecond", min: "minute", minute: "minute",
+  h: "hour", hr: "hour", hour: "hour", d: "day", day: "day", wk: "week", week: "week",
+  mo: "month", month: "month", yr: "year", y: "year", year: "year",
+  user: "user", seat: "seat", member: "member", person: "person", req: "request", request: "request",
+  call: "call", token: "token", page: "page", item: "item", unit: "unit", GB: "gigabyte", MB: "megabyte", TB: "terabyte",
+};
+
+/** File extensions read letter by letter after "dot": "speak.ts" -> "speak dot T S". */
+const EXTENSIONS = "js|ts|tsx|jsx|mjs|cjs|md|mdx|json|css|scss|html|htm|sh|yml|yaml|toml|rs|go|sql|py|rb|txt|csv|svg|png|jpg|jpeg|gif|pdf|wasm|lock|env|xml|ini|zip";
 
 function timeWords(h: number, min: number, sec: string | undefined, suffix: string | undefined): string {
   const ampm = suffix ? (suffix[0].toLowerCase() === "a" ? " AM" : " PM") : "";
@@ -270,6 +284,22 @@ function numberWords(raw: string): string {
     if (n >= 1100 && n <= 2099 && n % 1000 !== 0) return yearToWords(n);
   }
   return (negative ? "minus " : "") + integerWords(digits);
+}
+
+/** Keeps a sentence break when a rewrite swallowed a full stop that also ended the sentence ("3 p.m. Then"). */
+function keepStop(match: string, offset: number, whole: string, always = false): string {
+  if (!match.endsWith(".")) return "";
+  const after = whole.slice(offset + match.length);
+  return (always ? ENDS_SENTENCE : /^\s*$/).test(after) ? "." : "";
+}
+
+/** "01:23:45" -> "one hour twenty-three minutes forty-five seconds". */
+function durationWords(h: number, m: number, s: number): string {
+  const parts: string[] = [];
+  if (h) parts.push(`${numberToWords(h)} ${h === 1 ? "hour" : "hours"}`);
+  if (m) parts.push(`${numberToWords(m)} ${m === 1 ? "minute" : "minutes"}`);
+  if (s || !parts.length) parts.push(`${numberToWords(s)} ${s === 1 ? "second" : "seconds"}`);
+  return parts.join(" ");
 }
 
 /** Screen sizes read in pairs: 1920 -> "nineteen twenty", 1080 -> "ten eighty". */
@@ -429,12 +459,41 @@ export function normalizeWithSpans(text: string): SpannedText {
   // URLs: the domain only. Emails: local part "at" domain.
   t.replace(/\b(?:https?|ftp):\/\/([^\s/?#:]+)(?::\d+)?[^\s]*?(?=[.,;:!?)\]]*(?:\s|$))/gi, (_, host: string) => domainWords(host));
   t.replace(/\b([\w.+-]+)@([\w-]+(?:\.[\w-]+)*\.[a-z]{2,})\b/gi, (_, local: string, domain: string) => emailWords(local, domain));
+  t.replace(/\bREADME\b/g, "read me");
+
+  // Ports and relative paths: "localhost:3000" -> "localhost port 3000", "./x.sh" -> "x.sh".
+  t.replace(/\b(localhost|\d{1,3}(?:\.\d{1,3}){3}|[a-z][\w-]*(?:\.[\w-]+)+):(\d{2,5})\b/gi, "$1 port $2");
+  t.replace(/(?<![^\s(["'])\.{1,2}\//g, "");
+  // Libraries named for their extension, files by name: "Node.js" -> "Node JS", "speak.ts" -> "speak dot TS".
+  t.replace(/\b([A-Z][A-Za-z0-9]*)\.js\b(?!\.?\w)/g, "$1 JS");
+  t.replace(new RegExp(String.raw`\b([\w-]+)\.(${EXTENSIONS})\b(?!\.?\w)`, "gi"), (_, name: string, ext: string) =>
+    `${name} dot ${ext.toLowerCase() === "go" ? "go" : ext.toUpperCase()}`,
+  );
+
   t.replace(/\bwww\.([\w-]+(?:\.[\w-]+)+)[^\s]*?(?=[.,;:!?)\]]*(?:\s|$))/gi, (_, host: string) => domainWords(host));
   t.replace(new RegExp(String.raw`\b((?:[a-z0-9-]+\.)+(?:${TLDS}))(\/[^\s]*?)?(?=[.,;:!?)\]]*(?:\s|$))`, "gi"), (m, host: string) =>
     /^\d+(\.\d+)*$/.test(host) ? m : domainWords(host),
   );
 
   for (const [re, words] of ABBREVIATIONS) t.replace(re, words);
+
+  // Dotted abbreviations: U.S., Ph.D., M.I.T., a.m. -> letters, with no stops inside.
+  t.replace(/(?<![\w.])(?:[A-Za-z][a-z]?\.){2,}/g, (m: string, off: number, whole: string) => {
+    const letters = m.replace(/\./g, "").toUpperCase();
+    return letters + keepStop(m, off, whole, letters === "AM" || letters === "PM");
+  });
+  // Signs before numbers: +5, −3, <2%, >= 10, C++, C#.
+  t.replace(/\u2212(?=\s?[\d.$€£])/g, "-");
+  t.replace(/\b([A-Za-z])\+\+(?![\w+])/g, "$1 plus plus").replace(/\b([CF])#(?!\w)/g, "$1 sharp");
+  const NEXT_NUM = String.raw`(?=[-$€£¥]?\.?\d)`;
+  t.replace(new RegExp(String.raw`(?:<=|≤)\s?${NEXT_NUM}`, "g"), "at most ")
+    .replace(new RegExp(String.raw`(?:>=|≥)\s?${NEXT_NUM}`, "g"), "at least ")
+    .replace(new RegExp(String.raw`(?<![-=<])<\s?${NEXT_NUM}`, "g"), "under ")
+    .replace(new RegExp(String.raw`(?<![-=])>\s?${NEXT_NUM}`, "g"), "over ")
+    .replace(new RegExp(String.raw`(?<![\w)\]])\+\s?(?=[$€£¥]?\.?\d)`, "g"), "plus ");
+
+  // Rates: "$12/mo", "10 MB/s", "$5/user" -> "... per month".
+  t.replace(new RegExp(String.raw`(?<=\d\s?(?:[kKMBT]|bn|[KMGT]i?B|[KMG]b|ms)?|%)\/(${Object.keys(PER).join("|")})\b`, "g"), (_, u: string) => ` per ${PER[u]}`);
 
   // ISO dates and datetimes: 2026-10-21, 2026-10-21T14:05.
   t.replace(/\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z)?)?\b/g, (m, y, mo, d, hh, mm, ss, z) => {
@@ -454,25 +513,43 @@ export function normalizeWithSpans(text: string): SpannedText {
   );
   t.replace(new RegExp(String.raw`\b${MONTH_RE}\s+(\d{4})\b`, "g"), (_, mon, y) => dateWords(mon, undefined, y));
 
-  // Times: 3:30pm, 14:00, 9:05 AM, 10:15:30.
-  t.replace(/\b(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([ap])\.?m\.?\b|\s*([AP])M\b)?/gi, (m, h, min, s, ap1, ap2) => {
+  // Times: 9am-5pm, 3:30pm, 14:00, 9:05 AM; h:mm:ss is a duration.
+  const AMPM = String.raw`\s*([ap])(?:\.?m\b\.?)`;
+  t.replace(new RegExp(String.raw`\b(\d{1,2})(?::(\d{2}))?${AMPM}?\s?[-–]\s?(\d{1,2})(?::(\d{2}))?${AMPM}`, "gi"), (m: string, h1, m1, a1, h2, m2, a2, off: number, whole: string) => {
+    if (+h1 < 1 || +h1 > 12 || +h2 < 1 || +h2 > 12 || +(m1 ?? 0) > 59 || +(m2 ?? 0) > 59) return m;
+    return `${timeWords(+h1, +(m1 ?? 0), undefined, a1 ?? a2)} to ${timeWords(+h2, +(m2 ?? 0), undefined, a2)}${keepStop(m, off, whole, true)}`;
+  });
+  t.replace(new RegExp(String.raw`\b(\d{1,2}):(\d{2})(?::(\d{2}))?(?:${AMPM})?`, "gi"), (m: string, h, min, sec, ap, off: number, whole: string) => {
     const hour = Number(h);
     const mins = Number(min);
-    if (hour > 24 || mins > 59) return m;
-    return timeWords(hour, mins, s, ap1 ?? ap2);
+    if (hour > 24 || mins > 59 || (sec !== undefined && Number(sec) > 59)) return m;
+    if (sec !== undefined && !ap) return durationWords(hour, mins, Number(sec));
+    return timeWords(hour, mins, sec, ap) + keepStop(m, off, whole, true);
   });
-  t.replace(/\b(\d{1,2})\s*([ap])\.?m\.?(?=[\s,.;:!?]|$)/gi, (m, h, ap) =>
-    Number(h) >= 1 && Number(h) <= 12 ? `${numberToWords(Number(h))} ${ap.toLowerCase() === "a" ? "AM" : "PM"}` : m,
+  t.replace(new RegExp(String.raw`\b(\d{1,2})${AMPM}(?=[\s,.;:!?)]|$)`, "gi"), (m: string, h, ap: string, off: number, whole: string) =>
+    Number(h) >= 1 && Number(h) <= 12 ? `${numberToWords(Number(h))} ${ap.toLowerCase() === "a" ? "AM" : "PM"}${keepStop(m, off, whole, true)}` : m,
   );
+  t.replace(/\b(\d{1,2})\s(AM|PM)\b/g, (_, h: string, ap: string) => `${numberToWords(Number(h))} ${ap}`);
 
-  // Money: $420, CA$12, €5, $4.99, $2.5M, 12 USD.
+  // Money: $5-10, $420, CA$12, €5, $4.99, $2.5M, $1.5 billion, 12 USD, 5 €.
+  const SCALE = String.raw`(?:\s?(bn|mm|MM|[kKmMbBtT])(?![\w])|\s(thousand|million|billion|trillion)\b)?`;
   t.replace(
-    new RegExp(String.raw`(?<![\w$])([A-Z]{1,2}\$|[$€£¥₹₩₿])\s?(${NUM}|\.\d+)(?:\s?(bn|mm|MM|[kKmMbBtT])(?![\w]))?`, "g"),
-    (m, sym: string, amount: string, scale: string | undefined) => {
+    new RegExp(String.raw`(?<![\w$])([A-Z]{1,2}\$|[$€£¥₹₩₿])\s?(${NUM})\s?[-–]\s?(?:\1)?\s?(${NUM})${SCALE}`, "g"),
+    (m, sym: string, a: string, b: string, s1: string | undefined, s2: string | undefined) => {
       const names = CURRENCY_PREFIX[sym];
-      return names ? money(amount, scale, names) : m;
+      if (!names) return m;
+      const from = a.includes(".") ? money(a, undefined, names) : decimalWords(a);
+      return `${from} to ${money(b, s1 ?? s2, names)}`;
     },
   );
+  t.replace(
+    new RegExp(String.raw`(?<![\w$])([A-Z]{1,2}\$|[$€£¥₹₩₿])\s?(${NUM}|\.\d+)${SCALE}`, "g"),
+    (m, sym: string, amount: string, s1: string | undefined, s2: string | undefined) => {
+      const names = CURRENCY_PREFIX[sym];
+      return names ? money(amount, s1 ?? s2, names) : m;
+    },
+  );
+  t.replace(new RegExp(String.raw`(?<![\w.])(${NUM})\s?([€£¥₹₩])(?![\w\d])`, "g"), (_, amount: string, sym: string) => money(amount, undefined, CURRENCY_PREFIX[sym]));
   t.replace(new RegExp(String.raw`\b(${NUM})\s?(${Object.keys(CURRENCY_CODE).join("|")})\b`, "g"), (_, amount, code: string) =>
     money(amount, undefined, CURRENCY_CODE[code]),
   );
@@ -507,17 +584,24 @@ export function normalizeWithSpans(text: string): SpannedText {
   );
 
   // Scientific notation: 1e-4, 6.022E23.
-  t.replace(/(?<![\w.])(-?\d+(?:\.\d+)?)[eE]([+-]?\d+)(?![\w.])/g, (_, c, e) => {
+  t.replace(/(?<![\w.])(-?\d+(?:\.\d+)?)[eE]([+-]?\d+)(?!\w|\.\d)/g, (_, c, e) => {
     const exp = Number(e);
     return `${decimalWords(c)} times ten to the ${exp < 0 ? "minus " : ""}${numberToWords(Math.abs(exp))}`;
   });
 
   // Durations and units glued to numbers or after a space: "6m 10s", "500ms", "12 MB", "3×".
   const unitKeys = Object.keys(UNITS).sort((a, b) => b.length - a.length).map((k) => k.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
-  t.replace(new RegExp(String.raw`(?<![\w.])(-?${NUM}|-?\.\d+)(\s?)(${unitKeys.join("|")})(?![\w°])`, "g"), (m, n: string, space: string, unit: string) => {
+  t.replace(new RegExp(String.raw`(?<![\w.])(-?${NUM}|-?\.\d+)(\s?)(${unitKeys.join("|")})(?![\w°])`, "g"), (m: string, n: string, space: string, unit: string, ...rest: any[]) => {
     if (space && !SPACED_UNITS.has(unit)) return m;
     const words = numberWords(n);
-    const [one, many] = UNITS[unit];
+    let [one, many] = UNITS[unit];
+    // "m" is minutes only beside other time ("1h 30m", "6m 10s") or after "took", "in", "every"...; else meters.
+    if (unit === "m") {
+      const before = rest[rest.length - 1].slice(0, rest[rest.length - 2]);
+      const after = rest[rest.length - 1].slice(rest[rest.length - 2] + m.length);
+      const time = /\d\s?h\s*$|\b(?:took|takes|take|in|for|every|after|within|last|about|over|under|wait)\s+$/i.test(before) || /^\s*\d+\s?s\b|^\s+ago\b/.test(after);
+      if (!time) [one, many] = ["meter", "meters"];
+    }
     return `${words} ${words === "one" ? one : many}`;
   });
   // Bare scale suffixes: 7B parameters, 340M, 1.5k.
@@ -527,21 +611,24 @@ export function normalizeWithSpans(text: string): SpannedText {
   t.replace(new RegExp(String.raw`(${NUM})\s?[×x]\s?(${NUM})`, "g"), (_, a, b) => `${dimensionWords(a)} by ${dimensionWords(b)}`);
   t.replace(/\s?×\s?/g, " times ");
 
-  // Fractions: 1/2, 3/4, 5/8 (not dates like 10/21/2026, which read as numbers).
-  t.replace(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?![\d/])/g, (m, a: string, b: string) => {
+  // Fractions and ratios: 1/2, 3/4 (denominators 2-10, smaller numerators); 24/7, 50/50, 4.5/5, 12/15.
+  t.replace(/(?<![\d/.])(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)(?![\d/]|\.\d)/g, (_, a: string, b: string) => {
     const num = Number(a);
     const den = Number(b);
-    if (!den) return m;
-    const numWords = numberToWords(num);
-    let denWords: string;
-    if (den === 2) denWords = num === 1 ? "half" : "halves";
-    else if (den === 4) denWords = num === 1 ? "quarter" : "quarters";
-    else denWords = ordinalToWords(den) + (num === 1 ? "" : "s");
-    return `${numWords} ${denWords}`;
+    if (a === "24" && b === "7") return "twenty-four seven";
+    if (a === b) return `${numberWords(a)} ${numberWords(b)}`;
+    if (Number.isInteger(num) && Number.isInteger(den) && den >= 2 && den <= 10 && num >= 1 && num < den) {
+      let denWords: string;
+      if (den === 2) denWords = "half";
+      else if (den === 4) denWords = num === 1 ? "quarter" : "quarters";
+      else denWords = ordinalToWords(den) + (num === 1 ? "" : "s");
+      return `${numberToWords(num)} ${denWords}`;
+    }
+    return `${numberWords(a)} ${num <= den ? "out of" : "over"} ${numberWords(b)}`;
   });
 
   // Numeric ranges: 10-20, 2020-2024, pages 5–7.
-  t.replace(new RegExp(String.raw`(?<![\w.-])(${NUM})\s?[-–]\s?(${NUM})(?![\w.])`, "g"), (_, a, b) => `${numberWords(a)} to ${numberWords(b)}`);
+  t.replace(new RegExp(String.raw`(?<![\w.-])(${NUM})\s?[-–]\s?(${NUM})(?!\w|\.\d)`, "g"), (_, a, b) => `${numberWords(a)} to ${numberWords(b)}`);
 
   // Symbols between words.
   t
@@ -549,6 +636,11 @@ export function normalizeWithSpans(text: string): SpannedText {
     .replace(new RegExp(String.raw`(${NUM})\s?\+\s?(${NUM})`, "g"), "$1 plus $2")
     .replace(/(\w)\+(?=\s|$)/g, "$1 plus")
     .replace(/\s=\s/g, " equals ")
+    .replace(/\s\+\s/g, " plus ")
+    .replace(/\s*(?:<=|≤)\s*/g, " at most ")
+    .replace(/\s*(?:>=|≥)\s*/g, " at least ")
+    .replace(/\s<\s/g, " less than ")
+    .replace(/\s>\s/g, " greater than ")
     .replace(/\s*(?:->|→|=>)\s*/g, " to ")
     .replace(/~\s?(?=\d)/g, "about ")
     .replace(/#(?=\d)/g, "number ")

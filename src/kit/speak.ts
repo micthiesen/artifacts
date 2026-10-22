@@ -82,8 +82,13 @@ class Spoken {
   }
 }
 
-type Unit = { el: Element; spoken: Spoken };
+/** `mark`: the element is the unit's own, so it can glow and be tapped (not a container that only holds loose text). */
+type Unit = { el: Element; spoken: Spoken; mark: boolean };
 let units: Unit[] = [];
+/** Every element that is a block or holds one, worked out once per collection instead of a query per node. */
+let blocky = new Set<Element>();
+const hasBlock = (el: Element) => blocky.has(el);
+const holdsBlock = (el: Element) => [...el.children].some((c) => blocky.has(c));
 let out: SpeakUnit[] = [];
 let heading: string | undefined;
 
@@ -119,12 +124,11 @@ function textOf(el: Element): string {
   return b.text.trim();
 }
 
-function push(el: Element, b: Spoken) {
+function push(el: Element, b: Spoken, mark = true) {
   b.finish();
   if (!b.text) return;
   const i = units.length;
-  el.setAttribute("data-speak-i", String(i));
-  units.push({ el, spoken: b });
+  units.push({ el, spoken: b, mark });
   if (/^H[1-6]$/.test(el.tagName)) heading = b.text.replace(/[.:]$/, "");
   out.push(heading ? { i, text: b.text, h: heading } : { i, text: b.text });
 }
@@ -190,18 +194,18 @@ function walk(el: Element) {
   if (/^H[1-6]$|^P$|^DT$|^DD$/.test(tag)) return pushText(el);
   if (tag === "LI" || tag === "BLOCKQUOTE") {
     // A list item with its own paragraphs or a nested list reads its parts one by one.
-    if (!el.querySelector(BLOCK)) return pushText(el);
+    if (!holdsBlock(el)) return pushText(el);
     const b = new Spoken();
     for (const n of el.childNodes) {
       if (n.nodeType === Node.TEXT_NODE) b.node(n as Text);
-      else if (n instanceof Element && !n.matches(BLOCK) && !n.querySelector(BLOCK)) into(b, n);
+      else if (n instanceof Element && !hasBlock(n)) into(b, n);
     }
     push(el, b);
-    for (const child of el.children) if (child.matches(BLOCK) || child.querySelector(BLOCK)) walk(child);
+    for (const child of el.children) if (hasBlock(child)) walk(child);
     return;
   }
   // A container: if nothing inside is a block, it is one unit (app.tsx pages are mostly divs).
-  if (!el.querySelector(BLOCK)) {
+  if (!holdsBlock(el)) {
     if (isBlockish(el)) pushText(el);
     return;
   }
@@ -210,11 +214,14 @@ function walk(el: Element) {
   const flush = () => {
     const b = new Spoken();
     for (const n of loose) n instanceof Element ? into(b, n) : b.node(n as Text);
-    push(loose.find((n): n is Element => n instanceof Element) ?? el, b);
+    // Bare text in a container that also holds blocks has no element of its own: it reads and its words are
+    // marked, but the container doesn't glow or take taps.
+    const own = loose.find((n): n is Element => n instanceof Element);
+    push(own ?? el, b, Boolean(own));
     loose = [];
   };
   for (const child of el.childNodes) {
-    if (child instanceof Element && (child.matches(BLOCK) || child.querySelector(BLOCK) || isBlockish(child))) {
+    if (child instanceof Element && (hasBlock(child) || isBlockish(child))) {
       flush();
       walk(child);
     } else if (child instanceof Element ? visible(child) : child.nodeType === Node.TEXT_NODE) loose.push(child);
@@ -231,7 +238,15 @@ export function collectSpeech(root: Element): { units: SpeakUnit[]; start: numbe
   units = [];
   out = [];
   heading = undefined;
+  // Blocks, and every ancestor of one up to the root.
+  blocky = new Set();
+  for (const b of root.querySelectorAll(BLOCK)) {
+    for (let e: Element | null = b; e && e !== root && !blocky.has(e); e = e.parentElement) blocky.add(e);
+  }
   walk(root);
+  blocky = new Set();
+  // Numbered after the walk, so reading styles and writing attributes don't interleave.
+  units.forEach((u, i) => u.mark && u.el.setAttribute("data-speak-i", String(i)));
   let start = 0;
   if (scrollY > 0) {
     const i = units.findIndex((u) => u.el.getBoundingClientRect().bottom > 8);
@@ -247,6 +262,10 @@ let current: Element | null = null;
 let userScrolledAt = 0;
 const FOLLOW_PAUSE_MS = 6000;
 const userScroll = () => (userScrolledAt = Date.now());
+/** Until when a scroll is Listen's own (a smooth scroll runs a while); any other scroll is the reader's. */
+let ownScrollUntil = 0;
+const scrolling = () => (ownScrollUntil = Date.now() + 1200);
+const onScroll = () => Date.now() > ownScrollUntil && userScroll();
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && userScroll();
 
@@ -256,16 +275,19 @@ const scrollBehavior = (): ScrollBehavior => (matchMedia("(prefers-reduced-motio
 /** Marks the block being read and keeps it in view. */
 export function markSpeaking(i: number | null) {
   current?.removeAttribute("data-speaking");
-  current = i === null ? null : (units[i]?.el ?? null);
-  if (!current) {
+  const unit = i === null ? undefined : units[i];
+  current = unit?.mark ? unit.el : null;
+  if (!unit) {
     wispTo(null);
     return markWord(null, 0, 0);
   }
-  current.setAttribute("data-speaking", "");
   // A block with nothing of its own to point at (a table or chart read as a summary) has no wisp.
-  if (!units[i!]!.spoken.nodes.some(Boolean)) wispTo(null);
+  if (!unit.spoken.nodes.some(Boolean)) wispTo(null);
+  if (!current) return;
+  current.setAttribute("data-speaking", "");
   const r = current.getBoundingClientRect();
   if (following() && (r.top < 0 || r.bottom > innerHeight)) {
+    scrolling();
     current.scrollIntoView({ block: r.height > innerHeight * 0.6 ? "start" : "center", behavior: scrollBehavior() });
   }
 }
@@ -310,7 +332,10 @@ export function markWord(i: number | null, start: number, end: number, hop?: num
   // In a block taller than the screen the word can run off the bottom: bring its line back up.
   if (!following()) return;
   const r = range.getBoundingClientRect();
-  if (r.height && (r.bottom > innerHeight - 24 || r.top < 0)) scrollBy({ top: r.top - innerHeight * 0.35, behavior: scrollBehavior() });
+  if (r.height && (r.bottom > innerHeight - 24 || r.top < 0)) {
+    scrolling();
+    scrollBy({ top: r.top - innerHeight * 0.35, behavior: scrollBehavior() });
+  }
 }
 
 let tapping: ((e: MouseEvent) => void) | null = null;
@@ -322,6 +347,7 @@ export function speakMode(on: boolean, send: (i: number) => void) {
   removeEventListener("wheel", userScroll);
   removeEventListener("touchmove", userScroll);
   removeEventListener("keydown", userKey);
+  removeEventListener("scroll", onScroll, true);
   document.documentElement.toggleAttribute("data-listening", on);
   if (!on) {
     wispTo(null);
@@ -331,6 +357,8 @@ export function speakMode(on: boolean, send: (i: number) => void) {
   addEventListener("wheel", userScroll, { passive: true });
   addEventListener("touchmove", userScroll, { passive: true });
   addEventListener("keydown", userKey);
+  // Scrollbar drags and anything else that scrolls by hand (capture: inner scrolling areas too).
+  addEventListener("scroll", onScroll, { capture: true, passive: true });
   tapping = (e) => {
     const target = e.target as Element | null;
     if (!target || target.closest("a,button,input,textarea,select,label,summary,[role='button'],[role='tab'],[role='checkbox']")) return;

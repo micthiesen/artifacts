@@ -35,11 +35,16 @@ await build({ ...common, entryPoints: ["src/shell/forms.ts"], outfile: "dist/kit
   await cp("node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm", `${ortDir}/ort-wasm-simd-threaded.wasm`);
   await cp("node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs", `${ortDir}/ort-wasm-simd-threaded.mjs`);
   const manifest = await Bun.file("node_modules/.cache/tts/manifest.json").json();
+  // scripts/build-tts.ts must have run after build-kit (which empties dist/kit): a missing file would be a silent 404.
+  for (const url of [manifest.model, manifest.lexicon, manifest.g2p, manifest.notices, manifest.voice.url] as string[]) {
+    if (!(await Bun.file(`dist/kit${url}`).exists())) throw new Error(`dist/kit${url} is missing: run the full bun run build`);
+  }
   await build({
     ...common,
     entryPoints: ["src/tts/worker.ts"],
     outfile: "dist/kit/static/tts-worker.js",
     platform: "browser",
+    banner: { js: `/* Listen's speech worker. Third-party licences (onnxruntime-web, Kitten TTS, g2p_en, CMUdict): ${manifest.notices} */` },
     define: {
       __TTS_MANIFEST__: JSON.stringify(manifest),
       __ORT_WASM__: JSON.stringify({

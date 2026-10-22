@@ -384,6 +384,25 @@ export class Lexicon {
 
 const MAX_G2P_LETTERS = 24;
 
+/** Everyday words, said as words when written in capitals for emphasis ("Do NOT", "ALL users", "Mind the GAP"). */
+const COMMON_WORDS = new Set(
+  (
+    "a an the and or nor but if so as at by for from in into of off on onto out over per to up upon via with not no yes " +
+    "all any both each few many more most much none one two six ten own some such only same very just also too now then " +
+    "here there when where why how what who whom whose which that this these those than once ever never ago soon " +
+    "i me my mine we us our you your he him his she her they them it its is am are was were be been being do does did " +
+    "done have has had can could may might must will would shall should let get got go goes went make made take took " +
+    "use used see saw say said try put set run ran keep give gave come came know knew need want like look find read " +
+    "send stop wait help note save sell buy pay add move turn call ask tell show hide join quit fail pass skip lose " +
+    "new old big small good bad best less last next free full true real sure safe live dead open shut done easy hard " +
+    "fast slow high low hot cold top end gap day week year time way life work home team user data file code test plan " +
+    "away back down left right near far late soon well even ever ok wow hey oh gone lost won win tie due key max min " +
+    "warn"
+  ).split(" "),
+);
+/** Short capitalised words that are more often acronyms than emphasis: spelled. */
+const USUALLY_ACRONYMS = new Set(["am", "pm", "us", "it", "do", "id", "ai", "ui", "os", "pc", "tv", "hr", "pr", "qa", "ci", "cd", "ip", "vm", "max", "min"]);
+
 const WORD_OR_PUNCT = /[\p{L}\p{M}\p{N}]+(?:['-][\p{L}\p{M}\p{N}]+)*'?|[.,?!;:—…"]/gu;
 const STARTS_WITH_VOWEL_SOUND = /^[ˈˌ]?[ɑæʌɔaɛɜeɪiʊuoəɚᵻɐ]/;
 
@@ -449,7 +468,7 @@ export class Phonemizer {
   /** One word in context: function words stay unstressed; "the" before a vowel is ðɪ. */
   private word(raw: string, shouting: boolean, nextWord: string | undefined): string {
     const lower = raw.toLowerCase();
-    const acronym = raw.length > 1 && raw === raw.toUpperCase() && !shouting && !this.capsAsWords[lower];
+    const acronym = raw.length > 1 && /^\p{Lu}+$/u.test(raw) && !shouting && !this.pronounceableAcronym(raw);
     if (!acronym && FUNCTION_WORDS[lower] !== undefined) {
       if (lower === "the" && nextWord) {
         const next = this.word(nextWord, shouting, undefined);
@@ -519,9 +538,19 @@ export class Phonemizer {
   }
 
   /** "NASA" is said as a word; "HTML" and "MCP" are spelled. */
+  /**
+   * Whether an all-caps word is said as a word rather than spelled. Emphasis
+   * ("Do NOT", "ALL users", "It is FREE") is common in prose and acronyms are
+   * common in tech, so: up to four letters, only everyday English words
+   * (COMMON_WORDS, minus the ones usually acronyms) that the lexicon knows;
+   * four or more, any lexicon word with a vowel and no three consonants in a
+   * row ("NASA", "IMPORTANT", not "HTML" or "JSON").
+   */
   private pronounceableAcronym(caps: string): boolean {
     const lower = caps.toLowerCase();
     if (this.capsAsWords[lower]) return true;
-    return caps.length >= 4 && /[aeiouy]/.test(lower) && !/[^aeiouy]{3}/.test(lower) && this.lexicon.has(lower);
+    if (USUALLY_ACRONYMS.has(lower) || !this.lexicon.has(lower)) return false;
+    if (COMMON_WORDS.has(lower)) return true;
+    return caps.length >= 4 && /[aeiouy]/.test(lower) && !/[^aeiouy]{3}/.test(lower);
   }
 }

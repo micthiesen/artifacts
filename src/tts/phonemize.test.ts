@@ -71,6 +71,20 @@ describe.skipIf(!built)("with built assets (bun scripts/build-tts.ts)", () => {
     expect(p.phonemize("kubernetes")).toBe("kəbˈɜːnɪts");
   });
 
+  test("capitals: emphasis words are said, acronyms spelled, mid-sentence and at the end", () => {
+    const p = phonemizer();
+    const word = (w: string) => p.phonemize(w.toLowerCase());
+    for (const w of ["NOT", "ALL", "NO", "NEW", "FREE", "USE", "GAP", "THE", "NEVER", "IMPORTANT", "NASA"]) {
+      expect(p.phonemize(`Do ${w} stop.`)).toBe(`duː ${word(w)} stˈɑːp.`);
+      expect(p.phonemize(`Mind ${w}.`)).toBe(`mˈaɪnd ${word(w)}.`);
+    }
+    for (const w of ["API", "CSS", "PDF", "CPU", "UI", "URL", "MCP", "TTS", "DO", "IT", "US", "AM", "PM", "HTML", "JSON", "AWS"]) {
+      const spelled = p.phonemize(`Use ${w}.`).slice("jˈuːz ".length, -1);
+      expect(p.phonemize(`Use ${w} now.`)).toBe(`jˈuːz ${spelled} nˈaʊ.`);
+      expect(spelled).toMatch(/ˌ/); // spelled letters carry secondary stress
+    }
+  });
+
   test.skipIf(!hasEspeak())(
     "similarity to espeak-ng over varied sentences (dev only; espeak-ng never ships)",
     () => {
