@@ -48,13 +48,25 @@ const HOP_REACH = 150;
 const GLIDE = { k: 520, damping: 1 };
 const hopTime = (d: number) => Math.min(0.24, Math.max(0.13, 0.12 + d / 1600));
 const hopHeight = (d: number) => Math.min(7, Math.max(3.5, 3.5 + d * 0.04));
-/** A lift that's still rising (less than this far through) is let finish rather than restarted. */
-const HOP_RESTART = 0.6;
 const LAND_SQUASH = 0.2;
 const LAND_FOR = 0.14;
 const kick = (d: number) => Math.min(320, 120 + Math.max(0, d - 160) * 0.4);
-type Hop = { start: number; time: number; height: number };
+/**
+ * A hop: from where it took off (fromX) to the word, `height` at the top, plus whatever lift it still had
+ * from a hop it was in the middle of (`carry`), let down smoothly. The lift follows how far along the way
+ * it is, not the clock, so the path is always a curve in space: never straight up, however the glide starts.
+ */
+type Hop = { start: number; time: number; height: number; fromX: number; carry: number };
 let hop: Hop | null = null;
+/** How far through its hop it is (0 to 1): by distance along the way when it's going sideways, else by time. */
+function hopProgress(h: Hop, goalX: number): number {
+  const span = goalX - h.fromX;
+  const byTime = (clock - h.start) / h.time;
+  if (Math.abs(span) < 4) return Math.min(1, byTime);
+  const along = (body!.head.x - h.fromX) / span;
+  // Landed when it is (all but) there; a hop that somehow never arrives ends after twice its time.
+  return along >= 0.998 || byTime >= 2 ? 1 : Math.max(0, along);
+}
 let landedAt = -1;
 let lastWordAt = -1;
 /** Until when it is flying (a far word, a line wrap) on the looser spring, rather than gliding. */
@@ -203,11 +215,11 @@ function frame(now: number) {
   body.squash = 0;
   body.upright = false;
   if (hop) {
-    const u = (clock - hop.start) / hop.time;
-    if (u >= 1) {
+    const p = hopProgress(hop, goal.x);
+    if (p >= 1) {
       hop = null;
       landedAt = clock;
-    } else body.lift = hop.height * Math.sin(Math.PI * u);
+    } else body.lift = hop.carry * (1 - p) + hop.height * Math.sin(Math.PI * p);
   }
   body.liftSpeed = (body.lift - before) / dt;
   if (!hop && !still) {
@@ -290,10 +302,11 @@ export function wispFollow(to: Range | Element) {
         hop = null;
         flyingUntil = clock + 0.45;
         body.vel.y -= kick(d);
-      } else if (d > 1 && (!hop || (clock - hop.start) / hop.time >= HOP_RESTART)) {
-        // Timed and sized to the speech: fast reading gets a faint ripple, slow reading a full hop.
+      } else if (d > 1) {
+        // A new hop takes off from wherever it is, carrying the height it already had, so the curve never kinks.
+        // Sized to the speech: fast reading gets a faint ripple, slow reading a full hop.
         const time = Math.min(hopTime(d), Math.max(0.09, 0.8 * interval));
-        hop = { start: clock, time, height: hopHeight(d) * Math.min(1, interval / 0.28) };
+        hop = { start: clock, time, height: hopHeight(d) * Math.min(1, interval / 0.28), fromX: body.head.x, carry: body.lift };
       }
     }
   }
