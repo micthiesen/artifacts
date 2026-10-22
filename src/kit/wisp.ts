@@ -82,6 +82,8 @@ let landedAt = -1;
 let lastWordAt = -1;
 /** Where it was heading last frame, so a big change of destination (a far word, a tap) becomes a flight. */
 let lastGoal: Point | null = null;
+/** A word hop was just started for this change of destination, so the frame doesn't also start a flight. */
+let hopFresh = false;
 /** Until when it is flying (a far word, a line wrap) on the looser spring, rather than gliding. */
 let flyingUntil = -1;
 /** How far above a block (with no words) it floats, the bob around its spot, and when it stops bobbing (s). */
@@ -219,14 +221,18 @@ function frame(now: number) {
   floated = floating() ? floated + dt : 0;
   const size = floating() && !cramped ? R_FLOAT : fit;
   const still = prefersStill();
-  // Its destination jumped (a far word, a new line, a tap elsewhere, back from the margin): fly there on a
-  // curve, on the looser spring. Not while it waits at the edge, leaves, or sits still for reduced motion.
-  if (lastGoal && !still && !leaving && !parked && Math.hypot(goal.x - lastGoal.x, goal.y - lastGoal.y) > HOP_REACH) {
+  // Its destination jumped by more than a word hop accounts for (a far word, a new line, a tap elsewhere,
+  // back from the margin or the screen's edge): it gets there on a curve, never in a straight line; far
+  // ones on the looser spring. Not while it waits at the edge, leaves, or sits still for reduced motion.
+  const jump = lastGoal ? Math.hypot(goal.x - lastGoal.x, goal.y - lastGoal.y) : 0;
+  if (jump > 12 && !hopFresh && !still && !leaving && !parked) {
     const d = Math.hypot(goal.x - body.head.x, goal.y - body.head.y);
-    flyingUntil = clock + 0.6;
-    hop = { start: clock, time: 0.6, height: Math.min(30, Math.max(8, d * 0.08)), from: { ...body.head }, carry: { ...body.arc } };
+    if (d > HOP_REACH) flyingUntil = clock + 0.6;
+    hop = { start: clock, time: 0.6, height: Math.min(30, Math.max(6, d * 0.08)), from: { ...body.head }, carry: { ...body.arc } };
   }
-  lastGoal = leaving || parked ? null : goal;
+  hopFresh = false;
+  // Remembered through a wait at the edge too, so coming back from it is a flight.
+  lastGoal = leaving ? null : goal;
   if (hop && (still || leaving)) hop = null;
   // Along the line it glides on a firm spring; far words and line wraps are flights on a looser one.
   const gliding = mood === "tracking" && !floating() && !leaving && clock >= flyingUntil;
@@ -333,6 +339,7 @@ export function wispFollow(to: Range | Element) {
         // Sized to the speech: fast reading gets a faint ripple, slow reading a full hop.
         const time = Math.min(hopTime(d), Math.max(0.09, 0.8 * interval));
         hop = { start: clock, time, height: hopHeight(d) * Math.min(1, interval / 0.28), from: { ...body.head }, carry: { ...body.arc } };
+        hopFresh = true;
       }
     }
   }
