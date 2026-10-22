@@ -3,25 +3,25 @@
 //
 // What it does. It slips out of the big ghost in the hero (or in from an edge, on screens without one) and
 // treats the page as somewhere to explore: it perches on the top edges of the things on it (the title, the
-// buttons, the example window, the code, the section headings), bobs a moment, settles with its eyes closed,
-// and after a while hops to another perch. Now and then it wanders off the edge of the screen and comes
+// example window and its tabs, the code, the section headings), bobs a moment, settles with its eyes closed,
+// and after a while hops to another perch. It lives on the page: scrolling carries it along with what it's
+// sitting on. Now and then it wanders off the edge of the screen and comes
 // back somewhere else. It is shy: bring the pointer near and it darts away to a perch far from you; chase it
 // and it hides off screen for a bit before sneaking back. On a touch screen, tap near it to shoo it.
 //
-// What it must never do. Sit on text or anything you'd read or press (it perches on top edges, in the space
-// above), take the pointer (its canvas ignores it), or cost anything when nobody is watching: it draws only
-// while it moves, stops when the tab is hidden, and settles into a still doze between hops. With reduced
-// motion it doesn't come out at all: here it is play, not help.
+// What it must never do. Get between you and the page: it never perches on a button or link, never sits on
+// text (only on top edges, in the space above), never darts about while you're heading for the call to
+// action, and its canvas ignores the pointer. Nor cost anything for the page: it is loaded after the page is
+// idle (and not at all with Save-Data or reduced motion: here it is play, not help), draws only while it
+// moves, and stops when the tab is hidden.
 
-import { prefersStill, WispBody, type Point } from "../shared/wisp-body.ts";
+import { prefersStill, viewWidth, WispBody, type Point } from "../shared/wisp-body.ts";
 
 /** Where it likes to perch: the visible things on the splash page, in rough reading order. */
 const PERCHES = [
   ".splash h1",
-  ".splash-actions .button",
-  ".splash-ghost",
   ".showcase h2",
-  ".showcase-tabs [role=tab]",
+  ".showcase-tabs",
   ".showcase-window",
   ".splash-fact h3",
   ".splash-grid h2",
@@ -31,9 +31,12 @@ const PERCHES = [
 const RADIUS = 6;
 /** Springs (stiffness per s²): a floaty flight, a quick dart away, a firm landing. */
 const SPRING = { flying: 55, fleeing: 95, perched: 140 } as const;
-/** How near the pointer may come before it darts (px), and how many darts in a while make it hide. */
+/** How near the pointer may come before it darts (px), how many darts in a while make it hide, and a breather between darts. */
 const SHY = 110;
 const CHASED = { darts: 3, withinMs: 8000 };
+const DART_COOLDOWN_MS = 700;
+/** Where the pointer is on its way to the call to action: no darting here, so the wisp never distracts from it. */
+const QUIET_ZONE = ".splash-actions";
 /** Seconds: a perch lasts this long, it bobs this long after landing, and it stays away this long. */
 const PERCH_FOR = [5, 11] as const;
 const BOB_FOR = 2.5;
@@ -47,6 +50,9 @@ const between = ([a, b]: readonly [number, number]) => a + Math.random() * (b - 
 export function startSplashWisp() {
   if (prefersStill()) return;
   const body = new WispBody("splash-wisp", { light: "--moon", ink: "--bg" });
+  /** Nothing moves (or draws) until it has come out. */
+  let started = false;
+  let lastDart = 0;
   let state: State = "away";
   let perch: Perch | null = null;
   let away: Point | null = null;
@@ -59,12 +65,12 @@ export function startSplashWisp() {
 
   const visible = (el: Element) => {
     const r = el.getBoundingClientRect();
-    return r.width > 24 && r.top > 40 && r.top < innerHeight - 40 && r.left > -1 && r.right < innerWidth + 1;
+    return r.width > 24 && r.top > 40 && r.top < innerHeight - 40 && r.left > -1 && r.right < viewWidth() + 1;
   };
   const perchPoint = (p: Perch): Point | null => {
     if (!p.el.isConnected) return null;
     const r = p.el.getBoundingClientRect();
-    return { x: r.left + r.width * p.u, y: r.top - RADIUS - 0.5 };
+    return { x: r.left + r.width * p.u + scrollX, y: r.top - RADIUS - 0.5 + scrollY };
   };
   const candidates = () => [...document.querySelectorAll(PERCHES)].filter(visible);
 
@@ -75,12 +81,14 @@ export function startSplashWisp() {
     return options.map((p) => ({ p, score: prefer(perchPoint(p)!) + Math.random() * 80 })).sort((a, b) => b.score - a.score)[0]!.p;
   }
 
-  /** A spot just past the nearest edge (or the edge away from `from`). */
+  /** A spot just past the nearest edge (or the edge away from `from`), in page coordinates. */
   function offscreen(from?: Point): Point {
-    const h = body.head;
-    const side = from ? (from.x < h.x ? "right" : "left") : h.x < innerWidth / 2 ? "left" : "right";
-    return { x: side === "left" ? -40 : innerWidth + 40, y: Math.min(innerHeight - 60, Math.max(60, h.y + (Math.random() - 0.5) * 120)) };
+    const h = { x: body.head.x - scrollX, y: body.head.y - scrollY };
+    const side = from ? (from.x < h.x ? "right" : "left") : h.x < viewWidth() / 2 ? "left" : "right";
+    return { x: (side === "left" ? -40 : viewWidth() + 40) + scrollX, y: Math.min(innerHeight - 60, Math.max(60, h.y + (Math.random() - 0.5) * 120)) + scrollY };
   }
+  /** While away it waits beside the screen, not the page: scrolling moves its hiding spot along. */
+  let lastScroll = { x: scrollX, y: scrollY };
 
   function goal(): Point {
     if (state === "away" || !perch) return away ?? offscreen();
@@ -94,7 +102,7 @@ export function startSplashWisp() {
   }
 
   function wake() {
-    if (raf || document.hidden) return;
+    if (!started || raf || document.hidden) return;
     last = performance.now();
     raf = requestAnimationFrame(frame);
   }
@@ -104,6 +112,13 @@ export function startSplashWisp() {
     const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
     last = now;
     clock += dt;
+    const dsx = scrollX - lastScroll.x;
+    const dsy = scrollY - lastScroll.y;
+    lastScroll = { x: scrollX, y: scrollY };
+    if (state === "away") {
+      body.shift(dsx, dsy);
+      if (away) away = { x: away.x + dsx, y: away.y + dsy };
+    }
     // The perch scrolled away: find another, or wander off.
     if (perch && state !== "away" && !visible(perch.el)) {
       perch = choosePerch((p) => -Math.hypot(p.x - body.head.x, p.y - body.head.y));
@@ -113,15 +128,16 @@ export function startSplashWisp() {
     const g = goal();
     const k = SPRING[state === "away" ? "flying" : state];
     body.step(dt, g, k, RADIUS);
-    // Landed.
-    if ((state === "flying" || state === "fleeing") && Math.hypot(g.x - body.head.x, g.y - body.head.y) < 1.5) {
+    // Landed: there and slowed down (not just passing through on an overshoot).
+    if ((state === "flying" || state === "fleeing") && Math.hypot(g.x - body.head.x, g.y - body.head.y) < 1.5 && Math.hypot(body.vel.x, body.vel.y) < 80) {
       state = "perched";
       landedAt = clock;
       schedule(between(PERCH_FOR), wander);
     }
-    body.draw();
+    body.draw({ x: -scrollX, y: -scrollY }, clock);
+    const screenX = body.head.x - scrollX;
     const resting = state === "perched" && clock - landedAt > BOB_FOR && body.settled(g, RADIUS);
-    const gone = state === "away" && (body.head.x < -30 || body.head.x > innerWidth + 30) && body.settled(g, RADIUS);
+    const gone = state === "away" && (screenX < -30 || screenX > viewWidth() + 30) && body.settled(g, RADIUS);
     if (!resting && !gone) raf = requestAnimationFrame(frame);
   }
 
@@ -154,7 +170,8 @@ export function startSplashWisp() {
     if (!p) return schedule(between(AWAY_FOR), comeBack);
     // In from whichever edge is nearer the perch.
     const at = perchPoint(p)!;
-    body.place({ x: at.x < innerWidth / 2 ? -30 : innerWidth + 30, y: Math.min(innerHeight - 40, Math.max(40, at.y + 60)) });
+    const sx = at.x - scrollX;
+    body.place({ x: (sx < viewWidth() / 2 ? -30 : viewWidth() + 30) + scrollX, y: Math.min(innerHeight - 40, Math.max(40, at.y - scrollY + 60)) + scrollY });
     flyTo(p);
   }
 
@@ -165,9 +182,12 @@ export function startSplashWisp() {
   }
 
   /** Something came too close: dart to the far side, or hide if it keeps happening. */
-  function startle(from: Point) {
-    if (state === "away") return;
+  function startle(screen: Point) {
     const now = performance.now();
+    // One dart per approach: not while it's already darting off, nor again a moment later.
+    if (state === "away" || state === "fleeing" || now - lastDart < DART_COOLDOWN_MS) return;
+    lastDart = now;
+    const from = { x: screen.x + scrollX, y: screen.y + scrollY };
     darts = [...darts.filter((t) => now - t < CHASED.withinMs), now];
     const dx = body.head.x - from.x;
     const dy = body.head.y - from.y;
@@ -183,34 +203,47 @@ export function startSplashWisp() {
     else goAway(from);
   }
 
-  addEventListener(
-    "pointermove",
-    (e) => {
-      if (e.pointerType !== "mouse" || state === "away") return;
-      if (Math.hypot(e.clientX - body.head.x, e.clientY - body.head.y) < SHY) startle({ x: e.clientX, y: e.clientY });
-    },
-    { passive: true },
-  );
-  addEventListener(
-    "pointerdown",
-    (e) => {
-      if (e.pointerType === "mouse" || state === "away") return;
-      if (Math.hypot(e.clientX - body.head.x, e.clientY - body.head.y) < SHY * 0.8) startle({ x: e.clientX, y: e.clientY });
-    },
-    { passive: true },
-  );
+  /** Near enough to startle, and not on the way to the call to action. */
+  const near = (e: PointerEvent, reach: number) => {
+    if (!started || state === "away") return false;
+    const zone = document.querySelector(QUIET_ZONE)?.getBoundingClientRect();
+    if (zone && e.clientX > zone.left - 40 && e.clientX < zone.right + 40 && e.clientY > zone.top - 40 && e.clientY < zone.bottom + 40) return false;
+    return Math.hypot(e.clientX - (body.head.x - scrollX), e.clientY - (body.head.y - scrollY)) < reach;
+  };
+  const onMove = (e: PointerEvent) => e.pointerType === "mouse" && near(e, SHY) && startle({ x: e.clientX, y: e.clientY });
+  const onTap = (e: PointerEvent) => e.pointerType !== "mouse" && near(e, SHY * 0.8) && startle({ x: e.clientX, y: e.clientY });
+  addEventListener("pointermove", onMove, { passive: true });
+  addEventListener("pointerdown", onTap, { passive: true });
   addEventListener("scroll", wake, { passive: true });
   addEventListener("resize", wake);
   document.addEventListener("visibilitychange", wake);
+  body.observe(wake);
+  // Reduced motion switched on mid-visit: it goes home for good.
+  const still = matchMedia("(prefers-reduced-motion: reduce)");
+  const stop = () => {
+    if (!still.matches) return;
+    started = false;
+    clearTimeout(timer);
+    cancelAnimationFrame(raf);
+    removeEventListener("pointermove", onMove);
+    removeEventListener("pointerdown", onTap);
+    removeEventListener("scroll", wake);
+    removeEventListener("resize", wake);
+    document.removeEventListener("visibilitychange", wake);
+    still.removeEventListener("change", stop);
+    body.dispose();
+  };
+  still.addEventListener("change", stop);
 
   // Out it comes: from the big ghost when there is one on screen, otherwise in from an edge.
-  window.setTimeout(() => {
-    const ghost = document.querySelector(".splash-ghost");
-    const r = ghost?.getBoundingClientRect();
-    if (r && r.width && visible(ghost!)) {
-      body.place({ x: r.left + r.width / 2, y: r.top + r.height * 0.45 }, { x: -60, y: -380 });
-      body.radius = 2;
-      flyTo(choosePerch((p) => -Math.hypot(p.x - (r.left + r.width / 2), p.y - r.top)));
-    } else comeBack();
-  }, 1600);
+  started = true;
+  lastScroll = { x: scrollX, y: scrollY };
+  const ghost = document.querySelector(".splash-ghost");
+  const r = ghost?.getBoundingClientRect();
+  if (r && r.width && visible(ghost!)) {
+    const from = { x: r.left + r.width / 2 + scrollX, y: r.top + r.height * 0.45 + scrollY };
+    body.place(from, { x: -60, y: -380 });
+    body.radius = 2;
+    flyTo(choosePerch((p) => -Math.hypot(p.x - from.x, p.y - from.y)));
+  } else comeBack();
 }

@@ -51,3 +51,30 @@ test("each spoken character maps back to the page, so a word can be marked", asy
   // The full stop Listen added maps to nothing on the page.
   expect(wordRange(0, units[0]!.text.length - 1, units[0]!.text.length)).toBeNull();
 });
+
+test("Follow: scrolling by hand turns it off (once), Listen's own scrolls and layout shifts don't, and tapping a paragraph turns it back on", async () => {
+  const { speakMode, collectSpeech: collect } = await import("./speak.ts");
+  document.body.innerHTML = `<div id="root"><p>First paragraph.</p><p>Second paragraph.</p><button>Press</button></div>`;
+  collect(document.getElementById("root")!);
+  const sent: unknown[] = [];
+  speakMode(true, (m) => sent.push(m));
+  const scroll = () => window.dispatchEvent(new Event("scroll"));
+  // A scroll nobody asked for (a late image, a layout shift): Follow stays on.
+  scroll();
+  expect(sent).toEqual([]);
+  // Space on a button works the button; it isn't scrolling.
+  document.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+  scroll();
+  expect(sent).toEqual([]);
+  // A wheel, then the scroll it causes: off, told once.
+  window.dispatchEvent(new Event("wheel"));
+  scroll();
+  window.dispatchEvent(new Event("wheel"));
+  scroll();
+  expect(sent).toEqual([{ t: "speak:follow", on: false }]);
+  // Tapping a paragraph to read from asks to follow it again, then jumps there.
+  (document.querySelectorAll("p")[1] as HTMLElement).click();
+  expect(sent.slice(1)).toEqual([{ t: "speak:follow", on: true }, { t: "speak:jump", i: 1 }]);
+  speakMode(false, () => {});
+  expect(document.querySelector("[data-speak-i]")).toBeNull();
+});

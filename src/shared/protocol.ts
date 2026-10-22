@@ -74,9 +74,9 @@ export type ShellMessage =
   | { t: "print"; title: string; meta: string }
   /** Listen: collect the page's readable text (the frame answers speak:units). */
   | { t: "speak:collect" }
-  /** Listen: mark the block being read (null clears); `on` turns tap-to-jump on or off. */
+  /** Listen: mark the block being read (null clears). */
   | { t: "speak:at"; i: number | null }
-  /** Listen: the word about to be spoken, [start, end) in unit `i`'s text; the wisp hops there (null: none). */
+  /** Listen: the word about to be heard, [start, end) in unit `i`'s text; the wisp hops there (null: none, it stays put). */
   | { t: "speak:word"; i: number | null; start: number; end: number }
   /** Listen: what the voice is doing, so the wisp tracks words or floats. */
   | { t: "speak:state"; state: "playing" | "waiting" | "resting" }

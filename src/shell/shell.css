@@ -1086,7 +1086,10 @@ select.input, select.om-select, .profile select {
   font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
   transition: color var(--motion-fast) var(--motion-ease), background-color var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease);
 }
-.listen-follow[aria-pressed="true"] { color: var(--fg); background: var(--muted); border-color: color-mix(in oklab, var(--input) 60%, var(--border)); }
+/* On: your setting, so your iris, with the arrow; off: an outline, the arrow gone (the icon changes too, so colour isn't the only sign). */
+.listen-follow { border-color: var(--input); }
+.listen-follow[aria-pressed="true"] { color: var(--primary); background: color-mix(in oklab, var(--primary) 12%, transparent); border-color: color-mix(in oklab, var(--primary) 55%, transparent); }
+.listen-follow-icon { display: inline-grid; place-items: center; }
 @media (hover: hover) { .listen-follow:hover { color: var(--fg); } }
 .listen-follow:active { background: color-mix(in oklab, var(--input) 40%, var(--muted)); }
 

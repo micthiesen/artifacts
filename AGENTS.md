@@ -116,8 +116,10 @@ where a test can catch them; keep the rest by hand.
 - Animate things arriving, leaving and moving, and other people's changes
   reaching the page. Never animate on page load, on scroll, or for
   decoration. The splash page's drifting ghost and its wisp
-  (`src/shell/splash-wisp.ts`, shy, perching on edges, never on text, off
-  under reduced motion) are the exceptions.
+  (`src/shell/splash-wisp.ts`) are the exceptions, on the splash page only.
+  The wisp comes out once the page is idle, perches on top edges (never on
+  text, buttons or links), darts away from a nearby pointer except on the way
+  to the call to action, and is absent under reduced motion or Save-Data.
 - Keyboard-driven and very frequent actions (typing, arrowing, hovering a
   list) get colour changes at most, not movement.
 - Animate `transform` and `opacity`; never animate layout (height, width,

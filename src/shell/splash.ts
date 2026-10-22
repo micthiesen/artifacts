@@ -6,7 +6,6 @@
 import type { FrameMessage, JsonValue, ShellMessage } from "../shared/protocol.ts";
 import { PEOPLE, seedValue, type SeedEntry } from "../../demo/examples.ts";
 import { PALETTE } from "../shared/who.ts";
-import { startSplashWisp } from "./splash-wisp.ts";
 
 const YOU = "you@example.com";
 const seeds = JSON.parse(document.getElementById("demo-seed")?.textContent ?? "{}") as Record<string, SeedEntry[]>;
@@ -99,5 +98,17 @@ if (first) {
   } else load(first);
 }
 
-// The wisp, out to play (src/shell/splash-wisp.ts).
-startSplashWisp();
+// The wisp, out to play (src/shell/splash-wisp.ts): its own small file, fetched once the page has settled,
+// and not at all for people who asked for reduced motion or to save data.
+const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData === true;
+if (!saveData && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const idle = (fn: () => void) => ("requestIdleCallback" in window ? requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 200));
+  setTimeout(
+    () =>
+      idle(() => {
+        const url = `/static/splash-wisp.js${new URL(import.meta.url).search}`;
+        void import(/* @vite-ignore */ url).then((m: { startSplashWisp: () => void }) => m.startSplashWisp()).catch(() => {});
+      }),
+    1600,
+  );
+}

@@ -18,16 +18,18 @@
 // - It is drawn small while it tracks words (so it fits in the gap between lines without covering letters)
 //   and grows a little when it floats. When it pauses beside a word it steps out into the margin to the left
 //   of that line, so it keeps your place without sitting on anything you're reading.
-// - If the word being read is scrolled out of view, the wisp waits at the edge of the screen nearest to it,
-//   peeking, so you can see where the reading is.
+// - It lives on the page, not the screen: scrolling carries it along with the text, so scrolling alone never
+//   sets its tail streaming. If the reading is scrolled out of view, it waits at that edge of the screen, in
+//   the margin, and keeps watch there (no hopping along to each word) until the reading comes back.
+// - A word with no box right now (inside something collapsed) never sends it anywhere: it stays put.
 // - Reduced motion: no flight, hop, bob or tail. It sits on its spot, appears when Listen starts and goes
 //   when it closes.
 //
 // How it's drawn: src/shared/wisp-body.ts (the same body as the splash page's wisp). This file is what it
 // does here. It paints only while something moves: the loop stops once it has landed, and when it has
-// floated for a while it settles into a doze (still, eyes closed) until the next word, scroll or state.
+// floated for a while it stops bobbing and rests, still, until the next word, scroll, reflow or state.
 
-import { prefersStill, WispBody, type Point } from "../shared/wisp-body.ts";
+import { prefersStill, viewWidth, WispBody, type Point } from "../shared/wisp-body.ts";
 
 export type WispMood = "tracking" | "resting" | "waiting";
 
@@ -60,41 +62,88 @@ let clock = 0;
 let floated = 0;
 
 addEventListener("resize", () => wake());
-// The page scrolling moves its words under the wisp: let it catch up.
+// The page scrolling carries the wisp along (it lives on the page); redraw it where it now is.
 addEventListener("scroll", () => wake(), { capture: true, passive: true });
 
-const floating = () => mood !== "tracking" || !(target instanceof Range);
+const floating = () => mood !== "tracking" || !(target instanceof Range) || parked;
 
-/** Where the wisp wants to be: over its word (in the gap above the line), or floating above its block. */
+/** The page's scroll: the wisp lives on the page (so scrolling carries it along), and is drawn at page minus scroll. */
+const scroll = (): Point => ({ x: scrollX, y: scrollY });
+let lastScroll: Point = { x: 0, y: 0 };
+/** True while the word being read is scrolled out of view and the wisp waits at the screen's edge. */
+let parked = false;
+/** The last good spot on the page, kept when a word has no box right now (inside something collapsed). */
+let lastSpot: Point | null = null;
+
+/**
+ * The margin left of the reading column beside `el`, where the wisp waits without covering anything (screen
+ * x), or null when there's no room for it there (a narrow phone, a full-width block).
+ */
+function marginX(el: Element | null): number | null {
+  const block = (el?.closest("[data-speak-i]") ?? el)?.getBoundingClientRect();
+  const x = block ? block.left - R_FLOAT - 8 : 0;
+  return x >= R_FLOAT + 4 ? x : null;
+}
+/** With no margin, it waits small in the gap above the line, as it does while reading. */
+let cramped = false;
+
+/** The gap above a word's line (half the line's leading), worked out once per word. */
+let gapFor: { range: Range; gap: number } | null = null;
+function lineGap(range: Range, height: number): number {
+  if (gapFor?.range === range) return gapFor.gap;
+  const host = range.startContainer.parentElement;
+  const lh = host ? parseFloat(getComputedStyle(host).lineHeight) : NaN;
+  const gap = Number.isFinite(lh) ? Math.max(3, (lh - height) / 2) : 4;
+  gapFor = { range, gap };
+  return gap;
+}
+
+/**
+ * Where the wisp wants to be, in page coordinates: over its word (in the gap above the line), beside it in the
+ * margin while it waits, a little above a block with no words, or (when the reading is scrolled out of view)
+ * at the nearest edge of the screen, in the margin, until the reading comes back.
+ */
 function spot(): Point {
-  const head = body!.head;
+  const sc = scroll();
+  parked = false;
+  cramped = false;
   // Leaving: down past the bottom edge, under the tray.
-  if (leaving) return { x: Math.min(innerWidth - EDGE, Math.max(EDGE, head.x)), y: innerHeight + 40 };
-  let p: Point = { x: innerWidth / 2, y: innerHeight * 0.4 };
+  if (leaving) return { x: body!.head.x, y: sc.y + innerHeight + 40 };
+  let p: Point | null = null;
   if (target instanceof Range) {
     const r = target.getClientRects()[0] ?? target.getBoundingClientRect();
-    if (r && (r.width || r.height)) {
-      const host = target.startContainer.parentElement;
-      const lh = host ? parseFloat(getComputedStyle(host).lineHeight) : NaN;
-      const gap = Number.isFinite(lh) ? Math.max(3, (lh - r.height) / 2) : 4;
-      p = { x: r.left + r.width / 2, y: r.top - gap - 1 };
+    const host = target.startContainer.parentElement;
+    if (r && (r.width || r.height) && target.startContainer.isConnected) {
+      const margin = marginX(host);
+      const above = { x: r.left + r.width / 2, y: r.top - lineGap(target, r.height) - 1 };
+      if (r.bottom < 0 || r.top > innerHeight) {
+        // Out of view: wait at that edge, in the margin (or over the column's start on a narrow screen), on
+        // screen. It doesn't follow each word along the edge; it keeps watch until the reading scrolls back.
+        parked = true;
+        const y = r.bottom < 0 ? EDGE + R_FLOAT : innerHeight - EDGE - R_FLOAT;
+        p = { x: margin ?? EDGE + R_FLOAT, y };
+      } else if (floating() && margin !== null) {
+        // Paused or waiting: step out into the margin beside the line.
+        p = { x: margin, y: r.top + r.height / 2 };
+      } else {
+        // Reading, or waiting with no margin to step into: just above the word, in the gap between lines.
+        cramped = floating();
+        p = above;
+      }
     }
   } else if (target instanceof Element && target.isConnected) {
     const r = target.getBoundingClientRect();
-    p = { x: r.left + Math.min(r.width / 2, 48), y: r.top - 4 };
+    if (r.width || r.height) p = { x: r.left + Math.min(r.width / 2, 48), y: r.top - FLOAT_LIFT };
   }
+  // Nothing with a box right now (a word inside something collapsed, or nothing yet): stay where it was.
+  if (!p) return lastSpot ?? { ...body!.head };
   if (floating()) {
-    // Not pointing at a word. Beside a word (paused, waiting): it steps out into the margin to the left of
-    // the line, so it keeps the place without covering anything. Over a block with no words: a little above it.
-    if (target instanceof Range) {
-      const r = target.getClientRects()[0] ?? target.getBoundingClientRect();
-      const block = (target.startContainer.parentElement?.closest("[data-speak-i]") ?? target.startContainer.parentElement)?.getBoundingClientRect();
-      if (r && block) p = { x: Math.max(R_FLOAT + 3, block.left - R_FLOAT - 8), y: r.top + r.height / 2 };
-    } else p = { x: p.x, y: p.y - FLOAT_LIFT };
-    const bob = prefersStill() || floated > DOZE_AFTER ? 0 : 1;
+    const bob = prefersStill() || floated > DOZE_AFTER ? 0 : cramped ? 0.35 : 1;
     p = { x: p.x + Math.sin(clock * BOB.speed * 0.5) * BOB.x * bob, y: p.y + Math.sin(clock * BOB.speed) * BOB.y * bob };
   }
-  return { x: Math.min(innerWidth - EDGE, Math.max(EDGE, p.x)), y: Math.min(innerHeight - EDGE, Math.max(EDGE, p.y)) };
+  const x = Math.min(viewWidth() - EDGE, Math.max(EDGE, p.x));
+  lastSpot = { x: x + sc.x, y: p.y + sc.y };
+  return lastSpot;
 }
 
 function wake() {
@@ -109,14 +158,18 @@ function frame(now: number) {
   const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
   last = now;
   clock += dt;
-  floated = floating() ? floated + dt : 0;
+  const sc = scroll();
+  // Waiting at the screen's edge, it stays put on screen while the page scrolls under it.
+  if (parked) body.shift(sc.x - lastScroll.x, sc.y - lastScroll.y);
+  lastScroll = sc;
   const goal = spot();
-  const size = floating() ? R_FLOAT : R_TRACK;
+  floated = floating() ? floated + dt : 0;
+  const size = floating() && !cramped ? R_FLOAT : R_TRACK;
   const still = prefersStill();
-  body.step(dt, goal, SPRING[leaving ? "leaving" : mood], size, still);
-  body.draw();
+  body.step(dt, goal, SPRING[leaving ? "leaving" : parked ? "waiting" : mood], size, still);
+  body.draw({ x: -sc.x, y: -sc.y }, clock);
   // Gone under the tray: stop and clear.
-  if (leaving && body.head.y > innerHeight + 30) return finishLeaving();
+  if (leaving && body.head.y - sc.y > innerHeight + 30) return finishLeaving();
   const bobbing = floating() && !still && floated <= DOZE_AFTER;
   if (leaving || bobbing || !body.settled(goal, size)) raf = requestAnimationFrame(frame);
 }
@@ -125,17 +178,26 @@ function finishLeaving() {
   present = false;
   leaving = false;
   target = null;
+  gapFor = null;
   cancelAnimationFrame(raf);
   raf = 0;
-  body?.clear();
+  // Its canvas goes too, so a closed Listen keeps no full-screen bitmap around.
+  body?.dispose();
+  body = null;
 }
 
 /** Listen started: the wisp rises out from under the tray, toward wherever the reading is. */
 export function wispArrive() {
-  if (!body?.connected) body = new WispBody("art-wisp", { light: "--foreground", ink: "--background" });
+  if (!body?.connected) {
+    body?.dispose();
+    body = new WispBody("art-wisp", { light: "--foreground", ink: "--background" });
+    body.observe(wake);
+  }
   if (present && !leaving) return;
   if (!present) {
-    body.place({ x: innerWidth / 2, y: innerHeight + 24 }, { x: 0, y: -380 });
+    lastScroll = scroll();
+    lastSpot = null;
+    body.place({ x: viewWidth() / 2 + lastScroll.x, y: innerHeight + 24 + lastScroll.y }, { x: 0, y: -380 });
     body.radius = R_FLOAT;
     mood = "waiting";
     target = null;
@@ -162,10 +224,10 @@ export function wispFollow(to: Range | Element) {
   const before = target;
   target = to;
   floated = 0;
-  // A new word: a hop up, bigger for a longer way to go.
-  if (to instanceof Range && before !== to && mood === "tracking" && !prefersStill()) {
+  // A new word: a hop up, bigger for a longer way to go (not while it waits at the edge for the reading).
+  if (to instanceof Range && before !== to && mood === "tracking" && !parked && !prefersStill()) {
     const r = to.getBoundingClientRect();
-    body.vel.y -= kick(Math.hypot(r.left + r.width / 2 - body.head.x, r.top - body.head.y));
+    if (r.bottom >= 0 && r.top <= innerHeight) body.vel.y -= kick(Math.hypot(r.left + r.width / 2 + scrollX - body.head.x, r.top + scrollY - body.head.y));
   }
   wake();
 }

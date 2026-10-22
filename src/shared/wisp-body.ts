@@ -16,14 +16,14 @@ export type Point = { x: number; y: number };
  * tail), and how far apart two may get, in head radii, so even a fast flight trails a teardrop, never a
  * streak across the page.
  */
-const TAIL = 14;
-const TAIL_FOLLOW = 26;
-const TAIL_GAP = 0.9;
+const TAIL = 12;
+const TAIL_FOLLOW = 22;
+const TAIL_GAP = 0.85;
 const DAMPING = 0.72;
 /** It never flies faster than this (px/s), so a long way is a flight, not a teleport. */
 const MAX_SPEED = 2600;
 
-/** The logo's blush (src/shell/icons/logo.svg). */
+/** The logo's blush (src/shell/icons/logo.svg, at its 0.45 opacity). */
 const BLUSH = "#ff7ab0";
 
 export class WispBody {
@@ -38,6 +38,7 @@ export class WispBody {
   private ink = "#13161d";
   private dpr = 1;
   private onResize = () => this.resize();
+  private observer: ResizeObserver | null = null;
 
   /** `colours`: the theme's custom properties for the body and for its eyes. */
   constructor(className: string, colours: { light: string; ink: string }) {
@@ -53,7 +54,26 @@ export class WispBody {
     addEventListener("resize", this.onResize);
   }
 
-  /** A theme colour as the canvas understands it, or the fallback when the canvas can't parse it. */
+  /** Watches the page for reflows (late images, fonts), so a wisp at rest can catch up with what it sits on. */
+  observe(onChange: () => void) {
+    this.observer?.disconnect();
+    if (typeof ResizeObserver === "undefined") return;
+    this.observer = new ResizeObserver(onChange);
+    this.observer.observe(document.body);
+  }
+
+  /** Gone for good: its canvas (and its memory) and its listeners. */
+  dispose() {
+    removeEventListener("resize", this.onResize);
+    this.observer?.disconnect();
+    this.canvas.width = this.canvas.height = 0;
+    this.canvas.remove();
+  }
+
+  /**
+   * A theme colour as the canvas understands it, or the fallback when the canvas can't parse it (setting an
+   * unparsable fillStyle leaves the previous one, so a value the canvas rejects reads back as the fallback).
+   */
   private themeColour(name: string, fallback: string): string {
     const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     if (!this.ctx || !value) return fallback;
@@ -80,9 +100,10 @@ export class WispBody {
     return c;
   }
 
+  /** Sized to the box the canvas actually has (the viewport without a classic scrollbar), at the screen's density. */
   resize() {
     this.dpr = Math.min(3, devicePixelRatio || 1);
-    this.canvas.width = Math.round(innerWidth * this.dpr);
+    this.canvas.width = Math.round(viewWidth() * this.dpr);
     this.canvas.height = Math.round(innerHeight * this.dpr);
   }
 
@@ -129,19 +150,42 @@ export class WispBody {
     this.radius += (size - this.radius) * (1 - Math.exp(-8 * dt));
   }
 
-  /** At rest on `goal`: not moving, tail gathered, the size it wants. */
+  /** At rest on `goal`: not moving, tail gathered, the size it wants. Settling snaps the last fraction of a pixel. */
   settled(goal: Point, size: number): boolean {
-    return (
+    const done =
       Math.hypot(this.vel.x, this.vel.y) < 2 &&
-      Math.hypot(goal.x - this.head.x, goal.y - this.head.y) < 0.3 &&
-      this.tail.every((p) => Math.hypot(p.x - this.head.x, p.y - this.head.y) < 0.3) &&
-      Math.abs(size - this.radius) < 0.05
-    );
+      Math.hypot(goal.x - this.head.x, goal.y - this.head.y) < 0.4 &&
+      this.tail.every((p) => Math.hypot(p.x - this.head.x, p.y - this.head.y) < 0.6) &&
+      Math.abs(size - this.radius) < 0.05;
+    if (done) {
+      this.place(goal);
+      this.radius = size;
+      this.draw(this.lastOffset, this.lastTime);
+    }
+    return done;
   }
 
-  draw() {
-    const { ctx, canvas, head, vel, radius } = this;
+  private lastOffset: Point = { x: 0, y: 0 };
+  private lastTime = 0;
+
+  /** Moves the whole body by (dx, dy) at once, tail and all: for when what it sits on moves (the page scrolling). */
+  shift(dx: number, dy: number) {
+    if (!dx && !dy) return;
+    this.head = { x: this.head.x + dx, y: this.head.y + dy };
+    this.tail = this.tail.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+  }
+
+  /**
+   * Paints it. Its coordinates are its owner's (the page's, so it rides along when the page scrolls);
+   * `offset` turns them into the screen's.
+   */
+  draw(offset: Point = { x: 0, y: 0 }, time = 0) {
+    const { ctx, canvas, vel, radius } = this;
     if (!ctx) return;
+    this.lastOffset = offset;
+    this.lastTime = time;
+    const head = { x: this.head.x + offset.x, y: this.head.y + offset.y };
+    const tail = this.tail.map((p) => ({ x: p.x + offset.x, y: p.y + offset.y }));
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -149,18 +193,29 @@ export class WispBody {
       const g = radius * 5.5;
       ctx.drawImage(this.glow, head.x - g, head.y - g, g * 2, g * 2);
     }
-    // The tail: tapering discs along the chain, close enough together to read as one body.
+    // The tail: the hem of a ghost's sheet, not a line. It stays nearly as wide as the head for most of its
+    // length and rounds off at the end, rippling a little from side to side as it goes. Drawn as discs along
+    // the chain, close enough together to read as one soft body.
     const body = new Path2D();
+    const speed = Math.hypot(vel.x, vel.y);
+    const ripple = Math.min(1, speed / 500) * radius * 0.28;
     let prev = head;
-    for (let i = 0; i < this.tail.length; i++) {
-      const p = this.tail[i]!;
-      const r = radius * 0.92 * (1 - (i + 1) / (this.tail.length + 1)) ** 1.15;
-      const d = Math.hypot(p.x - prev.x, p.y - prev.y);
-      const steps = Math.min(40, Math.max(1, Math.ceil(d / Math.max(0.6, r * 0.45))));
+    let along = 0;
+    const n = tail.length;
+    for (let i = 0; i < n; i++) {
+      const p = tail[i]!;
+      const dx = p.x - prev.x;
+      const dy = p.y - prev.y;
+      const d = Math.hypot(dx, dy);
+      const steps = Math.min(40, Math.max(1, Math.ceil(d / Math.max(0.6, radius * 0.3))));
       for (let s = 1; s <= steps; s++) {
-        const t = s / steps;
-        const x = prev.x + (p.x - prev.x) * t;
-        const y = prev.y + (p.y - prev.y) * t;
+        const t = (i + s / steps) / n;
+        const r = radius * 0.94 * (1 - t ** 2.2) ** 0.75;
+        if (r < 0.3) continue;
+        along += d / steps;
+        const wave = d > 0 ? Math.sin(time * 14 - along * 0.35) * ripple * t : 0;
+        const x = prev.x + dx * (s / steps) + (d > 0 ? (-dy / d) * wave : 0);
+        const y = prev.y + dy * (s / steps) + (d > 0 ? (dx / d) * wave : 0);
         body.moveTo(x + r, y);
         body.arc(x, y, r, 0, Math.PI * 2);
       }
@@ -170,7 +225,6 @@ export class WispBody {
     ctx.globalAlpha = 0.82;
     ctx.fill(body);
     // The head: stretched along its flight, squashed across it.
-    const speed = Math.hypot(vel.x, vel.y);
     const stretch = 1 + Math.min(0.38, speed / 1400);
     ctx.globalAlpha = 1;
     ctx.save();
@@ -181,12 +235,13 @@ export class WispBody {
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-    // Still enough to see its face: the logo's happy closed eyes.
-    const calm = Math.max(0, 1 - speed / 70);
-    if (calm > 0.05 && radius > 4) {
+    // Still enough, and big enough, to see its face: the logo's happy closed eyes and blush, fading in as it
+    // slows and grows (so they never flicker on the small hops between words).
+    const face = Math.max(0, 1 - speed / 70) * Math.min(1, Math.max(0, (radius - 5.6) / 0.8));
+    if (face > 0.05) {
       ctx.save();
       ctx.translate(head.x, head.y);
-      ctx.globalAlpha = calm * 0.85;
+      ctx.globalAlpha = face * 0.85;
       ctx.strokeStyle = this.ink;
       ctx.lineWidth = Math.max(0.8, radius * 0.17);
       ctx.lineCap = "round";
@@ -195,15 +250,12 @@ export class WispBody {
         ctx.arc(side * radius * 0.36, radius * 0.06, radius * 0.2, Math.PI * 1.15, Math.PI * 1.85);
         ctx.stroke();
       }
-      // And its blush, once it's big enough to see.
-      if (radius >= 5.5) {
-        ctx.fillStyle = BLUSH;
-        ctx.globalAlpha = calm * 0.7;
-        for (const side of [-1, 1]) {
-          ctx.beginPath();
-          ctx.ellipse(side * radius * 0.5, radius * 0.36, radius * 0.16, radius * 0.1, 0, 0, Math.PI * 2);
-          ctx.fill();
-        }
+      ctx.fillStyle = BLUSH;
+      ctx.globalAlpha = face * 0.45;
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.ellipse(side * radius * 0.5, radius * 0.36, radius * 0.16, radius * 0.1, 0, 0, Math.PI * 2);
+        ctx.fill();
       }
       ctx.restore();
     }
@@ -215,5 +267,8 @@ export class WispBody {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 }
+
+/** The viewport's width without a classic scrollbar: what a fixed, full-width element actually covers. */
+export const viewWidth = () => document.documentElement.clientWidth || innerWidth;
 
 export const prefersStill = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;

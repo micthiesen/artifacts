@@ -3,22 +3,25 @@
 // read the way they look. Each unit is one block; its element gets
 // data-speak-i so the shell can mark it while it is read and the reader can
 // tap a block to start there. Every character of a unit remembers the text
-// node it came from, so the word being spoken can be marked too (with the CSS
-// Custom Highlight API, which leaves the DOM alone).
+// node it came from, so the wisp (src/kit/wisp.ts) can hop to the exact word
+// being spoken.
 //
 // Components can steer it: data-speak="skip" leaves an element out,
 // data-speak="<kind>" reads it as one unit (stat, chart, diagram), and
 // aria-hidden content is never read.
 
 import type { FrameMessage, SpeakUnit } from "../shared/protocol.ts";
-import { wispArrive, wispFollow, wispLeave, wispMood } from "./wisp.ts";
+// The wisp is loaded the first time someone listens, so pages nobody listens to don't carry it.
+type Wisp = typeof import("./wisp.ts");
+let wisp: Wisp | null = null;
+let wispLoading: Promise<Wisp> | null = null;
+const loadWisp = () => (wispLoading ??= import("./wisp.ts").then((m) => (wisp = m)));
 
 const SKIP =
   "script,style,template,svg,canvas,button,input,textarea,select,nav,[hidden],[aria-hidden='true'],[data-speak='skip'],.art-contents,.art-linked-from,[role='tablist']";
 const BLOCK = "h1,h2,h3,h4,h5,h6,p,li,pre,table,blockquote,figure,dt,dd,[data-speak],[role='note']";
 const TONES: Record<string, string> = { warning: "Warning.", danger: "Caution." };
 const INLINE = new Set(["A", "ABBR", "B", "BDI", "CITE", "CODE", "DATA", "EM", "I", "KBD", "LABEL", "MARK", "Q", "S", "SMALL", "SPAN", "STRONG", "SUB", "SUP", "TIME", "U", "VAR"]);
-const WORD_HIGHLIGHT = "art-speak-word";
 
 /** A unit's text as it is spoken, with the text node and offset each character came from (null for added words and pauses). */
 class Spoken {
@@ -269,7 +272,6 @@ let following = true;
 /** Until when a scroll is Listen's own (a smooth scroll runs a while); any other scroll is the reader's. */
 let ownScrollUntil = 0;
 const scrolling = () => (ownScrollUntil = Date.now() + 1200);
-const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 const scrollBehavior = (): ScrollBehavior => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
 
 /** The reader scrolled by hand: stop following and tell the tray. */
@@ -278,8 +280,16 @@ function userScroll() {
   following = false;
   notify({ t: "speak:follow", on: false });
 }
-const onScroll = () => Date.now() > ownScrollUntil && userScroll();
-const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && !(e.target as Element | null)?.closest?.("input,textarea,select,[contenteditable]") && userScroll();
+// A scroll is the reader's only when they just did something that scrolls: a wheel, a swipe, a scroll key
+// (not one that works a control: Space on a button, arrows in tabs or a slider), or a press on the
+// scrollbar. Layout shifts, late images and Listen's own scrolling never count.
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+const CONTROLS = "input,textarea,select,button,a,summary,[contenteditable],[role]";
+let intentAt = 0;
+const intent = () => (intentAt = Date.now());
+const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && !(e.target as Element | null)?.closest?.(CONTROLS) && intent();
+const userPress = (e: PointerEvent) => (e.target === document.documentElement || e.target === document.scrollingElement) && intent();
+const onScroll = () => Date.now() - intentAt < 400 && Date.now() > ownScrollUntil && userScroll();
 
 /**
  * What glows for a block: the block itself, or, when it is a plain wrapper around one shaped box (a Summary,
@@ -300,12 +310,14 @@ function glowTarget(el: Element): Element {
 
 /** Brings the block (or, in a block taller than the screen, the word) into view, when following. */
 function keepInView() {
-  if (!following || !current) return;
+  // Not while a scroll of Listen's own is still on its way.
+  if (!following || !current || Date.now() < ownScrollUntil) return;
   const r = current.getBoundingClientRect();
   if (r.top < 0 || r.bottom > innerHeight) {
     if (r.height > innerHeight * 0.6 && wordAt) {
+      if (!wordAt.startContainer.isConnected) return;
       const w = wordAt.getBoundingClientRect();
-      if (w.height && w.top >= 0 && w.bottom <= innerHeight - 24) return;
+      if (!w.height || (w.top >= 0 && w.bottom <= innerHeight - 24)) return;
       scrolling();
       scrollBy({ top: w.top - innerHeight * 0.35, behavior: scrollBehavior() });
       return;
@@ -324,7 +336,7 @@ export function markSpeaking(i: number | null) {
   if (!unit) return;
   // A block with nothing of its own to point at (a table or chart read as a summary): the wisp floats over it.
   // Otherwise it stays where it is until the first word, and hops there.
-  if (!unit.spoken.nodes.some(Boolean)) wispFollow(unit.el);
+  if (!unit.spoken.nodes.some(Boolean)) wisp?.wispFollow(unit.el);
   if (!current) return;
   // Shaped boxes keep their own corners; anything square gets softly rounded ones.
   current.setAttribute("data-speaking", parseFloat(getComputedStyle(current).borderTopLeftRadius) > 0 ? "" : "round");
@@ -374,13 +386,15 @@ export function markWord(i: number | null, start: number, end: number) {
   const range = wordRange(i, start, end);
   if (!range) return checkStale(i);
   wordAt = range;
-  wispFollow(range);
+  wisp?.wispFollow(range);
   keepInView();
 }
 
 /** The voice's state, for the wisp: tracking words while it speaks, floating while it waits or rests. */
+let mood: "tracking" | "waiting" | "resting" = "waiting";
 export function speakState(state: "playing" | "waiting" | "resting") {
-  wispMood(state === "playing" ? "tracking" : state === "waiting" ? "waiting" : "resting");
+  mood = state === "playing" ? "tracking" : state === "waiting" ? "waiting" : "resting";
+  wisp?.wispMood(mood);
 }
 
 /** Follow turned on (or off) from the tray: on brings the reading back into view. */
@@ -400,24 +414,32 @@ export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
   if (tapping) document.removeEventListener("click", tapping, true);
   tapping = null;
   notify = on ? send : null;
-  removeEventListener("wheel", userScroll);
-  removeEventListener("touchmove", userScroll);
+  removeEventListener("wheel", intent);
+  removeEventListener("touchmove", intent);
   removeEventListener("keydown", userKey);
+  removeEventListener("pointerdown", userPress);
   removeEventListener("scroll", onScroll, true);
+  const already = document.documentElement.hasAttribute("data-listening");
   document.documentElement.toggleAttribute("data-listening", on);
   if (!on) {
-    wispLeave();
+    wisp?.wispLeave();
     markSpeaking(null);
     for (const u of units) u.el.removeAttribute("data-speak-i");
     units = [];
     out = [];
     return;
   }
-  following = true;
-  wispArrive();
-  addEventListener("wheel", userScroll, { passive: true });
-  addEventListener("touchmove", userScroll, { passive: true });
+  // Already listening (the shell asked again after the page changed): keep Follow as the tray has it.
+  if (!already) following = true;
+  void loadWisp().then((w) => {
+    if (!notify) return;
+    w.wispArrive();
+    w.wispMood(mood);
+  });
+  addEventListener("wheel", intent, { passive: true });
+  addEventListener("touchmove", intent, { passive: true });
   addEventListener("keydown", userKey);
+  addEventListener("pointerdown", userPress, { passive: true });
   // Scrollbar drags and anything else that scrolls by hand (capture: inner scrolling areas too).
   addEventListener("scroll", onScroll, { capture: true, passive: true });
   tapping = (e) => {
