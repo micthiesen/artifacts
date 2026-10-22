@@ -6,6 +6,7 @@
 import type { FrameMessage, JsonValue, ShellMessage } from "../shared/protocol.ts";
 import { PEOPLE, seedValue, type SeedEntry } from "../../demo/examples.ts";
 import { PALETTE } from "../shared/who.ts";
+import { startSplashWisp } from "./splash-wisp.ts";
 
 const YOU = "you@example.com";
 const seeds = JSON.parse(document.getElementById("demo-seed")?.textContent ?? "{}") as Record<string, SeedEntry[]>;
@@ -97,3 +98,6 @@ if (first) {
     io.observe(first);
   } else load(first);
 }
+
+// The wisp, out to play (src/shell/splash-wisp.ts).
+startSplashWisp();

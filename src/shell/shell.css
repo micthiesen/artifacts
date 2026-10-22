@@ -797,6 +797,8 @@ div.thread-anchor { cursor: default; }
 }
 @keyframes drift { 50% { transform: translateY(-10px) rotate(-2deg); } }
 @media (prefers-reduced-motion: reduce) { .splash-ghost { animation: none !important; } }
+/* The splash page's wisp (src/shell/splash-wisp.ts): one canvas over the page that never takes the pointer. */
+.splash-wisp { position: fixed; inset: 0; z-index: 20; width: 100%; height: 100%; pointer-events: none; }
 
 /* Examples: the source an agent wrote beside the page it renders. */
 .showcase { margin-top: 4.5rem; scroll-margin-top: 1.5rem; }

@@ -16,112 +16,58 @@
 //   into one round blob.
 // - It squashes and stretches along its flight and, when it's still, shows the logo's happy closed eyes.
 // - It is drawn small while it tracks words (so it fits in the gap between lines without covering letters)
-//   and grows a little when it floats.
+//   and grows a little when it floats. When it pauses beside a word it steps out into the margin to the left
+//   of that line, so it keeps your place without sitting on anything you're reading.
 // - If the word being read is scrolled out of view, the wisp waits at the edge of the screen nearest to it,
 //   peeking, so you can see where the reading is.
 // - Reduced motion: no flight, hop, bob or tail. It sits on its spot, appears when Listen starts and goes
 //   when it closes.
 //
-// How it's drawn. One fixed, full-screen canvas that ignores the pointer, painted only while something is
-// moving: the loop stops when the wisp has settled and starts again on the next word, scroll or state.
-// The shape is a tapered run of discs along the tail (one filled path, so it reads as a single soft body)
-// with a small radial glow under the head (the ghost's halo, the one kind of gradient the look allows).
+// How it's drawn: src/shared/wisp-body.ts (the same body as the splash page's wisp). This file is what it
+// does here. It paints only while something moves: the loop stops once it has landed, and when it has
+// floated for a while it settles into a doze (still, eyes closed) until the next word, scroll or state.
 
-type Point = { x: number; y: number };
+import { prefersStill, WispBody, type Point } from "../shared/wisp-body.ts";
+
 export type WispMood = "tracking" | "resting" | "waiting";
 
 /** Head radius (css px) while tracking words, and while floating. */
-const R_TRACK = 4.6;
-const R_FLOAT = 6.2;
-/** Points in the tail, and how quickly each catches the one before it (per second): lower is a longer, lazier tail. */
-const TAIL = 18;
-const TAIL_FOLLOW = 15;
-/** The spring toward the wisp's spot: stiffness (per s²) by what it's doing, and how much of critical damping. */
+const R_TRACK = 5;
+const R_FLOAT = 7;
+/** The spring toward the wisp's spot (stiffness per s²), by what it's doing. */
 const SPRING = { tracking: 210, resting: 38, waiting: 46, leaving: 70 } as const;
-const DAMPING = 0.72;
 /**
  * The upward kick a new word gives it (px/s), by how far away the word is: the next word on the line gets a
  * skip that stays in the gap between lines, a word on another line or further off a real leap.
  */
 const kick = (d: number) => (d < 160 ? Math.min(120, 40 + d * 0.5) : Math.min(320, 120 + (d - 160) * 0.4));
-/** It never flies faster than this (px/s), so a long jump down the page is a flight, not a teleport. */
-const MAX_SPEED = 2600;
-/** How far above its word or block it floats when not tracking (px), and the bob around that spot. */
-const FLOAT_LIFT = 18;
+/** How far above a block (with no words) it floats, the bob around its spot, and when it stops bobbing (s). */
+const FLOAT_LIFT = 16;
 const BOB = { x: 2.2, y: 3.2, speed: 2.1 };
+const DOZE_AFTER = 12;
 /** Kept this far inside the edges, so a word scrolled out of view leaves the wisp peeking from the nearest edge. */
 const EDGE = 14;
 
-let canvas: HTMLCanvasElement | null = null;
-let ctx: CanvasRenderingContext2D | null = null;
-let glow: HTMLCanvasElement | null = null;
-let colour = "#f6f2ea";
-let ink = "#13161d";
-let dpr = 1;
-
+let body: WispBody | null = null;
 let present = false;
 let leaving = false;
 let mood: WispMood = "waiting";
 let target: Range | Element | null = null;
-let head: Point = { x: 0, y: 0 };
-let vel: Point = { x: 0, y: 0 };
-let tail: Point[] = [];
-let radius = R_FLOAT;
 let raf = 0;
 let last = 0;
 let clock = 0;
+/** Seconds spent floating since it last moved on: after DOZE_AFTER it stops bobbing (and drawing). */
+let floated = 0;
 
-const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-/** A theme colour as the canvas understands it, or the fallback when the canvas can't parse it. */
-function themeColour(name: string, fallback: string): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  if (!ctx || !value) return fallback;
-  ctx.fillStyle = fallback;
-  ctx.fillStyle = value;
-  return ctx.fillStyle as string;
-}
-
-function ensureCanvas() {
-  if (canvas?.isConnected) return;
-  canvas = document.createElement("canvas");
-  canvas.className = "art-wisp";
-  canvas.setAttribute("aria-hidden", "true");
-  document.body.append(canvas);
-  ctx = canvas.getContext("2d");
-  colour = themeColour("--foreground", colour);
-  ink = themeColour("--background", ink);
-  // The halo under the head, drawn once.
-  glow = document.createElement("canvas");
-  glow.width = glow.height = 64;
-  const g = glow.getContext("2d");
-  if (g) {
-    g.fillStyle = colour;
-    g.fillRect(0, 0, 64, 64);
-    g.globalCompositeOperation = "destination-in";
-    const light = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    light.addColorStop(0, "rgba(0,0,0,0.3)");
-    light.addColorStop(0.45, "rgba(0,0,0,0.09)");
-    light.addColorStop(1, "rgba(0,0,0,0)");
-    g.fillStyle = light;
-    g.fillRect(0, 0, 64, 64);
-  }
-  resize();
-}
-
-function resize() {
-  if (!canvas) return;
-  dpr = Math.min(3, devicePixelRatio || 1);
-  canvas.width = Math.round(innerWidth * dpr);
-  canvas.height = Math.round(innerHeight * dpr);
-  wake();
-}
-addEventListener("resize", () => canvas && resize());
+addEventListener("resize", () => wake());
 // The page scrolling moves its words under the wisp: let it catch up.
-addEventListener("scroll", () => present && wake(), { capture: true, passive: true });
+addEventListener("scroll", () => wake(), { capture: true, passive: true });
+
+const floating = () => mood !== "tracking" || !(target instanceof Range);
 
 /** Where the wisp wants to be: over its word (in the gap above the line), or floating above its block. */
 function spot(): Point {
+  const head = body!.head;
   // Leaving: down past the bottom edge, under the tray.
   if (leaving) return { x: Math.min(innerWidth - EDGE, Math.max(EDGE, head.x)), y: innerHeight + 40 };
   let p: Point = { x: innerWidth / 2, y: innerHeight * 0.4 };
@@ -138,17 +84,18 @@ function spot(): Point {
     p = { x: r.left + Math.min(r.width / 2, 48), y: r.top - 4 };
   }
   if (floating()) {
-    // Not pointing at a word: float a little above the spot, bobbing.
-    const still = reduced();
-    p = {
-      x: p.x + (still ? 0 : Math.sin(clock * BOB.speed * 0.5) * BOB.x),
-      y: p.y - FLOAT_LIFT + (still ? 0 : Math.sin(clock * BOB.speed) * BOB.y),
-    };
+    // Not pointing at a word. Beside a word (paused, waiting): it steps out into the margin to the left of
+    // the line, so it keeps the place without covering anything. Over a block with no words: a little above it.
+    if (target instanceof Range) {
+      const r = target.getClientRects()[0] ?? target.getBoundingClientRect();
+      const block = (target.startContainer.parentElement?.closest("[data-speak-i]") ?? target.startContainer.parentElement)?.getBoundingClientRect();
+      if (r && block) p = { x: Math.max(R_FLOAT + 3, block.left - R_FLOAT - 8), y: r.top + r.height / 2 };
+    } else p = { x: p.x, y: p.y - FLOAT_LIFT };
+    const bob = prefersStill() || floated > DOZE_AFTER ? 0 : 1;
+    p = { x: p.x + Math.sin(clock * BOB.speed * 0.5) * BOB.x * bob, y: p.y + Math.sin(clock * BOB.speed) * BOB.y * bob };
   }
   return { x: Math.min(innerWidth - EDGE, Math.max(EDGE, p.x)), y: Math.min(innerHeight - EDGE, Math.max(EDGE, p.y)) };
 }
-
-const floating = () => mood !== "tracking" || !(target instanceof Range);
 
 function wake() {
   if (!present || raf) return;
@@ -158,110 +105,20 @@ function wake() {
 
 function frame(now: number) {
   raf = 0;
+  if (!body) return;
   const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
   last = now;
   clock += dt;
+  floated = floating() ? floated + dt : 0;
   const goal = spot();
-  const still = reduced();
-  if (still) {
-    head = goal;
-    vel = { x: 0, y: 0 };
-    tail = tail.map(() => ({ ...goal }));
-  } else {
-    // A damped spring toward the goal.
-    const k = SPRING[leaving ? "leaving" : mood];
-    const c = 2 * Math.sqrt(k) * DAMPING;
-    vel.x += (k * (goal.x - head.x) - c * vel.x) * dt;
-    vel.y += (k * (goal.y - head.y) - c * vel.y) * dt;
-    const speed = Math.hypot(vel.x, vel.y);
-    if (speed > MAX_SPEED) {
-      vel.x *= MAX_SPEED / speed;
-      vel.y *= MAX_SPEED / speed;
-    }
-    head = { x: head.x + vel.x * dt, y: head.y + vel.y * dt };
-    // Each tail point chases the one before it.
-    const follow = 1 - Math.exp(-TAIL_FOLLOW * dt);
-    let lead = head;
-    tail = tail.map((p) => {
-      const q = { x: p.x + (lead.x - p.x) * follow, y: p.y + (lead.y - p.y) * follow };
-      lead = q;
-      return q;
-    });
-  }
-  const want = floating() ? R_FLOAT : R_TRACK;
-  radius = still ? want : radius + (want - radius) * (1 - Math.exp(-8 * dt));
-  draw();
+  const size = floating() ? R_FLOAT : R_TRACK;
+  const still = prefersStill();
+  body.step(dt, goal, SPRING[leaving ? "leaving" : mood], size, still);
+  body.draw();
   // Gone under the tray: stop and clear.
-  if (leaving && head.y > innerHeight + 30) return finishLeaving();
-  const settled =
-    Math.hypot(vel.x, vel.y) < 2 &&
-    Math.hypot(goal.x - head.x, goal.y - head.y) < 0.3 &&
-    tail.every((p) => Math.hypot(p.x - head.x, p.y - head.y) < 0.3) &&
-    Math.abs(want - radius) < 0.05;
-  // It bobs for as long as it floats; tracking rests (and the loop stops) once it has landed.
-  if (!settled || (floating() && !still) || leaving) raf = requestAnimationFrame(frame);
-}
-
-function draw() {
-  if (!ctx || !canvas) return;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  // The halo.
-  if (glow) {
-    const g = radius * 5.5;
-    ctx.drawImage(glow, head.x - g, head.y - g, g * 2, g * 2);
-  }
-  // The tail: tapering discs along the chain, close enough together to read as one body.
-  const body = new Path2D();
-  let prev = head;
-  for (let i = 0; i < tail.length; i++) {
-    const p = tail[i]!;
-    const r = radius * 0.92 * (1 - (i + 1) / (tail.length + 1)) ** 1.15;
-    const d = Math.hypot(p.x - prev.x, p.y - prev.y);
-    const steps = Math.min(40, Math.max(1, Math.ceil(d / Math.max(0.6, r * 0.45))));
-    for (let s = 1; s <= steps; s++) {
-      const t = s / steps;
-      const x = prev.x + (p.x - prev.x) * t;
-      const y = prev.y + (p.y - prev.y) * t;
-      body.moveTo(x + r, y);
-      body.arc(x, y, r, 0, Math.PI * 2);
-    }
-    prev = p;
-  }
-  ctx.fillStyle = colour;
-  ctx.globalAlpha = 0.82;
-  ctx.fill(body);
-  // The head: stretched along its flight, squashed across it.
-  const speed = Math.hypot(vel.x, vel.y);
-  const stretch = 1 + Math.min(0.38, speed / 1400);
-  ctx.globalAlpha = 1;
-  ctx.save();
-  ctx.translate(head.x, head.y);
-  ctx.rotate(Math.atan2(vel.y, vel.x));
-  ctx.scale(stretch, 1 / stretch);
-  ctx.beginPath();
-  ctx.arc(0, 0, radius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-  // Still enough to see its face: the logo's happy closed eyes.
-  const calm = Math.max(0, 1 - speed / 70);
-  if (calm > 0.05 && radius > 4) {
-    ctx.save();
-    ctx.translate(head.x, head.y);
-    ctx.globalAlpha = calm * 0.85;
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = Math.max(0.8, radius * 0.17);
-    ctx.lineCap = "round";
-    const e = radius * 0.36;
-    const er = radius * 0.2;
-    for (const side of [-1, 1]) {
-      ctx.beginPath();
-      ctx.arc(side * e, radius * 0.06, er, Math.PI * 1.15, Math.PI * 1.85);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
+  if (leaving && body.head.y > innerHeight + 30) return finishLeaving();
+  const bobbing = floating() && !still && floated <= DOZE_AFTER;
+  if (leaving || bobbing || !body.settled(goal, size)) raf = requestAnimationFrame(frame);
 }
 
 function finishLeaving() {
@@ -270,24 +127,19 @@ function finishLeaving() {
   target = null;
   cancelAnimationFrame(raf);
   raf = 0;
-  if (ctx && canvas) {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
+  body?.clear();
 }
 
 /** Listen started: the wisp rises out from under the tray, toward wherever the reading is. */
 export function wispArrive() {
-  ensureCanvas();
+  if (!body?.connected) body = new WispBody("art-wisp", { light: "--foreground", ink: "--background" });
   if (present && !leaving) return;
   if (!present) {
-    const start = { x: innerWidth / 2, y: innerHeight + 24 };
-    head = start;
-    vel = { x: 0, y: -520 };
-    tail = Array.from({ length: TAIL }, () => ({ ...start }));
-    radius = R_FLOAT;
+    body.place({ x: innerWidth / 2, y: innerHeight + 24 }, { x: 0, y: -380 });
+    body.radius = R_FLOAT;
     mood = "waiting";
     target = null;
+    floated = 0;
   }
   present = true;
   leaving = false;
@@ -296,24 +148,24 @@ export function wispArrive() {
 
 /** Listen closed: the wisp dives back down under the tray (or, with reduced motion, simply goes). */
 export function wispLeave() {
-  if (!present) return;
-  if (reduced()) return finishLeaving();
+  if (!present || !body) return;
+  if (prefersStill()) return finishLeaving();
   leaving = true;
   // A little hop up before it dives.
-  vel.y = Math.min(vel.y, -160);
+  body.vel.y = Math.min(body.vel.y, -160);
   wake();
 }
 
 /** What the wisp follows: the word being spoken (a Range), or a block with no words of its own (an Element). */
 export function wispFollow(to: Range | Element) {
-  if (!present || leaving) return;
+  if (!present || leaving || !body) return;
   const before = target;
   target = to;
+  floated = 0;
   // A new word: a hop up, bigger for a longer way to go.
-  if (to instanceof Range && before !== to && mood === "tracking" && !reduced()) {
+  if (to instanceof Range && before !== to && mood === "tracking" && !prefersStill()) {
     const r = to.getBoundingClientRect();
-    const d = Math.hypot(r.left + r.width / 2 - head.x, r.top - head.y);
-    vel.y -= kick(d);
+    body.vel.y -= kick(Math.hypot(r.left + r.width / 2 - body.head.x, r.top - body.head.y));
   }
   wake();
 }
@@ -322,5 +174,6 @@ export function wispFollow(to: Range | Element) {
 export function wispMood(m: WispMood) {
   if (mood === m) return;
   mood = m;
+  floated = 0;
   wake();
 }
