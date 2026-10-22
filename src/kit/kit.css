@@ -242,13 +242,13 @@
       0 0 0 6px color-mix(in oklch, var(--foreground) 3%, transparent);
   }
 }
-/* Listen's wisp (src/kit/wisp.ts): one canvas over the page, painted only while the wisp moves. */
+/* Listen's wisp (src/kit/wisp.ts): one small canvas on the page (so scrolling carries it with the text),
+   painted only while the wisp moves. src/shared/wisp-body.ts places and sizes it. */
 .art-wisp {
-  position: fixed;
-  inset: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
   z-index: 30;
-  width: 100%;
-  height: 100%;
   pointer-events: none;
   opacity: 0.92;
 }

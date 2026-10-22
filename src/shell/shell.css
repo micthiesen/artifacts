@@ -797,9 +797,10 @@ div.thread-anchor { cursor: default; }
 }
 @keyframes drift { 50% { transform: translateY(-10px) rotate(-2deg); } }
 @media (prefers-reduced-motion: reduce) { .splash-ghost { animation: none !important; } }
-/* The splash page's wisp (src/shell/splash-wisp.ts): one canvas that never takes the pointer, behind the page,
+/* The splash page's wisp (src/shell/splash-wisp.ts): one small canvas on the page (src/shared/wisp-body.ts
+   places it), that never takes the pointer, behind the page,
    so the cards are things it can hide behind (it never crosses text, so nothing it passes under is hidden). */
-.splash-wisp { position: fixed; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none; opacity: .92; }
+.splash-wisp { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; opacity: .92; }
 main.splash { position: relative; z-index: 1; }
 /* Above the page, so the account menu still opens over it. */
 body:has(> main.splash) > .bar { z-index: 2; }

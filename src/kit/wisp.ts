@@ -195,7 +195,8 @@ function frame(now: number) {
   const landing = !still && pilot.lastWasHop && pilot.landedAt >= 0 && since < LAND_FOR;
   body.squash = landing ? LAND_SQUASH * Math.sin(Math.PI * (since / LAND_FOR)) : 0;
   body.upright = landing;
-  body.draw({ x: -sc.x, y: -sc.y }, clock);
+  // Waiting at the screen's edge it is pinned there, so the page scrolls under it without it moving.
+  body.draw(clock, parked);
   // A trace for measuring smoothness on a real page (spikes/wisp-score.ts); off unless a test switches it on.
   const trace = globalThis as { __wispTrace?: unknown[] };
   if (trace.__wispTrace) trace.__wispTrace.push({ t: now, x: pilot.motion.pos.x, y: pilot.motion.pos.y, gx: goal.x, gy: goal.y, mood, parked });

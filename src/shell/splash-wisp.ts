@@ -624,7 +624,8 @@ export function startSplashWisp() {
     const crouch = mode === "resting" ? wary().k * 0.12 : 0;
     body.squash += (crouch - body.squash) * (1 - Math.exp(-dt / 0.09));
     if (Math.abs(body.squash - crouch) < 0.003) body.squash = crouch;
-    body.draw({ x: -scrollX, y: -scrollY }, clock);
+    // Peeking in from the side of the screen it is pinned there; everywhere else it rides with the page.
+    body.draw(clock, (mode === "peeking" || mode === "hidden") && !!hole && !hole.el);
     trace.__wispTrace?.push({ t: now, x: body.head.x, y: body.head.y, mode, sx: scrollX, sy: scrollY });
     const busy =
       mode === "moving" ||

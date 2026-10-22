@@ -88,14 +88,15 @@ describe("motion tokens", () => {
   test("the wisp is a character that respects reduced motion and rests when it can", () => {
     // The wisp (src/kit/wisp.ts) is the one thing that moves continuously: a character on a canvas, moved by
     // a spring rather than a duration (AGENTS.md says why it may). It must sit still under reduced motion,
-    // draw only while something changes, never fade (it arrives and leaves by flying), and never touch layout.
+    // draw only while something changes, never fade (it arrives and leaves by flying), and never move by layout.
     const wisp = ["src/shared/wisp-body.ts", "src/kit/wisp.ts", "src/shell/splash-wisp.ts"].map((f) => stripTs(read(f))).join("\n");
     expect(wisp).toMatch(/prefers-reduced-motion: reduce/);
     expect(wisp.match(/prefersStill\(\)/g)?.length ?? 0).toBeGreaterThan(3);
     expect(wisp).toMatch(/requestAnimationFrame/);
     expect(wisp).toMatch(/settled/);
     expect(wisp).not.toMatch(/setInterval|\.animate\(|opacity/);
-    expect(wisp).not.toMatch(/\.style\.(top|left|width|height|margin)/);
+    // It moves by transform alone; its canvas is only resized when it needs more room.
+    expect(wisp).not.toMatch(/\.style\.(top|left|right|bottom|margin)/);
     const css = stripCss(read("src/kit/kit.css"));
     expect(css).toMatch(/\.art-wisp\s*\{[^}]*pointer-events:\s*none/);
   });

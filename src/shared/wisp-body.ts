@@ -3,11 +3,16 @@
 // character's brief); on the splash page it plays (src/shell/splash-wisp.ts).
 //
 // The body is a head on a damped spring and a tail of points that each chase the one before, so it
-// stretches and streams when it flies and gathers back into one round blob at rest. It is drawn on one
-// fixed, full-screen canvas that ignores the pointer: a tapered run of discs along the tail (one filled
+// stretches and streams when it flies and gathers back into one round blob at rest. It is drawn on a small
+// canvas, just big enough for it, that ignores the pointer: a tapered run of discs along the tail (one filled
 // path, so it reads as a single soft body), the head stretched along its flight, a small radial glow
 // under it (the ghost's halo, the one kind of gradient the look allows), and, when it is still, the logo's
 // happy closed eyes and blush. It is moon white because it is the agent's light (AGENTS.md "Look").
+//
+// The canvas sits on the page, not the screen, so when the page scrolls the browser carries it along with
+// the text on the compositor, frame for frame, and no script runs. (A fixed canvas redrawn on scroll events
+// lags: iOS scrolls off the main thread and only lets a page's scripts catch up a few times a second, so the
+// wisp jittered behind the text.) Its owner can pin it to the screen instead, while it waits at an edge.
 
 export type Point = { x: number; y: number };
 
@@ -41,6 +46,10 @@ export class WispBody {
   private light = "#f6f2ea";
   private ink = "#13161d";
   private dpr = 1;
+  /** The canvas's size (css px; it only grows), where its containing block sits on the page, and its last placement. */
+  private size = { w: 0, h: 0 };
+  private origin: Point = { x: 0, y: 0 };
+  private placed = "";
   private onResize = () => this.resize();
   private observer: ResizeObserver | null = null;
 
@@ -104,11 +113,55 @@ export class WispBody {
     return c;
   }
 
-  /** Sized to the box the canvas actually has (the viewport without a classic scrollbar), at the screen's density. */
+  /**
+   * At the screen's density (the next draw sizes the canvas to match), and measured against its containing
+   * block: the page, unless the page's author positioned the body.
+   */
   resize() {
     this.dpr = Math.min(3, devicePixelRatio || 1);
-    this.canvas.width = Math.round(viewWidth() * this.dpr);
-    this.canvas.height = Math.round(innerHeight * this.dpr);
+    this.size = { w: 0, h: 0 };
+    const parent = this.canvas.offsetParent;
+    const positioned = parent && (parent !== document.body || getComputedStyle(parent).position !== "static") ? parent : null;
+    const r = positioned?.getBoundingClientRect();
+    this.origin = positioned && r ? { x: r.left + scrollX + positioned.clientLeft, y: r.top + scrollY + positioned.clientTop } : { x: 0, y: 0 };
+  }
+
+  /**
+   * Puts the canvas over the box from (minX, minY) to (maxX, maxY), page px, growing it if it's too small. On
+   * the page it never reaches past the bottom or right of what's on screen, so it can't make the page longer
+   * or wider; anything of the wisp past there is off screen anyway. Pinned, it is fixed to the screen. Returns
+   * where its top left corner is, in page px.
+   */
+  private frame(minX: number, minY: number, maxX: number, maxY: number, pinned: boolean): Point {
+    const { canvas, dpr, size } = this;
+    if (maxX - minX > size.w || maxY - minY > size.h) {
+      size.w = Math.max(size.w, Math.ceil((maxX - minX) / 32) * 32);
+      size.h = Math.max(size.h, Math.ceil((maxY - minY) / 32) * 32);
+      canvas.width = Math.round(size.w * dpr);
+      canvas.height = Math.round(size.h * dpr);
+      canvas.style.width = `${size.w}px`;
+      canvas.style.height = `${size.h}px`;
+    }
+    let x = minX;
+    let y = minY;
+    if (pinned) {
+      x -= scrollX;
+      y -= scrollY;
+    } else {
+      const bottom = Math.min(scrollY + innerHeight, document.documentElement.scrollHeight);
+      x = Math.min(x, scrollX + viewWidth() - size.w) - this.origin.x;
+      y = Math.min(y, bottom - size.h) - this.origin.y;
+    }
+    // On a whole device pixel, so it's drawn as crisply as the text it rides with.
+    x = Math.round(x * dpr) / dpr;
+    y = Math.round(y * dpr) / dpr;
+    const placed = `${pinned ? "fixed" : "absolute"} ${x}px ${y}px`;
+    if (placed !== this.placed) {
+      this.placed = placed;
+      canvas.style.position = pinned ? "fixed" : "absolute";
+      canvas.style.transform = `translate(${x}px, ${y}px)`;
+    }
+    return pinned ? { x: x + scrollX, y: y + scrollY } : { x: x + this.origin.x, y: y + this.origin.y };
   }
 
   get connected() {
@@ -190,13 +243,13 @@ export class WispBody {
     if (done) {
       this.place(goal);
       this.radius = size;
-      this.draw(this.lastOffset, this.lastTime);
+      this.draw(this.lastTime, this.lastPinned);
     }
     return done;
   }
 
-  private lastOffset: Point = { x: 0, y: 0 };
   private lastTime = 0;
+  private lastPinned = false;
 
   /** Moves the whole body by (dx, dy) at once, tail and all: for when what it sits on moves (the page scrolling). */
   shift(dx: number, dy: number) {
@@ -206,19 +259,30 @@ export class WispBody {
   }
 
   /**
-   * Paints it. Its coordinates are its owner's (the page's, so it rides along when the page scrolls);
-   * `offset` turns them into the screen's.
+   * Paints it. Its coordinates are the page's, so it rides along when the page scrolls; `pinned` holds it
+   * still on the screen instead while the page scrolls under it (its owner shifts it to match).
    */
-  draw(offset: Point = { x: 0, y: 0 }, time = 0) {
-    const { ctx, canvas, vel, radius } = this;
+  draw(time = 0, pinned = false) {
+    const { ctx, canvas, vel, radius, head, tail } = this;
     if (!ctx) return;
-    this.lastOffset = offset;
     this.lastTime = time;
-    const head = { x: this.head.x + offset.x, y: this.head.y + offset.y };
-    const tail = this.tail.map((p) => ({ x: p.x + offset.x, y: p.y + offset.y }));
+    this.lastPinned = pinned;
+    // Room for the halo round the head, and for the head, stretched or squashed, round every tail point.
+    const pad = Math.max(radius * 5.5, radius * 1.6) + 2;
+    let minX = head.x - pad;
+    let maxX = head.x + pad;
+    let minY = head.y - pad;
+    let maxY = head.y + pad;
+    for (const p of tail) {
+      minX = Math.min(minX, p.x - radius * 1.6);
+      maxX = Math.max(maxX, p.x + radius * 1.6);
+      minY = Math.min(minY, p.y - radius * 1.6);
+      maxY = Math.max(maxY, p.y + radius * 1.6);
+    }
+    const at = this.frame(minX, minY, maxX, maxY, pinned);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, -at.x * this.dpr, -at.y * this.dpr);
     if (this.glow) {
       const g = radius * 5.5;
       ctx.drawImage(this.glow, head.x - g, head.y - g, g * 2, g * 2);
