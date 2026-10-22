@@ -490,15 +490,18 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     cancelAnimationFrame(raf);
     const tick = () => {
       if (state !== "playing" || !current) return;
-      // Looking slightly ahead (in audio time, so it holds at any speed), by at most half the current word.
+      // Looking slightly ahead (in audio time, so it holds at any speed), by at most half of the word being
+      // heard, and only ever forward within a sentence: the next word is handed over once, never taken back.
       const words = current.words;
-      const now = words[Math.max(0, word)];
-      const lead = Math.min(WISP_LEAD * rate, now ? 0.5 * (now.t1 - now.t0) : WISP_LEAD * rate);
-      const t = audio.currentTime + lead;
-      let k = word >= 0 && words[word] && words[word]!.t0 <= t ? word : 0;
-      while (k + 1 < words.length && words[k + 1]!.t0 <= t) k++;
-      const on = words[k] && words[k]!.t0 <= t ? k : -1;
-      if (on !== word) markWord(on);
+      const heard = audio.currentTime;
+      let k = Math.max(word, -1);
+      while (k + 1 < words.length) {
+        const w = words[k + 1]!;
+        const lead = Math.min(WISP_LEAD * rate, k >= 0 ? 0.5 * (words[k]!.t1 - words[k]!.t0) : WISP_LEAD * rate);
+        if (w.t0 > heard + lead) break;
+        k++;
+      }
+      if (k !== word && k >= 0) markWord(k);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);

@@ -193,7 +193,7 @@ function frame(now: number) {
   body.draw({ x: -sc.x, y: -sc.y }, clock);
   // A trace for measuring smoothness on a real page (spikes/wisp-score.ts); off unless a test switches it on.
   const trace = globalThis as { __wispTrace?: unknown[] };
-  if (trace.__wispTrace) trace.__wispTrace.push({ t: performance.now(), x: pilot.motion.pos.x, y: pilot.motion.pos.y, gx: goal.x, gy: goal.y, mood, parked });
+  if (trace.__wispTrace) trace.__wispTrace.push({ t: now, x: pilot.motion.pos.x, y: pilot.motion.pos.y, gx: goal.x, gy: goal.y, mood, parked });
   // Gone under the tray: stop.
   if (leaving && body.head.y - sc.y > innerHeight + 30) return finishLeaving();
   const bobbing = floating() && !still && floated <= DOZE_AFTER + DOZE_EASE;
