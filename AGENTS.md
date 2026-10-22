@@ -235,6 +235,13 @@ it sits still on its spot. The file's header comment is its brief; keep it
 true. The tray's Follow toggle decides whether the page scrolls along;
 scrolling by hand turns it off.
 
+Change how the wisp moves only with measurements: `bun spikes/wisp-sim.ts`
+scores simulated reading (jolts, upward kicks, straight-up moves, swerves,
+overshoot, hop height, lateness; `--png` draws the path), and
+`bun spikes/wisp-score.ts` scores a trace recorded on a real page (set
+`globalThis.__wispTrace = []` in the artifact frame while Listen reads).
+`test/wisp-motion.test.ts` keeps the basics from regressing.
+
 **Haptics: none.** iOS Safari has no vibration API, and Apple closed the
 scripted switch workaround in iOS 26.5. `navigator.vibrate` is blocked in the
 cross-origin frames artifacts run in. Revisit when a web haptics standard

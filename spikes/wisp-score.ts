@@ -8,18 +8,52 @@ type Row = { t: number; x: number; y: number; gx: number; gy: number; mood: stri
 const LINE = 28;
 const JOLT = 1500;
 
+/**
+ * Velocity and acceleration at each frame from a least-squares quadratic through the five frames around it,
+ * using their real timestamps: browsers deliver frames a millisecond or two early or late, and differencing
+ * raw positions twice turns that jitter into fake jolts.
+ */
+function derivatives(rows: Row[]) {
+  return rows.map((_, i) => {
+    const lo = Math.max(0, i - 2);
+    const hi = Math.min(rows.length - 1, i + 2);
+    const t0 = rows[i]!.t / 1000;
+    // Fit x(t) = a + b·τ + c·τ² (τ = t − t0) for x and y by normal equations.
+    let S0 = 0, S1 = 0, S2 = 0, S3 = 0, S4 = 0;
+    let X0 = 0, X1 = 0, X2 = 0, Y0 = 0, Y1 = 0, Y2 = 0;
+    for (let k = lo; k <= hi; k++) {
+      const tau = rows[k]!.t / 1000 - t0;
+      const t2 = tau * tau;
+      S0 += 1;
+      S1 += tau;
+      S2 += t2;
+      S3 += t2 * tau;
+      S4 += t2 * t2;
+      X0 += rows[k]!.x;
+      X1 += rows[k]!.x * tau;
+      X2 += rows[k]!.x * t2;
+      Y0 += rows[k]!.y;
+      Y1 += rows[k]!.y * tau;
+      Y2 += rows[k]!.y * t2;
+    }
+    const solve = (A0: number, A1: number, A2: number) => {
+      // [S0 S1 S2; S1 S2 S3; S2 S3 S4] [a b c] = [A0 A1 A2]
+      const det = S0 * (S2 * S4 - S3 * S3) - S1 * (S1 * S4 - S3 * S2) + S2 * (S1 * S3 - S2 * S2);
+      if (Math.abs(det) < 1e-18) return { b: 0, c: 0 };
+      const b = (S0 * (A1 * S4 - S3 * A2) - A0 * (S1 * S4 - S3 * S2) + S2 * (S1 * A2 - A1 * S2)) / det;
+      const c = (S0 * (S2 * A2 - A1 * S3) - S1 * (S1 * A2 - A1 * S2) + A0 * (S1 * S3 - S2 * S2)) / det;
+      return { b, c };
+    };
+    const fx = solve(X0, X1, X2);
+    const fy = solve(Y0, Y1, Y2);
+    return { vx: fx.b, vy: fy.b, ax: 2 * fx.c, ay: 2 * fy.c };
+  });
+}
+
 function score(rows: Row[]) {
-  // Velocities and accelerations from positions, with each frame's own time step.
-  const f = rows.map((r) => ({ ...r, vx: 0, vy: 0 }));
-  for (let i = 1; i < f.length; i++) {
-    const dt = (f[i]!.t - f[i - 1]!.t) / 1000 || 1 / 120;
-    f[i]!.vx = (f[i]!.x - f[i - 1]!.x) / dt;
-    f[i]!.vy = (f[i]!.y - f[i - 1]!.y) / dt;
-  }
-  const acc = (k: number) => {
-    const dt = (f[k]!.t - f[k - 1]!.t) / 1000 || 1 / 120;
-    return { x: (f[k]!.vx - f[k - 1]!.vx) / dt, y: (f[k]!.vy - f[k - 1]!.vy) / dt };
-  };
+  const d = derivatives(rows);
+  const f = rows.map((r, i) => ({ ...r, vx: d[i]!.vx, vy: d[i]!.vy }));
+  const acc = (k: number) => ({ x: d[k]!.ax, y: d[k]!.ay });
   let jolts = 0;
   let kicks = 0;
   let swerve = 0;
