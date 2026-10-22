@@ -23,8 +23,9 @@
 //   smaller still where lines sit tight) and grows a little when it floats. When it pauses beside a word it steps out into the margin to the left
 //   of that line, so it keeps your place without sitting on anything you're reading.
 // - It lives on the page, not the screen: scrolling carries it along with the text, so scrolling alone never
-//   sets its tail streaming. If the reading is scrolled out of view, it waits at that edge of the screen, in
-//   the margin, and keeps watch there (no hopping along to each word) until the reading comes back.
+//   sets its tail streaming. If you scroll the reading out of view (Follow turns off), it waits at that edge
+//   of the screen, in the margin, and keeps watch there (no hopping along to each word) until the reading
+//   comes back. With Follow on, a word just off screen is about to be scrolled into view, so it flies there.
 // - A word with no box right now (inside something collapsed) never sends it anywhere: it stays put.
 // - Reduced motion: no flight, hop, bob or tail. It appears on its spot with the first word or block and
 //   goes when Listen closes.
@@ -76,6 +77,8 @@ const scroll = (): Point => ({ x: scrollX, y: scrollY });
 let lastScroll: Point = { x: 0, y: 0 };
 /** True while the word being read is scrolled out of view and the wisp waits at the screen's edge. */
 let parked = false;
+/** Follow is on: the page scrolls to keep the reading in view, so a word just off screen is about to be on it. */
+let following = true;
 /** The last good spot on the page, kept when a word has no box right now (inside something collapsed). */
 let lastSpot: Point | null = null;
 
@@ -124,9 +127,11 @@ function spot(): Point {
       const gap = lineGap(target, r.height);
       fit = Math.min(R_TRACK, Math.max(3, gap + 1));
       const above = { x: r.left + r.width / 2, y: r.top - gap - 1 };
-      if (r.bottom < 0 || r.top > innerHeight) {
-        // Out of view: wait at that edge, in the margin (or over the column's start on a narrow screen), on
-        // screen. It doesn't follow each word along the edge; it keeps watch until the reading scrolls back.
+      if (!following && (r.bottom < 0 || r.top > innerHeight)) {
+        // Out of view because the reader scrolled away (Follow is off): wait at that edge, in the margin (or
+        // over the column's start on a narrow screen), on screen. It doesn't follow each word along the edge;
+        // it keeps watch until the reading scrolls back. (With Follow on, the page is about to bring the word
+        // into view, and the wisp, which lives on the page, simply flies to it.)
         parked = true;
         const y = r.bottom < 0 ? EDGE + R_FLOAT : innerHeight - EDGE - R_FLOAT;
         p = { x: margin ?? EDGE + R_FLOAT, y };
@@ -245,10 +250,13 @@ export function wispLeave() {
   wake();
 }
 
-/** The spot over a word in page coordinates (in the gap above its line), or null when it has no box or is off screen. */
-function wordSpot(range: Range): Point | null {
+/**
+ * The spot over a word in page coordinates (in the gap above its line), or null when it has no box, or is
+ * off screen and the page won't be bringing it into view (`followed` false).
+ */
+function wordSpot(range: Range, followed: boolean): Point | null {
   const r = range.getClientRects()[0] ?? range.getBoundingClientRect();
-  if (!r || (!r.width && !r.height) || r.bottom < 0 || r.top > innerHeight) return null;
+  if (!r || (!r.width && !r.height) || (!followed && (r.bottom < 0 || r.top > innerHeight))) return null;
   const gap = lineGap(range, r.height);
   return { x: Math.min(viewWidth() - EDGE, Math.max(EDGE, r.left + r.width / 2)) + scrollX, y: r.top - gap - 1 + scrollY };
 }
@@ -262,13 +270,20 @@ export function wispFollow(to: Range | Element) {
   // A new word while reading: the pilot hops there, sweeps back to the next line, or flies (not while it waits
   // at the screen's edge). Anything else that moves its spot (a block, the margin) the pilot sees as a jump.
   if (to instanceof Range && before !== to && mood === "tracking" && !parked && !prefersStill()) {
-    const at = wordSpot(to);
+    const at = wordSpot(to, following);
     if (at) {
       const host = to.startContainer.parentElement;
       const lh = host ? parseFloat(getComputedStyle(host).lineHeight) : NaN;
       pilot.word(at, Number.isFinite(lh) ? lh : 28);
     }
   }
+  wake();
+}
+
+/** Follow turned on or off (src/kit/speak.ts): with it off, a word scrolled out of view leaves the wisp waiting at the edge. */
+export function wispFollowing(on: boolean) {
+  if (following === on) return;
+  following = on;
   wake();
 }
 

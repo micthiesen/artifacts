@@ -288,6 +288,7 @@ const scrollBehavior = (): ScrollBehavior => (matchMedia("(prefers-reduced-motio
 function userScroll() {
   if (!following || !notify) return;
   following = false;
+  wisp?.wispFollowing(false);
   notify({ t: "speak:follow", on: false });
 }
 // A scroll is the reader's only when they just did something that scrolls: a wheel, a swipe, a scroll key
@@ -434,6 +435,7 @@ export function speakState(state: "playing" | "waiting" | "resting") {
 /** Follow turned on (or off) from the tray: on brings the reading back into view. */
 export function speakFollow(on: boolean) {
   following = on;
+  wisp?.wispFollowing(on);
   if (on) keepInView();
 }
 
@@ -471,6 +473,7 @@ export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
       if (!notify) return;
       w.wispArrive();
       w.wispMood(mood);
+      w.wispFollowing(following);
     },
     () => {},
   );
@@ -489,6 +492,7 @@ export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
     // Choosing where to read is asking to follow it.
     if (!following) {
       following = true;
+      wisp?.wispFollowing(true);
       send({ t: "speak:follow", on: true });
     }
     send({ t: "speak:jump", i: Number(el.getAttribute("data-speak-i")) });
