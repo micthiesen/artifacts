@@ -10,7 +10,7 @@ import { Page } from "./ui/layout.tsx";
 import { LinkedFrom } from "./ui/page-extras.tsx";
 import { focusThread, installAnnotations, markChanged, setThreads } from "./annotate.ts";
 import { preparePrint } from "./print.ts";
-import { collectSpeech, markSpeaking, markWord, speakMode } from "./speak.ts";
+import { collectSpeech, markSpeaking, markWord, speakFollow, speakMode, speakState } from "./speak.ts";
 import { setSoundsEnabled } from "../shared/sound.ts";
 import { rememberColours } from "../shared/who.ts";
 
@@ -312,7 +312,13 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         markSpeaking(msg.i);
         break;
       case "speak:word":
-        markWord(msg.i, msg.start, msg.end, msg.hop, msg.lead);
+        markWord(msg.i, msg.start, msg.end);
+        break;
+      case "speak:state":
+        speakState(msg.state);
+        break;
+      case "speak:follow":
+        speakFollow(msg.on === true);
         break;
       case "speak:mode":
         speakMode(msg.on, send);

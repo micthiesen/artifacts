@@ -227,6 +227,10 @@
     inset 0 0 0 100vmax color-mix(in oklch, var(--foreground) 5%, transparent),
     0 0 0 6px color-mix(in oklch, var(--foreground) 5%, transparent);
 }
+/* A square block gets soft corners while it glows (a card keeps its own). */
+[data-speaking="round"] {
+  border-radius: 8px;
+}
 /* While listening, a block can be tapped to start there: the pointer and a faint wash say so (colour only). */
 :root[data-listening] [data-speak-i] {
   cursor: pointer;
@@ -238,46 +242,12 @@
       0 0 0 6px color-mix(in oklch, var(--foreground) 3%, transparent);
   }
 }
-/* The word being spoken, inside the block: a brighter wash of the same moon light. */
-::highlight(art-speak-word) {
-  background-color: color-mix(in oklch, var(--foreground) 18%, transparent);
-  color: var(--foreground);
-}
-/* Listen's wisp (src/kit/wisp.ts): the ghost's light hopping over the word being spoken, with a fading tail. */
+/* Listen's wisp (src/kit/wisp.ts): one canvas over the page, painted only while the wisp moves. */
 .art-wisp {
-  position: absolute;
-  top: 0;
-  left: 0;
+  position: fixed;
+  inset: 0;
   z-index: 30;
-  width: 0;
-  height: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--motion-base) var(--motion-ease);
-}
-.art-wisp[data-on] {
-  opacity: 1;
-}
-.art-wisp > span {
-  position: absolute;
-  top: 0;
-  left: 0;
-  border-radius: 50%;
-  background: var(--foreground);
-  will-change: transform;
-}
-.art-wisp-head {
-  width: 6px;
-  height: 6px;
-  margin: -3px 0 0 -3px;
-  box-shadow:
-    0 0 6px 1px color-mix(in oklch, var(--foreground) 50%, transparent),
-    0 0 12px 3px color-mix(in oklch, var(--foreground) 22%, transparent);
-}
-.art-wisp-tail {
-  --size: calc(5px - var(--k) * 1px);
-  width: var(--size);
-  height: var(--size);
-  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
-  opacity: calc(0.62 - var(--k) * 0.16);
 }

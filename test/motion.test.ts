@@ -85,16 +85,18 @@ describe("motion tokens", () => {
     expect(bad).toEqual([]);
   });
 
-  test("Listen's wisp times every hop from the tokens and stays within --motion-slow", () => {
-    // The wisp (src/kit/wisp.ts) is the one WAAPI user outside move(): a hop per spoken word, built from the
-    // word's own timing. Its durations must come from motionMs() (so reduced motion places it without a hop).
+  test("Listen's wisp is a character that respects reduced motion and rests when it can", () => {
+    // The wisp (src/kit/wisp.ts) is the one thing that moves continuously: a character on a canvas, moved by
+    // a spring rather than a duration (AGENTS.md says why it may). It must sit still under reduced motion,
+    // draw only while something changes, never fade (it arrives and leaves by flying), and never touch layout.
     const wisp = stripTs(read("src/kit/wisp.ts"));
-    expect(wisp).toMatch(/motionMs\("slow"\)/);
-    expect(wisp).toMatch(/motionMs\("fast"\)/);
-    expect(wisp).not.toMatch(/\b(duration|delay)\s*:\s*\d/);
-    expect(wisp).not.toMatch(/\b\d{2,}\s*ms\b|setTimeout/);
-    // Transform and opacity only.
-    expect(wisp).not.toMatch(/\b(top|left|width|height|margin)\s*:/);
+    expect(wisp).toMatch(/prefers-reduced-motion: reduce/);
+    expect(wisp).toMatch(/requestAnimationFrame/);
+    expect(wisp).toMatch(/settled/);
+    expect(wisp).not.toMatch(/setInterval|\.animate\(|opacity/);
+    expect(wisp).not.toMatch(/\.style\.(top|left|width|height|margin)/);
+    const css = stripCss(read("src/kit/kit.css"));
+    expect(css).toMatch(/\.art-wisp\s*\{[^}]*pointer-events:\s*none/);
   });
 });
 

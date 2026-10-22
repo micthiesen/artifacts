@@ -11,7 +11,7 @@
 // aria-hidden content is never read.
 
 import type { FrameMessage, SpeakUnit } from "../shared/protocol.ts";
-import { wispReflow, wispTo } from "./wisp.ts";
+import { wispArrive, wispFollow, wispLeave, wispMood } from "./wisp.ts";
 
 const SKIP =
   "script,style,template,svg,canvas,button,input,textarea,select,nav,[hidden],[aria-hidden='true'],[data-speak='skip'],.art-contents,.art-linked-from,[role='tablist']";
@@ -257,21 +257,29 @@ export function collectSpeech(root: Element): { units: SpeakUnit[]; start: numbe
 }
 
 // ---- following along ---------------------------------------------------------------------
+//
+// Follow (the tray's toggle) decides whether the page scrolls itself to keep the reading in view. It starts on
+// with every Listen. Scrolling by hand turns it off, so the page never fights the reader, and the tray shows
+// that; pressing Follow again, or tapping a paragraph to read from, turns it back on and brings the reading
+// into view. Listen's own scrolling never counts as the reader's.
 
 let current: Element | null = null;
-/** When the reader last scrolled by hand; following waits a while after that so it doesn't fight them. */
-let userScrolledAt = 0;
-const FOLLOW_PAUSE_MS = 6000;
-const userScroll = () => (userScrolledAt = Date.now());
+let wordAt: Range | null = null;
+let following = true;
 /** Until when a scroll is Listen's own (a smooth scroll runs a while); any other scroll is the reader's. */
 let ownScrollUntil = 0;
 const scrolling = () => (ownScrollUntil = Date.now() + 1200);
-const onScroll = () => Date.now() > ownScrollUntil && userScroll();
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
-const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && userScroll();
-
-const following = () => Date.now() - userScrolledAt > FOLLOW_PAUSE_MS;
 const scrollBehavior = (): ScrollBehavior => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
+
+/** The reader scrolled by hand: stop following and tell the tray. */
+function userScroll() {
+  if (!following || !notify) return;
+  following = false;
+  notify({ t: "speak:follow", on: false });
+}
+const onScroll = () => Date.now() > ownScrollUntil && userScroll();
+const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && !(e.target as Element | null)?.closest?.("input,textarea,select,[contenteditable]") && userScroll();
 
 /**
  * What glows for a block: the block itself, or, when it is a plain wrapper around one shaped box (a Summary,
@@ -290,26 +298,37 @@ function glowTarget(el: Element): Element {
   return target;
 }
 
-/** Marks the block being read and keeps it in view. */
-export function markSpeaking(i: number | null) {
-  current?.removeAttribute("data-speaking");
-  const unit = i === null ? undefined : units[i];
-  current = unit?.mark ? unit.el : null;
-  if (!unit) {
-    wispTo(null);
-    return markWord(null, 0, 0);
-  }
-  // A block with nothing of its own to point at (a table or chart read as a summary) has no wisp. (Between
-  // sentences markWord(null) deliberately leaves the wisp parked, so it hops on from there.)
-  if (!unit.spoken.nodes.some(Boolean)) wispTo(null);
-  if (!current) return;
-  current = glowTarget(current);
-  current.setAttribute("data-speaking", "");
+/** Brings the block (or, in a block taller than the screen, the word) into view, when following. */
+function keepInView() {
+  if (!following || !current) return;
   const r = current.getBoundingClientRect();
-  if (following() && (r.top < 0 || r.bottom > innerHeight)) {
+  if (r.top < 0 || r.bottom > innerHeight) {
+    if (r.height > innerHeight * 0.6 && wordAt) {
+      const w = wordAt.getBoundingClientRect();
+      if (w.height && w.top >= 0 && w.bottom <= innerHeight - 24) return;
+      scrolling();
+      scrollBy({ top: w.top - innerHeight * 0.35, behavior: scrollBehavior() });
+      return;
+    }
     scrolling();
     current.scrollIntoView({ block: r.height > innerHeight * 0.6 ? "start" : "center", behavior: scrollBehavior() });
   }
+}
+
+/** Marks the block being read (a soft glow, rounded) and keeps it in view. */
+export function markSpeaking(i: number | null) {
+  current?.removeAttribute("data-speaking");
+  const unit = i === null ? undefined : units[i];
+  current = unit?.mark ? glowTarget(unit.el) : null;
+  wordAt = null;
+  if (!unit) return;
+  // A block with nothing of its own to point at (a table or chart read as a summary): the wisp floats over it.
+  // Otherwise it stays where it is until the first word, and hops there.
+  if (!unit.spoken.nodes.some(Boolean)) wispFollow(unit.el);
+  if (!current) return;
+  // Shaped boxes keep their own corners; anything square gets softly rounded ones.
+  current.setAttribute("data-speaking", parseFloat(getComputedStyle(current).borderTopLeftRadius) > 0 ? "" : "round");
+  keepInView();
 }
 
 /** The page range of [start, end) in unit `i`'s text, without the words Listen added; null when none of it is on the page. */
@@ -334,10 +353,6 @@ export function wordRange(i: number, start: number, end: number): Range | null {
   return range;
 }
 
-let wordAt: Range | null = null;
-let washTimer = 0;
-addEventListener("resize", () => wispReflow(wordAt));
-
 /** Tells the shell (once per collection) that the page changed under the reading, so it collects again. */
 let notify: ((msg: FrameMessage) => void) | null = null;
 let staleSent = false;
@@ -351,36 +366,35 @@ function checkStale(i: number) {
 }
 
 /**
- * Marks the word being spoken: [start, end) in the unit's text. The wisp sets off at once (hopping in `hop` ms
- * at most) and the wash follows `lead` ms later, as the word is heard, so the two agree. Words Listen added (not
- * on the page) mark nothing, and the wisp stays where it was between sentences.
+ * The word being spoken: [start, end) in the unit's text. The wisp hops to it. Words Listen added (not on the
+ * page) have nowhere to point, and the wisp stays where it was.
  */
-export function markWord(i: number | null, start: number, end: number, hop?: number, lead = 0) {
-  const highlights = (globalThis.CSS as { highlights?: Map<string, unknown> } | undefined)?.highlights;
-  const range = i === null ? null : wordRange(i, start, end);
-  if (i !== null && !range) checkStale(i);
+export function markWord(i: number | null, start: number, end: number) {
+  if (i === null) return;
+  const range = wordRange(i, start, end);
+  if (!range) return checkStale(i);
   wordAt = range;
-  if (range) wispTo(range, hop);
-  clearTimeout(washTimer);
-  if (!highlights || typeof Highlight === "undefined") return;
-  if (!range) return void highlights.delete(WORD_HIGHLIGHT);
-  const wash = () => highlights.set(WORD_HIGHLIGHT, new Highlight(range));
-  if (lead > 0) washTimer = window.setTimeout(wash, lead);
-  else wash();
-  // In a block taller than the screen the word can run off the bottom: bring its line back up.
-  if (!following()) return;
-  const r = range.getBoundingClientRect();
-  if (r.height && (r.bottom > innerHeight - 24 || r.top < 0)) {
-    scrolling();
-    scrollBy({ top: r.top - innerHeight * 0.35, behavior: scrollBehavior() });
-  }
+  wispFollow(range);
+  keepInView();
+}
+
+/** The voice's state, for the wisp: tracking words while it speaks, floating while it waits or rests. */
+export function speakState(state: "playing" | "waiting" | "resting") {
+  wispMood(state === "playing" ? "tracking" : state === "waiting" ? "waiting" : "resting");
+}
+
+/** Follow turned on (or off) from the tray: on brings the reading back into view. */
+export function speakFollow(on: boolean) {
+  following = on;
+  if (on) keepInView();
 }
 
 let tapping: ((e: MouseEvent) => void) | null = null;
 
 /**
- * Listening on or off. On: tapping a block (not a control or link) starts reading there, hand scrolling pauses
- * following, and a re-rendered page asks to be collected again. Off: every mark goes, numbering included.
+ * Listening on or off. On: the wisp arrives, tapping a block (not a control or link) starts reading there,
+ * scrolling by hand turns Follow off, and a re-rendered page asks to be collected again. Off: the wisp leaves
+ * and every mark goes, numbering included.
  */
 export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
   if (tapping) document.removeEventListener("click", tapping, true);
@@ -392,14 +406,15 @@ export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
   removeEventListener("scroll", onScroll, true);
   document.documentElement.toggleAttribute("data-listening", on);
   if (!on) {
-    wispTo(null);
+    wispLeave();
     markSpeaking(null);
     for (const u of units) u.el.removeAttribute("data-speak-i");
     units = [];
     out = [];
     return;
   }
-  userScrolledAt = 0;
+  following = true;
+  wispArrive();
   addEventListener("wheel", userScroll, { passive: true });
   addEventListener("touchmove", userScroll, { passive: true });
   addEventListener("keydown", userKey);
@@ -411,7 +426,11 @@ export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
     if (getSelection()?.toString()) return;
     const el = target.closest("[data-speak-i]");
     if (!el) return;
-    userScrolledAt = 0;
+    // Choosing where to read is asking to follow it.
+    if (!following) {
+      following = true;
+      send({ t: "speak:follow", on: true });
+    }
     send({ t: "speak:jump", i: Number(el.getAttribute("data-speak-i")) });
   };
   document.addEventListener("click", tapping, true);

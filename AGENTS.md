@@ -217,13 +217,18 @@ everything it ships stay MIT, Apache-2.0 or BSD, never GPL (so no eSpeak).
 The voice files are static assets fetched from the apex, so one cached copy
 serves every workspace and nothing runs or bills while nobody listens.
 
-While it reads, the block glows moon white and the word being spoken gets a
-brighter wash, both colour only. The one movement is the wisp
-(`src/kit/wisp.ts`): the agent's light hopping to each word, which is
-something changing (the word being read), not a frequent action of the
-reader's, so it may move. It stays within `--motion-slow`, transform and
-opacity only, its hop kept inside the gap between lines, and reduced motion
-places it without a hop.
+While it reads, the block glows moon white (colour only, softly rounded).
+The one thing that moves is the wisp (`src/kit/wisp.ts`), a character: the
+agent's light keeping you company. It hops from word to word, flies between
+paragraphs and floats with a gentle bob when there is no word to point at.
+It arrives by rising from behind the tray and leaves by diving under it, and
+never fades or vanishes while you listen. It is the exception to "frequent
+things get colour changes at most" because it isn't the reader's action but
+something changing (the word being read). It is moved by a spring, not a
+duration, drawn on one canvas only while it moves, and under reduced motion
+it sits still on its spot. The file's header comment is its brief; keep it
+true. The tray's Follow toggle decides whether the page scrolls along;
+scrolling by hand turns it off.
 
 **Haptics: none.** iOS Safari has no vibration API, and Apple closed the
 scripted switch workaround in iOS 26.5. `navigator.vibrate` is blocked in the

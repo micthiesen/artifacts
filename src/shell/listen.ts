@@ -19,8 +19,8 @@ const RATE_KEY = "art:listen:rate";
 const HINT_KEY = "art:listen:hinted";
 /** Sentences made ahead of the one playing. */
 const AHEAD = 2;
-/** The wisp leaves this early (seconds of real time) so it is landing as the word begins. */
-const WISP_LEAD = 0.1;
+/** The wisp sets off this early (seconds of real time) so it is landing as the word begins. */
+const WISP_LEAD = 0.12;
 /** Short waits don't announce themselves: a status that flashes for a moment is noise. */
 const QUIET_MS = 400;
 /** If the page doesn't answer (its script failed), say so rather than wait forever. */
@@ -42,6 +42,7 @@ const ICON = {
   next: svg(`<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="m7 6.5 7.5 5.5L7 17.5zM17.5 6v12"/>`),
   slower: svg(`<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 12h12"/>`, 16),
   faster: svg(`<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 12h12M12 6v12"/>`, 16),
+  follow: svg(`<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M5 6h10M5 10h7M5 14h10M5 18h6M18.5 9v10M15.5 16l3 3 3-3"/>`, 18),
   close: svg(`<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>`),
 };
 
@@ -123,6 +124,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     </button>
     <button type="button" class="listen-icon listen-next" aria-label="Next sentence" title="Next sentence">${ICON.next}</button>
   </div>
+  <button type="button" class="listen-follow" aria-pressed="true" title="Scroll the page to keep the reading in view">${ICON.follow}<span>Follow</span></button>
 </div>
 <button type="button" class="listen-icon listen-close" aria-label="Stop listening" title="Stop listening">${ICON.close}</button>`;
   opts.host.append(tray);
@@ -142,6 +144,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   const faster = $<HTMLButtonElement>(".listen-faster");
   const rateOut = $<HTMLOutputElement>(".listen-rate");
   const close = $<HTMLButtonElement>(".listen-close");
+  const followButton = $<HTMLButtonElement>(".listen-follow");
 
   // ---- state ---------------------------------------------------------------------------
   const audio = new Audio();
@@ -178,6 +181,10 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   let resyncFrom: string | null = null;
   let idleTimer = 0;
   let raf = 0;
+  /** Follow: the page scrolls to keep the reading in view. On with every Listen; scrolling by hand turns it off. */
+  let followOn = true;
+  /** What the wisp was last told, so it hears each change once. */
+  let wispState = "";
   let unlockUrl = "";
   const made = new Map<number, { id: number; result: Promise<Made> }>();
   const waiting = new Map<number, { resolve: (m: Made) => void; reject: (e: Error) => void }>();
@@ -233,6 +240,13 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     faster.disabled = i >= RATES.length - 1;
     slower.title = i <= 0 ? "Slower (this is the slowest)" : "Slower";
     faster.title = i >= RATES.length - 1 ? "Faster (this is the fastest)" : "Faster";
+    followButton.setAttribute("aria-pressed", String(followOn));
+    // The wisp tracks words while the voice speaks, and floats while it waits or rests.
+    const ws = state === "playing" ? "playing" : busy() ? "waiting" : "resting";
+    if (ws !== wispState && !tray.hidden) {
+      wispState = ws;
+      opts.post({ t: "speak:state", state: ws });
+    }
     if ("mediaSession" in navigator && !tray.hidden) navigator.mediaSession.playbackState = wantPlay && (speaking || busy()) ? "playing" : "paused";
   }
 
@@ -446,7 +460,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
       if (mine !== generation) return;
       failures = 0;
       set("playing");
-      follow();
+      trackWords();
     } catch (err) {
       if (mine !== generation) return;
       // Autoplay refused (the tap that opened Listen has expired): wait for the reader. Anything else is a bad clip.
@@ -458,7 +472,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   }
 
   /** Marks the word being heard, every frame while playing. */
-  function follow() {
+  function trackWords() {
     cancelAnimationFrame(raf);
     const tick = () => {
       if (state !== "playing" || !current) return;
@@ -479,9 +493,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     const s = current ? sentences[current.i] : undefined;
     const w = k >= 0 ? current?.words[k] : undefined;
     if (!s || !w) return opts.post({ t: "speak:word", i: null, start: 0, end: 0 });
-    // The hop takes at most most of the word (in real time), so the wisp rests before the next one.
-    const hop = Math.round(((w.t1 - w.t0) / rate) * 1000 * 0.8);
-    opts.post({ t: "speak:word", i: s.unit, start: s.start + w.s, end: s.start + w.e, hop, lead: Math.round(WISP_LEAD * 1000) });
+    opts.post({ t: "speak:word", i: s.unit, start: s.start + w.s, end: s.start + w.e });
   }
 
   const ours = () => current !== null && current.i === at && audio.src === current.url;
@@ -506,7 +518,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     if (state === "paused" && ours()) {
       wantPlay = true;
       set("playing");
-      follow();
+      trackWords();
     }
   });
 
@@ -531,7 +543,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
         () => {
           if (mine !== generation) return;
           set("playing");
-          follow();
+          trackWords();
         },
         () => mine === generation && set("paused"),
       );
@@ -551,6 +563,13 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     else resume();
   });
   retry.addEventListener("click", tryAgain);
+  followButton.addEventListener("click", () => setFollow(!followOn, true));
+
+  function setFollow(on: boolean, tell: boolean) {
+    followOn = on;
+    if (tell) opts.post({ t: "speak:follow", on });
+    paint();
+  }
   prev.addEventListener("click", () => playAt(at - 1));
   next.addEventListener("click", () => playAt(at + 1));
   slower.addEventListener("click", () => setRate(RATES[Math.max(0, RATES.indexOf(rate) - 1)]!));
@@ -604,6 +623,8 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     sentences = [];
     charsBefore = [];
     errorText = "";
+    followOn = true;
+    wispState = "";
     tray.hidden = false;
     opts.trigger.setAttribute("aria-pressed", "true");
     set(ready ? "collecting" : "loading");
@@ -687,6 +708,10 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
       collectPending = false;
       clearTimeout(collectTimer);
       take(units, start);
+    },
+    /** The frame turned Follow off (the reader scrolled by hand) or on (they tapped a paragraph). */
+    follow(on: boolean) {
+      if (!tray.hidden) setFollow(on, false);
     },
     /** The reader tapped a block. */
     jump(unit: number) {

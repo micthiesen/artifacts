@@ -311,6 +311,9 @@ window.addEventListener("message", (event) => {
     case "speak:stale":
       listen?.frameChanged();
       break;
+    case "speak:follow":
+      listen?.follow(msg.on === true);
+      break;
   }
 });
 
