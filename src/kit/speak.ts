@@ -10,7 +10,7 @@
 // data-speak="<kind>" reads it as one unit (stat, chart, diagram), and
 // aria-hidden content is never read.
 
-import type { SpeakUnit } from "../shared/protocol.ts";
+import type { FrameMessage, SpeakUnit } from "../shared/protocol.ts";
 import { wispReflow, wispTo } from "./wisp.ts";
 
 const SKIP =
@@ -238,6 +238,7 @@ export function collectSpeech(root: Element): { units: SpeakUnit[]; start: numbe
   units = [];
   out = [];
   heading = undefined;
+  staleSent = false;
   // Blocks, and every ancestor of one up to the root.
   blocky = new Set();
   for (const b of root.querySelectorAll(BLOCK)) {
@@ -281,7 +282,8 @@ export function markSpeaking(i: number | null) {
     wispTo(null);
     return markWord(null, 0, 0);
   }
-  // A block with nothing of its own to point at (a table or chart read as a summary) has no wisp.
+  // A block with nothing of its own to point at (a table or chart read as a summary) has no wisp. (Between
+  // sentences markWord(null) deliberately leaves the wisp parked, so it hops on from there.)
   if (!unit.spoken.nodes.some(Boolean)) wispTo(null);
   if (!current) return;
   current.setAttribute("data-speaking", "");
@@ -315,20 +317,38 @@ export function wordRange(i: number, start: number, end: number): Range | null {
 }
 
 let wordAt: Range | null = null;
+let washTimer = 0;
 addEventListener("resize", () => wispReflow(wordAt));
 
+/** Tells the shell (once per collection) that the page changed under the reading, so it collects again. */
+let notify: ((msg: FrameMessage) => void) | null = null;
+let staleSent = false;
+function checkStale(i: number) {
+  const unit = units[i];
+  if (staleSent || !unit || !notify) return;
+  if (unit.spoken.nodes.some((n) => n && !n.isConnected)) {
+    staleSent = true;
+    notify({ t: "speak:stale" });
+  }
+}
+
 /**
- * Marks the word being spoken: [start, end) in the unit's text, with a wash and the wisp hopping over it
- * (in `hop` ms at most). Words Listen added (not on the page) mark nothing and leave the wisp where it was.
+ * Marks the word being spoken: [start, end) in the unit's text. The wisp sets off at once (hopping in `hop` ms
+ * at most) and the wash follows `lead` ms later, as the word is heard, so the two agree. Words Listen added (not
+ * on the page) mark nothing, and the wisp stays where it was between sentences.
  */
-export function markWord(i: number | null, start: number, end: number, hop?: number) {
+export function markWord(i: number | null, start: number, end: number, hop?: number, lead = 0) {
   const highlights = (globalThis.CSS as { highlights?: Map<string, unknown> } | undefined)?.highlights;
   const range = i === null ? null : wordRange(i, start, end);
+  if (i !== null && !range) checkStale(i);
   wordAt = range;
   if (range) wispTo(range, hop);
+  clearTimeout(washTimer);
   if (!highlights || typeof Highlight === "undefined") return;
   if (!range) return void highlights.delete(WORD_HIGHLIGHT);
-  highlights.set(WORD_HIGHLIGHT, new Highlight(range));
+  const wash = () => highlights.set(WORD_HIGHLIGHT, new Highlight(range));
+  if (lead > 0) washTimer = window.setTimeout(wash, lead);
+  else wash();
   // In a block taller than the screen the word can run off the bottom: bring its line back up.
   if (!following()) return;
   const r = range.getBoundingClientRect();
@@ -340,10 +360,14 @@ export function markWord(i: number | null, start: number, end: number, hop?: num
 
 let tapping: ((e: MouseEvent) => void) | null = null;
 
-/** While listening, tapping a block (not a control or link) starts reading there, and hand scrolling pauses following. */
-export function speakMode(on: boolean, send: (i: number) => void) {
+/**
+ * Listening on or off. On: tapping a block (not a control or link) starts reading there, hand scrolling pauses
+ * following, and a re-rendered page asks to be collected again. Off: every mark goes, numbering included.
+ */
+export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
   if (tapping) document.removeEventListener("click", tapping, true);
   tapping = null;
+  notify = on ? send : null;
   removeEventListener("wheel", userScroll);
   removeEventListener("touchmove", userScroll);
   removeEventListener("keydown", userKey);
@@ -351,7 +375,11 @@ export function speakMode(on: boolean, send: (i: number) => void) {
   document.documentElement.toggleAttribute("data-listening", on);
   if (!on) {
     wispTo(null);
-    return markSpeaking(null);
+    markSpeaking(null);
+    for (const u of units) u.el.removeAttribute("data-speak-i");
+    units = [];
+    out = [];
+    return;
   }
   userScrolledAt = 0;
   addEventListener("wheel", userScroll, { passive: true });
@@ -366,7 +394,7 @@ export function speakMode(on: boolean, send: (i: number) => void) {
     const el = target.closest("[data-speak-i]");
     if (!el) return;
     userScrolledAt = 0;
-    send(Number(el.getAttribute("data-speak-i")));
+    send({ t: "speak:jump", i: Number(el.getAttribute("data-speak-i")) });
   };
   document.addEventListener("click", tapping, true);
 }

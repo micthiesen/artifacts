@@ -217,23 +217,30 @@
   }
 }
 
-/* Listen: the block being read glows moon white, the agent's light (the ghost is reading). */
+/* Listen: the block being read glows moon white, the agent's light (the ghost is reading). The glow is laid over
+   the block's own look (an inset wash and a soft ring), so a card keeps its background, radius and shape. */
 [data-speak-i] {
-  transition:
-    background-color var(--motion-fast) var(--motion-ease),
-    box-shadow var(--motion-fast) var(--motion-ease);
+  transition: box-shadow var(--motion-fast) var(--motion-ease);
 }
 [data-speaking] {
-  border-radius: 6px;
-  background-color: color-mix(in oklch, var(--foreground) 7%, transparent);
-  box-shadow: 0 0 0 6px color-mix(in oklch, var(--foreground) 7%, transparent);
+  box-shadow:
+    inset 0 0 0 100vmax color-mix(in oklch, var(--foreground) 5%, transparent),
+    0 0 0 6px color-mix(in oklch, var(--foreground) 5%, transparent);
 }
+/* While listening, a block can be tapped to start there: the pointer and a faint wash say so (colour only). */
 :root[data-listening] [data-speak-i] {
   cursor: pointer;
 }
+@media (hover: hover) {
+  :root[data-listening] [data-speak-i]:not([data-speaking]):hover {
+    box-shadow:
+      inset 0 0 0 100vmax color-mix(in oklch, var(--foreground) 3%, transparent),
+      0 0 0 6px color-mix(in oklch, var(--foreground) 3%, transparent);
+  }
+}
 /* The word being spoken, inside the block: a brighter wash of the same moon light. */
 ::highlight(art-speak-word) {
-  background-color: color-mix(in oklch, var(--foreground) 22%, transparent);
+  background-color: color-mix(in oklch, var(--foreground) 18%, transparent);
   color: var(--foreground);
 }
 /* Listen's wisp (src/kit/wisp.ts): the ghost's light hopping over the word being spoken, with a fading tail. */
@@ -263,7 +270,9 @@
   width: 6px;
   height: 6px;
   margin: -3px 0 0 -3px;
-  box-shadow: 0 0 6px 1px color-mix(in oklch, var(--foreground) 50%, transparent);
+  box-shadow:
+    0 0 6px 1px color-mix(in oklch, var(--foreground) 50%, transparent),
+    0 0 12px 3px color-mix(in oklch, var(--foreground) 22%, transparent);
 }
 .art-wisp-tail {
   --size: calc(5px - var(--k) * 1px);

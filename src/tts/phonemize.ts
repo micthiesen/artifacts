@@ -397,11 +397,25 @@ const COMMON_WORDS = new Set(
     "new old big small good bad best less last next free full true real sure safe live dead open shut done easy hard " +
     "fast slow high low hot cold top end gap day week year time way life work home team user data file code test plan " +
     "away back down left right near far late soon well even ever ok wow hey oh gone lost won win tie due key max min " +
-    "warn"
+    "warn tip bug fix pro max min"
   ).split(" "),
 );
-/** Short capitalised words that are more often acronyms than emphasis: spelled. */
-const USUALLY_ACRONYMS = new Set(["am", "pm", "us", "it", "do", "id", "ai", "ui", "os", "pc", "tv", "hr", "pr", "qa", "ci", "cd", "ip", "vm", "max", "min"]);
+/**
+ * Acronyms always spelled, even where the lexicon has a word with those letters
+ * or the text is all capitals. "IT" and "US" are not here: in prose they are
+ * likelier emphasis ("IT matters", "tell US"); the normaliser spells "the US"
+ * and "IT team" from context.
+ */
+const TECH_ACRONYMS = new Set(
+  (
+    "am pm id ai ui ux os pc tv hr pr qa ci cd ip vm api url uri css pdf cpu gpu ram rom ssd usb sdk cli ssh dns " +
+    "tcp udp tls ssl sql kpi okr roi ceo cto cfo coo vp faq eta fyi diy nyc la uk eu gpt llm mcp tts stt aws gcp " +
+    "html json http https xml yaml jwt csv svg png jpg gif npm ide vpn lan wan seo crm erp b2b saas iot ml nlp"
+  ).split(" "),
+);
+
+/** Has a vowel and no run of four consonants: worth letting the GRU say ("CHANGELOG"), rather than spelling. */
+const looksPronounceable = (w: string) => /[aeiouy]/.test(w) && !/[^aeiouy]{4}/.test(w);
 
 const WORD_OR_PUNCT = /[\p{L}\p{M}\p{N}]+(?:['-][\p{L}\p{M}\p{N}]+)*'?|[.,?!;:—…"]/gu;
 const STARTS_WITH_VOWEL_SOUND = /^[ˈˌ]?[ɑæʌɔaɛɜeɪiʊuoəɚᵻɐ]/;
@@ -428,7 +442,8 @@ export class Phonemizer {
   phonemizeWords(text: string): { phonemes: string; words: { text: [number, number]; phonemes: [number, number] }[] } {
     const nfc = text.normalize("NFC");
     const tokens = [...nfc.matchAll(WORD_OR_PUNCT)];
-    const shouting = !/\p{Ll}/u.test(text);
+    // All capitals is shouting (a heading, a label) unless it is three words or fewer.
+    const shouting = !/\p{Ll}/u.test(text) && tokens.filter((t) => /[\p{L}\p{N}]/u.test(t[0])).length > 3;
     const isWord = (t: string | undefined) => t !== undefined && /[\p{L}\p{N}]/u.test(t);
     let out = "";
     const raw: { text: [number, number]; from: number; to: number }[] = [];
@@ -468,7 +483,7 @@ export class Phonemizer {
   /** One word in context: function words stay unstressed; "the" before a vowel is ðɪ. */
   private word(raw: string, shouting: boolean, nextWord: string | undefined): string {
     const lower = raw.toLowerCase();
-    const acronym = raw.length > 1 && /^\p{Lu}+$/u.test(raw) && !shouting && !this.pronounceableAcronym(raw);
+    const acronym = raw.length > 1 && /^\p{Lu}+$/u.test(raw) && this.spellsCaps(raw, shouting);
     if (!acronym && FUNCTION_WORDS[lower] !== undefined) {
       if (lower === "the" && nextWord) {
         const next = this.word(nextWord, shouting, undefined);
@@ -501,7 +516,7 @@ export class Phonemizer {
     if (raw.includes("-")) return raw.split("-").filter(Boolean).map((p) => this.content(p, shouting)).join("");
     // Acronyms: "MCP", "APIs".
     const caps = /^(\p{Lu}{2,})(s?)$/u.exec(raw);
-    if (caps && !shouting && !this.pronounceableAcronym(caps[1])) return caps[2] ? `${spell(caps[1])}z` : spell(caps[1]);
+    if (caps && this.spellsCaps(caps[1], shouting)) return caps[2] ? `${spell(caps[1])}z` : spell(caps[1]);
     // Single letters other than "a" and "I" are letter names.
     if (/^\p{L}$/u.test(raw) && lower !== "a" && lower !== "i") return spell(raw);
     const known = HOMOGRAPHS[lower] ?? this.lexicon.get(lower);
@@ -539,18 +554,21 @@ export class Phonemizer {
 
   /** "NASA" is said as a word; "HTML" and "MCP" are spelled. */
   /**
-   * Whether an all-caps word is said as a word rather than spelled. Emphasis
-   * ("Do NOT", "ALL users", "It is FREE") is common in prose and acronyms are
-   * common in tech, so: up to four letters, only everyday English words
-   * (COMMON_WORDS, minus the ones usually acronyms) that the lexicon knows;
-   * four or more, any lexicon word with a vowel and no three consonants in a
-   * row ("NASA", "IMPORTANT", not "HTML" or "JSON").
+   * Whether an all-caps word is spelled out rather than said. Emphasis ("Do
+   * NOT", "the FIRST step") is common in prose, acronyms in tech, so:
+   * - TECH_ACRONYMS are always spelled.
+   * - Up to three letters: said only if an everyday word (COMMON_WORDS) the lexicon knows.
+   * - Four or more: said if the lexicon knows it, or if it is six or more letters that look pronounceable.
+   * - In shouting text (all capitals, over three words): five letters or fewer are said
+   *   only if the lexicon knows them; longer misses are spelled unless they look pronounceable.
    */
-  private pronounceableAcronym(caps: string): boolean {
+  private spellsCaps(caps: string, shouting: boolean): boolean {
     const lower = caps.toLowerCase();
-    if (this.capsAsWords[lower]) return true;
-    if (USUALLY_ACRONYMS.has(lower) || !this.lexicon.has(lower)) return false;
-    if (COMMON_WORDS.has(lower)) return true;
-    return caps.length >= 4 && /[aeiouy]/.test(lower) && !/[^aeiouy]{3}/.test(lower);
+    if (this.capsAsWords[lower]) return false;
+    if (TECH_ACRONYMS.has(lower)) return true;
+    const known = this.lexicon.has(lower);
+    if (shouting) return caps.length <= 5 ? !known : !known && !looksPronounceable(lower);
+    if (caps.length <= 3) return !(known && COMMON_WORDS.has(lower));
+    return !known && !(caps.length >= 6 && looksPronounceable(lower));
   }
 }

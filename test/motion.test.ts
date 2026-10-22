@@ -84,6 +84,18 @@ describe("motion tokens", () => {
     }
     expect(bad).toEqual([]);
   });
+
+  test("Listen's wisp times every hop from the tokens and stays within --motion-slow", () => {
+    // The wisp (src/kit/wisp.ts) is the one WAAPI user outside move(): a hop per spoken word, built from the
+    // word's own timing. Its durations must come from motionMs() (so reduced motion places it without a hop).
+    const wisp = stripTs(read("src/kit/wisp.ts"));
+    expect(wisp).toMatch(/motionMs\("slow"\)/);
+    expect(wisp).toMatch(/motionMs\("fast"\)/);
+    expect(wisp).not.toMatch(/\b(duration|delay)\s*:\s*\d/);
+    expect(wisp).not.toMatch(/\b\d{2,}\s*ms\b|setTimeout/);
+    // Transform and opacity only.
+    expect(wisp).not.toMatch(/\b(top|left|width|height|margin)\s*:/);
+  });
 });
 
 describe("sound", () => {

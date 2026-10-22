@@ -123,3 +123,20 @@ test("pages with POST forms load the double-submit guard; others don't", async (
     expect(css).toContain(`url(/kit/v1/fonts/${font})`);
   }
 });
+
+test("only the artifact page widens its policy, and only for Listen", async () => {
+  const { PAGE_CSP, shellCsp } = await import("../src/worker/pages.ts");
+  const directive = (csp: string, name: string) => csp.split("; ").find((d) => d.startsWith(`${name} `)) ?? "";
+  // Every other page: no WebAssembly, no media, no other origin to fetch from.
+  expect(PAGE_CSP).not.toContain("wasm-unsafe-eval");
+  expect(directive(PAGE_CSP, "media-src")).toBe("");
+  expect(directive(PAGE_CSP, "connect-src")).toBe("connect-src 'self' https://cloudflareinsights.com");
+  // The artifact page: the speech worker's WebAssembly, the voice from the apex, sentences from blob: URLs.
+  const shell = shellCsp("https://artifacts.test");
+  expect(directive(shell, "script-src")).toBe("script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com");
+  expect(directive(shell, "connect-src")).toBe("connect-src 'self' https://artifacts.test https://cloudflareinsights.com");
+  expect(directive(shell, "media-src")).toBe("media-src 'self' blob:");
+  // Everything else is the same.
+  const rest = (csp: string) => csp.split("; ").filter((d) => !/^(script|connect|media)-src /.test(d));
+  expect(rest(shell)).toEqual(rest(PAGE_CSP));
+});

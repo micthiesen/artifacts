@@ -6,9 +6,9 @@
 // anywhere, and nothing runs on a server.
 import * as ort from "onnxruntime-web/wasm";
 import { Phonemizer } from "./phonemize.ts";
-import { planParts, wordTimes } from "./plan.ts";
+import { planParts, SAMPLE_RATE, wordTimes } from "./plan.ts";
 import { styleFor, STYLE_WIDTH } from "./style.ts";
-import { toWav, SAMPLE_RATE } from "./dsp.ts";
+import { toWav } from "./dsp.ts";
 import { MAX_SENTENCE, type FromWorker, type TimedWord, type ToWorker, type TtsManifest } from "./types.ts";
 
 declare const __TTS_MANIFEST__: TtsManifest;
@@ -90,7 +90,6 @@ function load(): Promise<Engine> {
 
 /** The model starts every clip with about 0.8 s of silence (all on the start token); keep only a breath of it. */
 const LEAD_KEEP_SAMPLES = Math.round(0.12 * SAMPLE_RATE);
-const SAMPLES_PER_FRAME = 600;
 
 async function synth(text: string): Promise<{ pcm: Float32Array; words: TimedWord[] }> {
   const { session, phonemizer, voice } = await load();
@@ -107,7 +106,10 @@ async function synth(text: string): Promise<{ pcm: Float32Array; words: TimedWor
     });
     const wave = out.waveform!.data as Float32Array;
     const durations = Array.from(out.duration!.data as ArrayLike<number | bigint>, Number);
-    const cut = Math.max(0, Math.min(wave.length, Math.round((durations[0] ?? 0) * SAMPLES_PER_FRAME) - LEAD_KEEP_SAMPLES));
+    // Samples per duration frame, from this clip itself (the model's is 600).
+    const frames = durations.reduce((n, d) => n + Math.max(0, d), 0);
+    const perFrame = frames > 0 ? wave.length / frames : 0;
+    const cut = Math.max(0, Math.min(wave.length, Math.round((durations[0] ?? 0) * perFrame) - LEAD_KEEP_SAMPLES));
     const pcm = wave.subarray(cut, Math.max(cut, wave.length - TAIL_SAMPLES));
     const seconds = pcm.length / SAMPLE_RATE;
     for (const w of wordTimes(part.words, durations, wave.length, SAMPLE_RATE)) {
@@ -144,7 +146,7 @@ scope.onmessage = (e) => {
       try {
         const { pcm, words } = await synth(msg.text.slice(0, MAX_SENTENCE));
         const wav = toWav(pcm, SAMPLE_RATE);
-        reply({ t: "audio", id: msg.id, wav, seconds: pcm.length / SAMPLE_RATE, words }, [wav]);
+        reply({ t: "audio", id: msg.id, wav, words }, [wav]);
       } catch (err) {
         reply({ t: "error", id: msg.id, message: err instanceof Error ? err.message : String(err), fatal: engine === null });
       }

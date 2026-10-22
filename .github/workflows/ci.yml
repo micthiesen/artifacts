@@ -24,6 +24,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
+      # Listen's voice files (pinned by sha256) come from Hugging Face, GitHub and PyPI on a cold cache.
+      - uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/tts/src
+          key: tts-${{ hashFiles('scripts/build-tts.ts') }}
       # The build regenerates committed files (kit exports, splash demos); they must match.
       - run: bun run build
       - name: Generated files are committed and current

@@ -3,33 +3,33 @@
 // sentence into audio on this device, with the time each word is heard
 // (src/tts/worker.ts); this file is the tray under the page and the playback.
 // Speech is media the reader asked for, not a feedback cue, so it plays
-// through an <audio> element and ignores the Sounds setting. Nothing here
-// costs anything while nobody listens: the model is a cached static asset and
-// the worker only starts on the first Listen.
+// through an <audio> element and ignores the Sounds setting.
+//
+// Nothing here costs anything until someone listens: shell.ts creates this on
+// the first press of the Listen button, the model is a cached static asset,
+// and the worker shuts down a couple of minutes after the tray closes.
 import type { ShellMessage, SpeakUnit } from "../shared/protocol.ts";
+import { motionMs } from "../shared/motion.ts";
 import type { FromWorker, TimedWord, ToWorker } from "../tts/types.ts";
+import { splitSentences, takeUnits, type Sentence } from "./listen-text.ts";
 
 /** Playback rates on top of the voice's own pace (Listen's 1× is already a little brisk). */
 const RATES = [0.75, 0.9, 1, 1.25, 1.5, 1.75, 2];
 const RATE_KEY = "art:listen:rate";
 const HINT_KEY = "art:listen:hinted";
-/**
- * Long sentences are said in pieces of about this many characters (split at commas, then spaces), so the first
- * sound comes quickly, a jump never waits behind a long one, and the model doesn't drift.
- */
-const MAX_CHARS = 160;
-/** What the tray takes from a page, at most: beyond this a page is read up to here. */
-const MAX_UNITS = 5000;
-const MAX_UNIT_CHARS = 20_000;
-const MAX_TOTAL_CHARS = 1_000_000;
 /** Sentences made ahead of the one playing. */
 const AHEAD = 2;
-/** The wisp leaves this early (seconds of real time) so it lands as the word begins. */
-const WISP_LEAD = 0.08;
+/** The wisp leaves this early (seconds of real time) so it is landing as the word begins. */
+const WISP_LEAD = 0.1;
 /** Short waits don't announce themselves: a status that flashes for a moment is noise. */
 const QUIET_MS = 400;
+/** If the page doesn't answer (its script failed), say so rather than wait forever. */
+const COLLECT_TIMEOUT_MS = 8000;
+/** After the tray closes the voice stays loaded this long for a quick reopen, then the worker and its memory go. */
+const IDLE_MS = 2 * 60_000;
+/** Sentences that fail in a row before Listen gives up on the page. */
+const MAX_FAILURES = 3;
 
-type Sentence = { unit: number; start: number; text: string; h?: string };
 type Made = { url: string; words: TimedWord[] };
 type State = "loading" | "collecting" | "buffering" | "playing" | "paused" | "ended" | "empty" | "error";
 
@@ -45,71 +45,54 @@ const ICON = {
   close: svg(`<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>`),
 };
 
-function splitSentences(units: SpeakUnit[]): Sentence[] {
-  const seg = typeof Intl.Segmenter === "function" ? new Intl.Segmenter("en", { granularity: "sentence" }) : null;
-  const out: Sentence[] = [];
-  for (const u of units) {
-    const parts = seg
-      ? [...seg.segment(u.text)].map((s) => ({ index: s.index, segment: s.segment }))
-      : [...u.text.matchAll(/[^.!?]+[.!?]*\s*/g)].map((m) => ({ index: m.index!, segment: m[0] }));
-    for (const { index, segment } of parts) {
-      const lead = segment.length - segment.trimStart().length;
-      const text = segment.trim();
-      if (!/[\p{L}\p{N}]/u.test(text)) continue;
-      const at = index + lead;
-      if (text.length <= MAX_CHARS) {
-        out.push({ unit: u.i, start: at, text, h: u.h });
-        continue;
-      }
-      // Too long: break after commas, semicolons and dashes (and at spaces when a clause is itself too long),
-      // packing pieces up to the limit.
-      let line = "";
-      let lineAt = at;
-      let offset = at;
-      const pieces = text.split(/(?<=[,;:—])\s+/).flatMap((p) => (p.length <= MAX_CHARS ? [p] : (p.match(new RegExp(`.{1,${MAX_CHARS}}(?:\\s+|$)|\\S+`, "gs")) ?? [p]).map((x) => x.trim()).filter(Boolean)));
-      for (const piece of pieces) {
-        const pieceAt = u.text.indexOf(piece, offset);
-        offset = pieceAt + piece.length;
-        if (line && line.length + piece.length + 1 > MAX_CHARS) {
-          out.push({ unit: u.i, start: lineAt, text: line, h: u.h });
-          line = "";
-        }
-        if (!line) lineAt = pieceAt;
-        line = u.text.slice(lineAt, pieceAt + piece.length);
-      }
-      if (line) out.push({ unit: u.i, start: lineAt, text: line, h: u.h });
-    }
-  }
-  return out;
-}
-
-const mb = (n: number) => `${Math.round(n / 1e6)}`;
-const rateLabel = (r: number) => `${r}×`;
-
-function readRate(): number {
-  const r = Number(load(RATE_KEY));
-  return RATES.includes(r) ? r : 1;
-}
-
-export function listenSupported(): boolean {
-  return typeof WebAssembly === "object" && typeof Worker === "function" && typeof Audio === "function";
-}
-
 /** localStorage, which can throw (blocked storage) and must never take the shell down with it. */
-function load(key: string): string | null {
+function recall(key: string): string | null {
   try {
     return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
-function store(key: string, value: string) {
+function remember(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
   } catch {
     // blocked or full: the choice lasts for this page only
   }
 }
+
+/**
+ * 50 ms of real silence, played inside the tap that opens Listen: iOS only lets an audio element start on its
+ * own later if it has already played something in a gesture. Made as a blob (no data: URL in the CSP).
+ */
+function silence(): string {
+  const samples = 1200;
+  const buf = new ArrayBuffer(44 + samples * 2);
+  const v = new DataView(buf);
+  const str = (o: number, s: string) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF");
+  v.setUint32(4, 36 + samples * 2, true);
+  str(8, "WAVEfmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, 24000, true);
+  v.setUint32(28, 48000, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  str(36, "data");
+  v.setUint32(40, samples * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
+const mb = (n: number) => `${Math.round(n / 1e6)}`;
+const rateLabel = (r: number) => `${r}×`;
+
+export function listenSupported(): boolean {
+  return typeof WebAssembly === "object" && typeof Worker === "function" && typeof Audio === "function";
+}
+
+export type Listen = ReturnType<typeof createListen>;
 
 export function createListen(opts: { title: string; apex: string; post: (msg: ShellMessage) => void; host: HTMLElement; trigger: HTMLButtonElement }) {
   // ---- the tray ------------------------------------------------------------------------
@@ -119,8 +102,13 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   tray.setAttribute("aria-label", "Listen");
   tray.innerHTML = `
 <div class="listen-track" role="progressbar" aria-label="Reading progress" aria-valuemin="0"><div class="listen-fill"></div></div>
-<span class="listen-ghost" aria-hidden="true"><img src="/static/icons/logo.svg" alt="" width="28" height="28"></span>
-<div class="listen-now"><span class="listen-where"></span><span class="listen-line"><span class="listen-state" role="status"></span> <span class="listen-detail" aria-hidden="true"></span></span></div>
+<div class="listen-now">
+  <span class="listen-ghost" aria-hidden="true"><img src="/static/icons/logo.svg" alt="" width="26" height="26"></span>
+  <div class="listen-text">
+    <span class="listen-where"></span>
+    <span class="listen-line"><span class="listen-state" role="status"></span><span class="listen-detail" aria-hidden="true"></span><button type="button" class="listen-retry" hidden>Try again</button></span>
+  </div>
+</div>
 <div class="listen-deck">
   <div class="listen-speed" role="group" aria-label="Speed">
     <button type="button" class="listen-icon listen-slower" aria-label="Slower">${ICON.slower}</button>
@@ -139,11 +127,12 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
 <button type="button" class="listen-icon listen-close" aria-label="Stop listening" title="Stop listening">${ICON.close}</button>`;
   opts.host.append(tray);
   const $ = <T extends Element>(sel: string) => tray.querySelector<T>(sel)!;
+  const track = $<HTMLElement>(".listen-track");
   const fill = $<HTMLElement>(".listen-fill");
   const where = $<HTMLElement>(".listen-where");
   const stateEl = $<HTMLElement>(".listen-state");
   const detail = $<HTMLElement>(".listen-detail");
-  const track = $<HTMLElement>(".listen-track");
+  const retry = $<HTMLButtonElement>(".listen-retry");
   const play = $<HTMLButtonElement>(".listen-play");
   const glyph = $<HTMLElement>(".listen-glyph");
   const ring = $<SVGCircleElement>(".listen-ring circle");
@@ -157,11 +146,14 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   // ---- state ---------------------------------------------------------------------------
   const audio = new Audio();
   audio.preload = "auto";
-  let rate = readRate();
+  let rate = RATES.includes(Number(recall(RATE_KEY))) ? Number(recall(RATE_KEY)) : 1;
   let worker: Worker | null = null;
   let ready = false;
   let download: { loaded: number; total: number } | null = null;
   let sentences: Sentence[] = [];
+  /** Characters before each sentence, so progress moves with the reading rather than the sentence count. */
+  let charsBefore: number[] = [];
+  let truncated = false;
   let at = 0;
   let state: State = "loading";
   let errorText = "";
@@ -172,72 +164,83 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   let current: (Made & { i: number }) | null = null;
   /** The reader wants it playing (false after Pause, until Play). */
   let wantPlay = true;
-  /** Sentences that failed in a row. */
   let failures = 0;
   let word = -1;
-  let quietTimer = 0;
   let quiet = true;
+  let quietTimer = 0;
   /** The first time anyone listens on this device, the tray says once that tapping a paragraph starts there. */
   let hinting = false;
+  let hintTimer = 0;
   /** A speak:collect is out; only its answer is taken (a frame can't push text unasked). */
   let collectPending = false;
+  let collectTimer = 0;
+  /** Set when the page is being collected again mid-reading (the frame reloaded or re-rendered): carry on from this. */
+  let resyncFrom: string | null = null;
+  let idleTimer = 0;
+  let raf = 0;
+  let unlockUrl = "";
   const made = new Map<number, { id: number; result: Promise<Made> }>();
   const waiting = new Map<number, { resolve: (m: Made) => void; reject: (e: Error) => void }>();
 
+  const busy = () => state === "loading" || state === "collecting" || state === "buffering";
   /** Play can't do anything until there is something to read; it says why instead. */
-  const playBlocked = () => state === "empty" || ((state === "loading" || state === "collecting") && !sentences.length);
+  const playBlocked = () => state === "empty" || (sentences.length === 0 && (busy() || state === "error"));
 
   function paint() {
     tray.dataset.state = state;
-    const busy = state === "loading" || state === "collecting" || state === "buffering";
     const speaking = state === "playing";
     const blocked = playBlocked();
-    const icon = blocked ? ICON.play : speaking || busy ? ICON.pause : state === "ended" ? ICON.replay : ICON.play;
+    const icon = blocked ? ICON.play : speaking || busy() ? ICON.pause : state === "ended" ? ICON.replay : ICON.play;
     if (glyph.dataset.icon !== icon) {
       glyph.innerHTML = icon;
       glyph.dataset.icon = icon;
     }
     const label =
-      state === "empty" ? "Nothing to read" : blocked ? "Getting the voice ready" : speaking || busy ? "Pause" : state === "ended" ? "Read again" : "Play";
+      state === "empty" ? "Nothing to read" : state === "error" && blocked ? "Try again below" : blocked ? "Getting the voice ready" : speaking || busy() ? "Pause" : state === "ended" ? "Read again" : "Play";
     play.setAttribute("aria-label", label);
     play.title = label;
     play.setAttribute("aria-disabled", String(blocked));
-    play.setAttribute("aria-busy", String(busy));
+    play.setAttribute("aria-busy", String(busy()));
     // The ring: download progress while the voice arrives, a spinner while waiting, nothing otherwise.
     const determinate = state === "loading" && download && download.total > 0 ? download.loaded / download.total : null;
-    tray.toggleAttribute("data-spinning", busy && determinate === null && !quiet);
-    ring.style.strokeDashoffset = determinate === null ? "" : String(100 - determinate * 100);
+    tray.toggleAttribute("data-spinning", busy() && determinate === null && !quiet);
     tray.toggleAttribute("data-progress", determinate !== null);
+    ring.style.strokeDashoffset = determinate === null ? "" : String(100 - determinate * 100);
     prev.disabled = !sentences.length || at <= 0;
     next.disabled = !sentences.length || at >= sentences.length - 1;
-    const done = at + (state === "ended" ? 1 : 0);
-    fill.style.transform = `scaleX(${sentences.length ? done / sentences.length : 0})`;
+    const total = charsBefore[sentences.length] ?? 0;
+    const done = state === "ended" ? total : (charsBefore[at] ?? 0);
+    fill.style.transform = `scaleX(${total ? done / total : 0})`;
     track.setAttribute("aria-valuemax", String(sentences.length));
-    track.setAttribute("aria-valuenow", String(done));
-    track.setAttribute("aria-valuetext", sentences.length ? `Sentence ${Math.min(done + 1, sentences.length)} of ${sentences.length}` : "Not started");
-    const s = sentences[at];
-    const heading = s?.h ?? opts.title;
+    track.setAttribute("aria-valuenow", String(Math.min(at + 1, sentences.length)));
+    track.setAttribute("aria-valuetext", sentences.length ? `Sentence ${Math.min(at + 1, sentences.length)} of ${sentences.length}` : "Not started");
+    const heading = sentences[at]?.h ?? opts.title;
     if (where.textContent !== heading) where.textContent = heading;
     // The live region changes only when what it says changes, so a repaint never re-announces it.
     const text = stateText();
     if (stateEl.textContent !== text) stateEl.textContent = text;
-    const numbers = state === "loading" && !quiet && download?.total && !ready ? `${mb(download.loaded)} of ${mb(download.total)} MB` : "";
+    // Beside it, quietly: download size, or how far through the page.
+    const numbers =
+      state === "loading" && !ready && download?.total && !quiet
+        ? `${mb(download.loaded)} of ${mb(download.total)} MB`
+        : sentences.length && !text
+          ? `${Math.min(at + 1, sentences.length)} of ${sentences.length}`
+          : "";
     if (detail.textContent !== numbers) detail.textContent = numbers;
-    tray.toggleAttribute("data-quiet", !text);
     const i = RATES.indexOf(rate);
     rateOut.textContent = rateLabel(rate);
     slower.disabled = i <= 0;
     faster.disabled = i >= RATES.length - 1;
     slower.title = i <= 0 ? "Slower (this is the slowest)" : "Slower";
     faster.title = i >= RATES.length - 1 ? "Faster (this is the fastest)" : "Faster";
-    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = speaking ? "playing" : state === "paused" ? "paused" : "none";
+    if ("mediaSession" in navigator && !tray.hidden) navigator.mediaSession.playbackState = wantPlay && (speaking || busy()) ? "playing" : "paused";
   }
 
   function stateText(): string {
     switch (state) {
       case "loading":
-        if (download && download.total && !ready && !quiet) return "Getting the voice ready, only this once:";
-        return quiet ? "" : "Getting ready…";
+        if (quiet) return "";
+        return download?.total && !ready ? "Getting the voice ready, only this once: " : "Getting ready…";
       case "collecting":
         return quiet ? "" : "Getting ready…";
       case "buffering":
@@ -247,29 +250,29 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
       case "paused":
         return "Paused";
       case "ended":
-        return "Finished";
+        return truncated ? "Finished the part of this page Listen can read" : "Finished";
       case "empty":
         return "There's nothing to read on this page";
       case "error":
         return errorText;
-      default:
-        return "";
     }
   }
 
   /** Enter a state; waiting states stay quiet for a moment so quick ones don't flash. */
-  function set(next: State) {
-    if (next === "playing" && state !== "playing" && !load(HINT_KEY)) {
-      store(HINT_KEY, "1");
+  function set(to: State) {
+    if (to === "playing" && state !== "playing" && !recall(HINT_KEY)) {
+      remember(HINT_KEY, "1");
       hinting = true;
-      setTimeout(() => {
+      clearTimeout(hintTimer);
+      hintTimer = window.setTimeout(() => {
         hinting = false;
         paint();
       }, 6000);
     }
-    state = next;
+    state = to;
+    if (to !== "error") retry.hidden = true;
     clearTimeout(quietTimer);
-    quiet = next === "loading" || next === "collecting" || next === "buffering";
+    quiet = busy();
     if (quiet) {
       quietTimer = window.setTimeout(() => {
         quiet = false;
@@ -286,6 +289,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   function startWorker() {
     clearTimeout(idleTimer);
     if (worker) return;
+    download = null;
     worker = new Worker(`/static/tts-worker.js${new URL(import.meta.url).search}`, { type: "module" });
     worker.onmessage = (e: MessageEvent<FromWorker>) => {
       const msg = e.data;
@@ -294,8 +298,15 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
         if (state === "loading") paint();
       } else if (msg.t === "ready") {
         ready = true;
-        download = null;
-        paint();
+        // The ring completes before it fades, rather than draining back.
+        if (download) {
+          download = { loaded: download.total, total: download.total };
+          paint();
+          setTimeout(() => {
+            download = null;
+            paint();
+          }, motionMs("base"));
+        } else paint();
       } else if (msg.t === "audio") {
         const w = waiting.get(msg.id);
         waiting.delete(msg.id);
@@ -321,12 +332,14 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     worker?.terminate();
     worker = null;
     ready = false;
+    download = null;
     for (const w of waiting.values()) w.reject(Object.assign(new Error("stopped"), { fatal: true }));
     waiting.clear();
     forget();
   }
 
   function fail(text: string) {
+    if (tray.hidden) return;
     errorText = text;
     generation++;
     cancelAnimationFrame(raf);
@@ -334,28 +347,21 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     current = null;
     // Nothing queued keeps running (or re-downloading) behind the error.
     forget();
-    retry.hidden = false;
     set("error");
+    retry.hidden = false;
     // Keyboard users land on the way forward.
     if (document.activeElement === play) retry.focus();
   }
 
-  // An error offers one way forward, beside the message.
-  const retry = document.createElement("button");
-  retry.type = "button";
-  retry.className = "listen-retry";
-  retry.textContent = "Try again";
-  retry.hidden = true;
-  stateEl.parentElement!.after(retry);
-  retry.addEventListener("click", () => {
-    retry.hidden = true;
+  function tryAgain() {
     failures = 0;
     startWorker();
     if (sentences.length) return void playAt(at);
     // The page never answered: ask again.
     set(ready ? "collecting" : "loading");
     collect();
-  });
+    play.focus();
+  }
 
   function audioFor(i: number): Promise<Made> {
     let entry = made.get(i);
@@ -370,9 +376,9 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     return entry.result;
   }
 
-  /** Forget made audio and drop what's still queued. */
+  /** Forget made audio (except what is playing) and drop what's still queued. */
   function forget() {
-    for (const { result } of made.values()) result.then((m) => URL.revokeObjectURL(m.url), () => {});
+    for (const { result } of made.values()) result.then((m) => m.url !== current?.url && URL.revokeObjectURL(m.url), () => {});
     made.clear();
     send({ t: "cancel", before: nextId });
   }
@@ -380,8 +386,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   // ---- playback ------------------------------------------------------------------------
   /** One sentence the model couldn't say is skipped; several in a row means something is wrong. */
   function skipFailed(i: number) {
-    failures++;
-    if (failures >= 3) return fail("Couldn't read this page aloud.");
+    if (++failures >= MAX_FAILURES) return fail("Couldn't read this page aloud.");
     if (i + 1 < sentences.length) void playAt(i + 1);
     else finish();
   }
@@ -402,10 +407,11 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     // Whatever was playing stops now, so it can't be resumed under the new sentence.
     cancelAnimationFrame(raf);
     audio.pause();
+    const old = current;
     current = null;
+    if (old && made.get(old.i)?.id === undefined) URL.revokeObjectURL(old.url);
     const moved = i !== at;
     at = i;
-    retry.hidden = true;
     markWord(-1);
     opts.post({ t: "speak:at", i: sentences[i]!.unit });
     // Jumping makes everything queued for the old place useless.
@@ -444,13 +450,14 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     } catch (err) {
       if (mine !== generation) return;
       // Autoplay refused (the tap that opened Listen has expired): wait for the reader. Anything else is a bad clip.
-      if ((err as DOMException).name === "NotAllowedError") set("paused");
-      else skipFailed(i);
+      if ((err as DOMException).name === "NotAllowedError") {
+        wantPlay = false;
+        set("paused");
+      } else skipFailed(i);
     }
   }
 
   /** Marks the word being heard, every frame while playing. */
-  let raf = 0;
   function follow() {
     cancelAnimationFrame(raf);
     const tick = () => {
@@ -472,9 +479,9 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     const s = current ? sentences[current.i] : undefined;
     const w = k >= 0 ? current?.words[k] : undefined;
     if (!s || !w) return opts.post({ t: "speak:word", i: null, start: 0, end: 0 });
-    // The hop takes at most most of the word, so the wisp is resting by the time the next one comes.
+    // The hop takes at most most of the word (in real time), so the wisp rests before the next one.
     const hop = Math.round(((w.t1 - w.t0) / rate) * 1000 * 0.8);
-    opts.post({ t: "speak:word", i: s.unit, start: s.start + w.s, end: s.start + w.e, hop });
+    opts.post({ t: "speak:word", i: s.unit, start: s.start + w.s, end: s.start + w.e, hop, lead: Math.round(WISP_LEAD * 1000) });
   }
 
   const ours = () => current !== null && current.i === at && audio.src === current.url;
@@ -491,6 +498,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     if (state === "playing" && !audio.ended && ours()) {
       generation++;
       wantPlay = false;
+      cancelAnimationFrame(raf);
       set("paused");
     }
   });
@@ -508,9 +516,11 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     cancelAnimationFrame(raf);
     audio.pause();
     if (sentences.length) set("paused");
+    else paint();
   }
 
   function resume() {
+    if (state === "error") return tryAgain();
     if (state === "ended") return void playAt(0);
     if (!sentences.length) return;
     // Mid-sentence: carry on from the same spot.
@@ -530,16 +540,17 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
 
   function setRate(r: number) {
     rate = r;
-    store(RATE_KEY, String(r));
+    remember(RATE_KEY, String(r));
     audio.playbackRate = r;
     paint();
   }
 
   play.addEventListener("click", () => {
     if (playBlocked()) return;
-    if (state === "playing" || state === "buffering" || state === "collecting" || state === "loading") pause();
+    if (state === "playing" || busy()) pause();
     else resume();
   });
+  retry.addEventListener("click", tryAgain);
   prev.addEventListener("click", () => playAt(at - 1));
   next.addEventListener("click", () => playAt(at + 1));
   slower.addEventListener("click", () => setRate(RATES[Math.max(0, RATES.indexOf(rate) - 1)]!));
@@ -552,45 +563,23 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     }
   });
 
-  /** After Listen closes, the voice stays loaded a while for a quick reopen, then the worker goes and its memory with it. */
-  const IDLE_MS = 2 * 60_000;
-  let idleTimer = 0;
-
-  function closeTray() {
-    collectPending = false;
-    clearTimeout(collectTimer);
-    generation++;
-    cancelAnimationFrame(raf);
-    audio.pause();
-    audio.removeAttribute("src");
-    current = null;
-    forget();
-    sentences = [];
-    markWord(-1);
-    opts.post({ t: "speak:mode", on: false });
-    tray.hidden = true;
-    opts.trigger.setAttribute("aria-pressed", "false");
-    opts.trigger.focus();
-    if ("mediaSession" in navigator) {
-      navigator.mediaSession.metadata = null;
-      navigator.mediaSession.playbackState = "none";
+  // Lock screen and headphone controls belong to Listen only while the tray is open.
+  const MEDIA_ACTIONS = ["play", "pause", "previoustrack", "nexttrack"] as const;
+  function mediaSession(on: boolean) {
+    if (!("mediaSession" in navigator)) return;
+    const handlers = { play: resume, pause, previoustrack: () => void playAt(at - 1), nexttrack: () => void playAt(at + 1) };
+    for (const action of MEDIA_ACTIONS) {
+      try {
+        navigator.mediaSession.setActionHandler(action, on ? handlers[action] : null);
+      } catch {
+        // an action this browser doesn't support
+      }
     }
-    clearTimeout(idleTimer);
-    idleTimer = window.setTimeout(stopWorker, IDLE_MS);
+    navigator.mediaSession.metadata = on
+      ? new MediaMetadata({ title: opts.title, artist: "Listen", artwork: [{ src: "/static/icons/icon-512.png", sizes: "512x512", type: "image/png" }] })
+      : null;
+    navigator.mediaSession.playbackState = "none";
   }
-
-  if ("mediaSession" in navigator) {
-    navigator.mediaSession.setActionHandler("play", resume);
-    navigator.mediaSession.setActionHandler("pause", pause);
-    navigator.mediaSession.setActionHandler("previoustrack", () => void playAt(at - 1));
-    navigator.mediaSession.setActionHandler("nexttrack", () => void playAt(at + 1));
-  }
-
-  /** A few milliseconds of silence, played inside the tap that opens Listen so iOS lets later sentences start on their own. */
-  const SILENCE = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAwF0AAIC7AAACABAAZGF0YQAAAAA=";
-  /** If the page doesn't answer (its script failed, or it's still starting and missed the ask), say so. */
-  const COLLECT_TIMEOUT_MS = 8000;
-  let collectTimer = 0;
 
   function collect() {
     collectPending = true;
@@ -603,56 +592,101 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   }
 
   function open() {
-    if (!tray.hidden) return void play.focus();
-    audio.src = SILENCE;
+    // Played inside this tap so iOS lets the sentences start on their own later.
+    unlockUrl ||= silence();
+    audio.src = unlockUrl;
     void audio.play().catch(() => {});
     current = null;
     at = 0;
     failures = 0;
     wantPlay = true;
+    resyncFrom = null;
     sentences = [];
+    charsBefore = [];
     errorText = "";
-    retry.hidden = true;
     tray.hidden = false;
     opts.trigger.setAttribute("aria-pressed", "true");
     set(ready ? "collecting" : "loading");
     startWorker();
-    if ("mediaSession" in navigator) {
-      navigator.mediaSession.metadata = new MediaMetadata({ title: opts.title, artist: "Listen", artwork: [{ src: "/static/icons/icon-512.png", sizes: "512x512", type: "image/png" }] });
-    }
+    mediaSession(true);
     collect();
     play.focus();
   }
 
-  opts.trigger.addEventListener("click", () => (tray.hidden ? open() : closeTray()));
+  function closeTray() {
+    collectPending = false;
+    resyncFrom = null;
+    clearTimeout(collectTimer);
+    clearTimeout(hintTimer);
+    hinting = false;
+    generation++;
+    cancelAnimationFrame(raf);
+    audio.pause();
+    audio.removeAttribute("src");
+    const old = current;
+    current = null;
+    if (old) URL.revokeObjectURL(old.url);
+    forget();
+    sentences = [];
+    charsBefore = [];
+    markWord(-1);
+    opts.post({ t: "speak:mode", on: false });
+    tray.hidden = true;
+    opts.trigger.setAttribute("aria-pressed", "false");
+    opts.trigger.focus();
+    mediaSession(false);
+    clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(stopWorker, IDLE_MS);
+  }
+
+  /** Takes a freshly collected page; when re-collecting mid-reading, keeps the sentence playing if it is still there. */
+  function take(units: SpeakUnit[], start: number) {
+    const taken = takeUnits(units);
+    truncated = taken.truncated;
+    const fresh = splitSentences(taken.units);
+    const carry = resyncFrom;
+    resyncFrom = null;
+    if (carry !== null && current) {
+      const i = fresh.findIndex((s) => s.text === carry);
+      if (i >= 0) {
+        // Same sentence, new numbering: keep playing it, and make the rest afresh for the new page.
+        forget();
+        sentences = fresh;
+        charsBefore = prefixSums(fresh);
+        at = i;
+        current.i = i;
+        opts.post({ t: "speak:at", i: fresh[i]!.unit });
+        for (let k = i + 1; k < Math.min(fresh.length, i + 1 + AHEAD); k++) void audioFor(k).catch(() => {});
+        paint();
+        return;
+      }
+    }
+    forget();
+    sentences = fresh;
+    charsBefore = prefixSums(fresh);
+    if (!sentences.length) return set("empty");
+    const first = Math.max(0, sentences.findIndex((s) => s.unit >= (Number(start) || 0)));
+    // Paused while the page was being read (from the lock screen): wait there instead of starting.
+    if (!wantPlay) {
+      at = first;
+      opts.post({ t: "speak:at", i: sentences[first]!.unit });
+      return set("paused");
+    }
+    void playAt(first);
+  }
 
   return {
-    /** The frame's readable text arrived: start where the reader is looking. */
+    /** The Listen button. */
+    toggle() {
+      if (tray.hidden) open();
+      else closeTray();
+    },
+    /** The frame's readable text arrived. */
     units(units: SpeakUnit[], start: number) {
-      if (tray.hidden || !collectPending || !Array.isArray(units)) return;
+      if (tray.hidden || !collectPending) return;
       collectPending = false;
       clearTimeout(collectTimer);
-      forget();
-      // The frame is untrusted: take a bounded, well-formed page.
-      let total = 0;
-      const taken: SpeakUnit[] = [];
-      for (const u of units.slice(0, MAX_UNITS)) {
-        if (typeof u?.i !== "number" || typeof u.text !== "string") continue;
-        const text = u.text.slice(0, MAX_UNIT_CHARS);
-        total += text.length;
-        if (total > MAX_TOTAL_CHARS) break;
-        taken.push({ i: u.i, text, h: typeof u.h === "string" ? u.h.slice(0, 200) : undefined });
-      }
-      sentences = splitSentences(taken);
-      if (!sentences.length) return set("empty");
-      const first = Math.max(0, sentences.findIndex((s) => s.unit >= (Number(start) || 0)));
-      // Paused while the page was being read: wait there instead of starting.
-      if (!wantPlay) {
-        at = first;
-        opts.post({ t: "speak:at", i: sentences[first]!.unit });
-        return set("paused");
-      }
-      void playAt(first);
+      take(units, start);
     },
     /** The reader tapped a block. */
     jump(unit: number) {
@@ -660,9 +694,20 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
       const i = sentences.findIndex((s) => s.unit === unit);
       if (i >= 0) void playAt(i);
     },
-    /** The frame (re)started: if Listen is waiting on it, ask again. */
-    frameReady() {
-      if (!tray.hidden && collectPending) collect();
+    /**
+     * The frame (re)started, or its page changed under Listen (re-rendered blocks): collect again. Mid-reading,
+     * the sentence being read carries on and the marks come back on the new page.
+     */
+    frameChanged() {
+      if (tray.hidden) return;
+      if (sentences.length && current) resyncFrom = sentences[current.i]?.text ?? null;
+      collect();
     },
   };
+}
+
+function prefixSums(sentences: Sentence[]): number[] {
+  const out = [0];
+  for (const s of sentences) out.push(out[out.length - 1]! + s.chars);
+  return out;
 }

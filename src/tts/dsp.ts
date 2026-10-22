@@ -1,8 +1,6 @@
 // Listen's audio encoding, done on the samples in the speech worker (no Web
 // Audio: src/shared/sound.ts stays the only file that touches it).
 
-export const SAMPLE_RATE = 24000;
-
 /** 16-bit mono WAV, peak-limited so nothing clips. */
 export function toWav(pcm: Float32Array, rate: number): ArrayBuffer {
   let peak = 0;

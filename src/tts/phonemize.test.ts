@@ -74,15 +74,32 @@ describe.skipIf(!built)("with built assets (bun scripts/build-tts.ts)", () => {
   test("capitals: emphasis words are said, acronyms spelled, mid-sentence and at the end", () => {
     const p = phonemizer();
     const word = (w: string) => p.phonemize(w.toLowerCase());
-    for (const w of ["NOT", "ALL", "NO", "NEW", "FREE", "USE", "GAP", "THE", "NEVER", "IMPORTANT", "NASA"]) {
+    for (const w of [
+      "NOT", "ALL", "NO", "NEW", "FREE", "USE", "GAP", "THE", "NEVER", "IMPORTANT", "NASA", "FIRST", "SKILLS", "COSTS",
+      "RESULTS", "WORKS", "STRENGTHS", "EXAMPLE", "TIP", "BUG", "FIX", "PATCH", "PRO", "MAX", "MIN", "DO", "IT", "US",
+    ]) {
       expect(p.phonemize(`Do ${w} stop.`)).toBe(`duː ${word(w)} stˈɑːp.`);
       expect(p.phonemize(`Mind ${w}.`)).toBe(`mˈaɪnd ${word(w)}.`);
     }
-    for (const w of ["API", "CSS", "PDF", "CPU", "UI", "URL", "MCP", "TTS", "DO", "IT", "US", "AM", "PM", "HTML", "JSON", "AWS"]) {
+    for (const w of ["API", "CSS", "PDF", "CPU", "UI", "URL", "MCP", "TTS", "AM", "PM", "HTML", "JSON", "HTTP", "HTTPS", "AWS", "KPI", "GPT", "AI", "ID"]) {
       const spelled = p.phonemize(`Use ${w}.`).slice("jˈuːz ".length, -1);
       expect(p.phonemize(`Use ${w} now.`)).toBe(`jˈuːz ${spelled} nˈaʊ.`);
       expect(spelled).toMatch(/ˌ/); // spelled letters carry secondary stress
     }
+    // A long lexicon miss that looks pronounceable is said, not spelled.
+    expect(p.phonemize("Read the CHANGELOG now.")).not.toMatch(/ˌsiː|ˌeɪtʃ/);
+  });
+
+  test("shouting: all-caps text says words but still spells acronyms; three words or fewer is never shouting", () => {
+    const p = phonemizer();
+    const spelled = (w: string) => p.phonemize(`Use ${w}.`).slice("jˈuːz ".length, -1);
+    for (const w of ["MCP", "CSS", "JSON", "KPI", "NYC", "GPT", "AWS", "TTS", "AI", "ID"]) {
+      expect(p.phonemize(`THE NEW ${w} SERVER IS HERE`)).toBe(`ðə nˈuː ${spelled(w)} sˈɜːvɚɹ ɪz hˈiːɹ`);
+      expect(p.phonemize(`WE USE THE ${w}.`)).toBe(`wiː jˈuːz ðə ${spelled(w)}.`.replace(/ðə ([ˌˈ]?[aeiouɛɪæʌɔ])/, "ðɪ $1"));
+    }
+    expect(p.phonemize("THE QUICK FOX IS HERE")).toBe(p.phonemize("the quick fox is here"));
+    // Three words or fewer: a label, read like normal text, so acronyms are spelled and emphasis rules apply.
+    expect(p.phonemize("MCP SERVER")).toBe(`${spelled("MCP")} sˈɜːvɚ`);
   });
 
   test.skipIf(!hasEspeak())(

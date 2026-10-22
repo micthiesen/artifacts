@@ -1,11 +1,13 @@
 // What to say for one sentence, and which tokens say which words of it, so the
 // reader can highlight the word being spoken.
 //
-//   const p = plan(phonemizer, sentence);
-//   const out = await session.run({ input_ids: p.ids, style: styleFor(voice, ...), speed });
-//   const times = wordTimes(p.words, out.duration.data, out.waveform.data.length);
+//   for (const part of planParts(phonemizer, sentence)) {     // each within the model's 512 ids
+//     const out = await session.run({ input_ids: part.ids, style: styleFor(voice, part.styleLength), speed });
+//     const kept = out.waveform.data.length - 5000;          // the reference trims the tail
+//     const times = wordTimes(part.words, out.duration.data, out.waveform.data.length, SAMPLE_RATE, kept / SAMPLE_RATE);
+//   }
 //
-// `ids` are exactly tokenize(phonemizer.phonemize(normalizeForSpeech(text))).
+// plan(text).ids are exactly tokenize(phonemizer.phonemize(normalizeForSpeech(text))).
 
 import { normalizeWithSpans } from "./normalize.ts";
 import type { Phonemizer } from "./phonemize.ts";

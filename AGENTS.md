@@ -4,7 +4,9 @@
 what agents writing artifacts are told (served by the `artifact_guide` MCP
 tool, with `src/kit/CATALOG.md`).
 
-Checks: `bun run typecheck`, `bun test`, `bun run build`. After UI changes,
+Checks: `bun run typecheck`, `bun test`, `bun run build` (on a cold cache the
+build downloads Listen's voice files, pinned by sha256, from Hugging Face,
+GitHub and PyPI). After UI changes,
 run `spikes/e2e-layout.ts` against a running stage: pages must never scroll
 sideways on a phone.
 
@@ -212,6 +214,16 @@ is something the reader asked for, so it plays through an `<audio>` element,
 ignores the Sounds setting, and never uses Web Audio. Its speech is made on the
 reader's device by a worker on the shell's origin (`src/tts/`); the model and
 everything it ships stay MIT, Apache-2.0 or BSD, never GPL (so no eSpeak).
+The voice files are static assets fetched from the apex, so one cached copy
+serves every workspace and nothing runs or bills while nobody listens.
+
+While it reads, the block glows moon white and the word being spoken gets a
+brighter wash, both colour only. The one movement is the wisp
+(`src/kit/wisp.ts`): the agent's light hopping to each word, which is
+something changing (the word being read), not a frequent action of the
+reader's, so it may move. It stays within `--motion-slow`, transform and
+opacity only, its hop kept inside the gap between lines, and reduced motion
+places it without a hop.
 
 **Haptics: none.** iOS Safari has no vibration API, and Apple closed the
 scripted switch workaround in iOS 26.5. `navigator.vibrate` is blocked in the

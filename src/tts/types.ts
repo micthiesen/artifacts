@@ -32,6 +32,6 @@ export type ToWorker =
 export type FromWorker =
   | { t: "progress"; loaded: number; total: number }
   | { t: "ready" }
-  /** A WAV file of one sentence, how long it plays, and when each word is heard. */
-  | { t: "audio"; id: number; wav: ArrayBuffer; seconds: number; words: TimedWord[] }
+  /** A WAV file of one sentence, and when each word is heard. */
+  | { t: "audio"; id: number; wav: ArrayBuffer; words: TimedWord[] }
   | { t: "error"; id?: number; message: string; fatal?: boolean };

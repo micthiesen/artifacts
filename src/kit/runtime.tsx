@@ -312,10 +312,10 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         markSpeaking(msg.i);
         break;
       case "speak:word":
-        markWord(msg.i, msg.start, msg.end, msg.hop);
+        markWord(msg.i, msg.start, msg.end, msg.hop, msg.lead);
         break;
       case "speak:mode":
-        speakMode(msg.on, (i) => send({ t: "speak:jump", i }));
+        speakMode(msg.on, send);
         break;
     }
   });

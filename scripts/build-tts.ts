@@ -3,7 +3,8 @@
 //   node_modules/.cache/tts/src/   pinned downloads, checked against sha256
 //   node_modules/.cache/tts/out/   the files below, under plain names
 //   dist/kit/kit/v1/tts/           the same files with content hashes in their names
-//   node_modules/.cache/tts/manifest.json   their URLs, for the shell to import
+//   node_modules/.cache/tts/manifest.json   their URLs and sizes; scripts/build.ts hands it to
+//                                           the speech worker as an esbuild define
 //
 // Assets:
 //   kitten-nano-0.8.onnx   Kitten TTS nano 0.8 int8 (Apache-2.0, KittenML)
@@ -23,6 +24,7 @@ import { join, relative } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { arpabetToIpa } from "../src/tts/phonemize.ts";
 import { STYLE_WIDTH } from "../src/tts/style.ts";
+import type { TtsManifest } from "../src/tts/types.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const CACHE = join(ROOT, "node_modules/.cache/tts");
@@ -47,16 +49,6 @@ const SOURCES = {
 
 /** Weights precision in g2p.bin. float16 halves the download; greedy decoding agrees with float32 (see src/tts/phonemize.test.ts). */
 const G2P_DTYPE: "float16" | "float32" = "float16";
-
-export type Manifest = {
-  model: string;
-  lexicon: string;
-  g2p: string;
-  notices: string;
-  voice: { url: string; speed: number };
-  /** Uncompressed file sizes, for a download progress total. */
-  bytes: { model: number; lexicon: number; g2p: number; voice: number };
-};
 
 /** The one voice Listen ships (a config.json alias). */
 const VOICE = "Bruno";
@@ -271,7 +263,7 @@ ${apache.trim()}
 
 const shortHash = (data: Uint8Array) => sha256(data).slice(0, 12);
 
-export async function buildTts(): Promise<Manifest> {
+export async function buildTts(): Promise<TtsManifest> {
   const t0 = performance.now();
   const [model, voicesNpz, configBytes, cmudict, cmudictLicense, wheel] = await Promise.all([
     fetchPinned("model"),
@@ -317,7 +309,7 @@ export async function buildTts(): Promise<Manifest> {
     urls.set(name, `${URL_BASE}/${hashed}`);
   }
 
-  const manifest: Manifest = {
+  const manifest: TtsManifest = {
     model: urls.get("kitten-nano-0.8.onnx")!,
     lexicon: urls.get("lexicon.txt")!,
     g2p: urls.get("g2p.bin")!,

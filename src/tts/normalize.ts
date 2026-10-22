@@ -178,6 +178,7 @@ const UNITS: Record<string, [string, string]> = {
   // Durations, when glued to the number ("6m 10s", "2h", "3d", "500ms").
   s: ["second", "seconds"], sec: ["second", "seconds"], secs: ["second", "seconds"],
   m: ["minute", "minutes"], min: ["minute", "minutes"], mins: ["minute", "minutes"],
+  mo: ["month", "months"], mos: ["month", "months"], days: ["day", "days"],
   h: ["hour", "hours"], hr: ["hour", "hours"], hrs: ["hour", "hours"], d: ["day", "days"], w: ["week", "weeks"],
   wk: ["week", "weeks"], wks: ["week", "weeks"], y: ["year", "years"], yr: ["year", "years"], yrs: ["year", "years"],
   x: ["times", "times"], "×": ["times", "times"],
@@ -186,7 +187,8 @@ const UNITS: Record<string, [string, string]> = {
 const SPACED_UNITS = new Set([
   "KB", "kB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB", "PB", "Kb", "Mb", "Gb", "kbps", "Kbps", "Mbps", "Gbps",
   "ms", "µs", "ns", "km", "cm", "mm", "kg", "mg", "lbs", "oz", "ml", "mL", "Hz", "kHz", "MHz", "GHz", "mph", "kph",
-  "km/h", "px", "fps", "°C", "°F", "°", "ft", "hrs", "mins", "secs",
+  "km/h", "px", "fps", "°C", "°F", "°", "ft", "hrs", "mins", "secs", "min", "sec", "hr", "yr", "yrs", "mo", "mos",
+  "wk", "wks", "days",
 ]);
 
 const TLDS = "com|org|net|io|dev|ai|app|boo|co|uk|us|ca|de|fr|nl|eu|edu|gov|me|sh|xyz|so|gg|tv|fm|info|biz|page|site|tech|cloud|run|new";
@@ -442,6 +444,10 @@ export function normalizeForSpeech(text: string): string {
 export function normalizeWithSpans(text: string): SpannedText {
   const t = new Spanned(text).nfc();
 
+  // Feet and inches written with primes: 5′ 10″.
+  t.replace(/(\d+(?:\.\d+)?)\s?′/g, (_, n: string) => `${numberWords(n)} ${n === "1" ? "foot" : "feet"}`);
+  t.replace(/(\d+(?:\.\d+)?)\s?″/g, (_, n: string) => `${numberWords(n)} ${n === "1" ? "inch" : "inches"}`);
+
   // Typography to plain forms.
   t
     .replace(/[‘’‛′]/g, "'")
@@ -461,6 +467,22 @@ export function normalizeWithSpans(text: string): SpannedText {
   t.replace(/\b([\w.+-]+)@([\w-]+(?:\.[\w-]+)*\.[a-z]{2,})\b/gi, (_, local: string, domain: string) => emailWords(local, domain));
   t.replace(/\bREADME\b/g, "read me");
 
+  // Identifiers nobody reads out: a UUID or long hex hash is named by its first characters.
+  // Letters by name ("ay" so a lone A isn't the article).
+  const hexChar = (c: string) => (/\d/.test(c) ? DIGITS[+c] : c.toLowerCase() === "a" ? "ay" : c.toUpperCase());
+  const firstChars = (h: string) => [...h.slice(0, 4)].map(hexChar).join(" ");
+  t.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, (m: string) => `UUID ${firstChars(m)}`);
+  t.replace(/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12,}\b/gi, (m: string) => `hash ${firstChars(m)}`);
+  t.replace(/\b0x([0-9a-f]+)\b/gi, (_, h: string) => `hex ${[...h].map(hexChar).join(" ")}`);
+  // Standards by number, digit by digit: RFC 7231, ISO 8601.
+  t.replace(/\b(RFC|ISO|IEEE|ECMA|CVE|PEP)[\s-]?(\d{3,})/g, (_, name: string, n: string) => `${name} ${spellDigits(n)}`);
+  // Dotfiles and home paths: "~/.config" -> "dot config", ".env" -> "dot env"; placeholders "<slug>.<domain>".
+  t.replace(/(?<![^\s(["'])~\//g, "");
+  t.replace(/(?<![^\s(["'/])\.(?=[A-Za-z])/g, "dot ");
+  t.replace(/>\.</g, "> dot <");
+  // Numbered lists: "1) first 2) second" -> "one, first, two, second".
+  t.replace(/(^|\s)(\d{1,2})\)(?=\s)/g, "$1, $2,");
+
   // Ports and relative paths: "localhost:3000" -> "localhost port 3000", "./x.sh" -> "x.sh".
   t.replace(/\b(localhost|\d{1,3}(?:\.\d{1,3}){3}|[a-z][\w-]*(?:\.[\w-]+)+):(\d{2,5})\b/gi, "$1 port $2");
   t.replace(/(?<![^\s(["'])\.{1,2}\//g, "");
@@ -476,6 +498,9 @@ export function normalizeWithSpans(text: string): SpannedText {
   );
 
   for (const [re, words] of ABBREVIATIONS) t.replace(re, words);
+  // "IT" and "US" read as words (emphasis) except where context says acronym.
+  t.replace(/\b(the|in the|of the) US\b/g, "$1 U S");
+  t.replace(/\bIT(?=\s+(?:department|team|support|admin|admins|staff|security|manager|managers|services|director|professionals?|pros?|systems?|budget|infrastructure)\b)/g, "I T");
 
   // Dotted abbreviations: U.S., Ph.D., M.I.T., a.m. -> letters, with no stops inside.
   t.replace(/(?<![\w.])(?:[A-Za-z][a-z]?\.){2,}/g, (m: string, off: number, whole: string) => {
@@ -494,6 +519,17 @@ export function normalizeWithSpans(text: string): SpannedText {
 
   // Rates: "$12/mo", "10 MB/s", "$5/user" -> "... per month".
   t.replace(new RegExp(String.raw`(?<=\d\s?(?:[kKMBT]|bn|[KMGT]i?B|[KMG]b|ms)?|%)\/(${Object.keys(PER).join("|")})\b`, "g"), (_, u: string) => ` per ${PER[u]}`);
+
+  // Slash dates, month first (US) when both could be: 10/21/2026, 21/10/2026, 2026/10/21.
+  t.replace(/(?<![\d/])(\d{1,2})\/(\d{1,2})\/(\d{4})(?![\d/])/g, (m: string, a: string, b: string, y: string) => {
+    let [month, day] = [Number(a), Number(b)];
+    if (month > 12 && day <= 12) [month, day] = [day, month];
+    if (month < 1 || month > 12 || day < 1 || day > 31) return m;
+    return dateWords(MONTHS[month - 1], String(day), y);
+  });
+  t.replace(/(?<![\d/])(\d{4})\/(\d{1,2})\/(\d{1,2})(?![\d/])/g, (m: string, y: string, mo: string, d: string) =>
+    Number(mo) >= 1 && Number(mo) <= 12 && Number(d) >= 1 && Number(d) <= 31 ? dateWords(MONTHS[Number(mo) - 1], d, y) : m,
+  );
 
   // ISO dates and datetimes: 2026-10-21, 2026-10-21T14:05.
   t.replace(/\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z)?)?\b/g, (m, y, mo, d, hh, mm, ss, z) => {
@@ -561,23 +597,39 @@ export function normalizeWithSpans(text: string): SpannedText {
   // Ordinals: 1st, 22nd, 103rd.
   t.replace(/\b(\d+)(st|nd|rd|th)\b/gi, (_, n: string) => (n.length > 15 ? integerWords(n) : ordinalToWords(Number(n))));
 
+  t.replace(/\b(mid|early|late)-(?=[\d'])/gi, "$1 ");
   // Decades: 1980s, '90s, "the 80s". A bare "30s" elsewhere is a duration.
   const DECADES = ["hundreds", "tens", "twenties", "thirties", "forties", "fifties", "sixties", "seventies", "eighties", "nineties"];
   t.replace(/\b(1\d|20)(\d)0s\b/g, (_, century: string, decade: string) =>
     century === "20" && decade === "0" ? "two thousands" : `${numberToWords(Number(century))} ${DECADES[Number(decade)]}`,
   );
   t.replace(/(?:'|(?<=\b(?:the|early|mid|late|of)\s))(\d)0s\b/gi, (_, decade: string) => DECADES[Number(decade)]);
+  t.replace(/\b(1\d|20)?(\d)0's\b/g, (_, century: string | undefined, decade: string) =>
+    century ? `${numberToWords(Number(century))} ${DECADES[Number(decade)]}` : DECADES[Number(decade)],
+  );
+  // Quarters with a short year: Q4'26 -> "Q four twenty twenty-six".
+  t.replace(/\b(Q[1-4])\s?'(\d{2})\b/g, "$1 20$2");
 
   // IPv4 addresses, octet by octet.
   t.replace(/\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/g, (...m) => m.slice(1, 5).map((o: string) => integerWords(o)).join(" dot "));
 
   // Versions: v1.2.3, 1.2.3, v2.
-  t.replace(/\b[vV](\d+(?:\.\d+)*)\b/g, (_, v: string) => `version ${versionWords(v)}`);
-  t.replace(/(?<![\d.])(\d+(?:\.\d+){2,})(?![\d.]*\d)/g, (_, v: string) => versionWords(v));
+  // A prerelease tag is part of the version: v2.0.1-beta.3, 1.0.0-rc.1.
+  const pre = (tag: string | undefined) =>
+    tag ? ` ${tag.replace(/^[-.]/, "").split(".").map((p) => (/^\d+$/.test(p) ? integerWords(p) : /^(alpha|beta|preview|canary|nightly|next|dev)$/i.test(p) ? p.toLowerCase() : p.toUpperCase())).join(" ")}` : "";
+  const PRE = String.raw`((?:-[A-Za-z]+(?:\.\d+)?)?)`;
+  t.replace(new RegExp(String.raw`\b[vV](\d+(?:\.\d+)*)${PRE}\b`, "g"), (_, v: string, tag: string, off: number, whole: string) =>
+    `${/\bversion\s+$/i.test(whole.slice(0, off)) ? "" : "version "}${versionWords(v)}${pre(tag)}`,
+  );
+  t.replace(new RegExp(String.raw`(?<![\d.])(\d+(?:\.\d+){2,})${PRE}(?![\d.]*\d)`, "g"), (_, v: string, tag: string) => versionWords(v) + pre(tag));
 
   // Model names: GPT-4, gpt-3.5, Llama-3.
   t.replace(/\b([A-Za-z][A-Za-z]*)-(\d+(?:\.\d+)?)\b/g, (_, name: string, n: string) => `${name} ${numberWords(n)}`);
 
+  // Chains of three or more digit groups (123-45-6789), local phone numbers (555-1234) and ZIP+4 (94107-1234): digit by digit.
+  t.replace(/(?<![\w.-])\d+(?:-\d+){2,}(?![\w-]|\.\d)|(?<![\w.-])(?:\d{3}|\d{5})-\d{4}(?![\w-]|\.\d)/g, (m: string) =>
+    m.split("-").map(spellDigits).join(", "),
+  );
   // Phone numbers before ranges claim the hyphens.
   t.replace(/(?<![\d-])(?:(\+?1)[-. ])?\(?(\d{3})\)?[-. ](\d{3})[-.](\d{4})(?![\d-])/g, (_, c, a, b, d) =>
     [c, a, b, d].filter(Boolean).map((g: string) => spellDigits(g)).join(", "),
@@ -586,6 +638,8 @@ export function normalizeWithSpans(text: string): SpannedText {
   // Scientific notation: 1e-4, 6.022E23.
   t.replace(/(?<![\w.])(-?\d+(?:\.\d+)?)[eE]([+-]?\d+)(?!\w|\.\d)/g, (_, c, e) => {
     const exp = Number(e);
+    const scale = { 3: "thousand", 6: "million", 9: "billion", 12: "trillion" }[exp];
+    if (scale) return `${decimalWords(c)} ${scale}`;
     return `${decimalWords(c)} times ten to the ${exp < 0 ? "minus " : ""}${numberToWords(Math.abs(exp))}`;
   });
 
@@ -600,10 +654,15 @@ export function normalizeWithSpans(text: string): SpannedText {
       const before = rest[rest.length - 1].slice(0, rest[rest.length - 2]);
       const after = rest[rest.length - 1].slice(rest[rest.length - 2] + m.length);
       const time = /\d\s?h\s*$|\b(?:took|takes|take|in|for|every|after|within|last|about|over|under|wait)\s+$/i.test(before) || /^\s*\d+\s?s\b|^\s+ago\b/.test(after);
+      // "1.2m users", "5m downloads": millions of something.
+      if (!time && (n.includes(".") || /^\s+[a-z]+s\b/.test(after)) && !/^\s+(?:dash|race|run|sprint|swim|long|tall|high|wide|deep|away)\b/.test(after))
+        return `${decimalWords(n)} million`;
       if (!time) [one, many] = ["meter", "meters"];
     }
     return `${words} ${words === "one" ? one : many}`;
   });
+  t.replace(/\b401\(?k\)?(?!\w)/g, "four oh one K");
+  t.replace(/\b([2458])K(?=\s+(?:screen|display|monitor|video|TV|resolution|content|stream|camera|footage)s?\b)/g, (_, n: string) => `${numberToWords(Number(n))} K`);
   // Bare scale suffixes: 7B parameters, 340M, 1.5k.
   t.replace(new RegExp(String.raw`(?<![\w.])(${NUM})\s?(bn|[kKMBT])(?![\w])`, "g"), (_, n, s: string) => `${decimalWords(n)} ${SCALE_SUFFIX[s]}`);
 
@@ -662,7 +721,11 @@ export function normalizeWithSpans(text: string): SpannedText {
     .replace(/[^\p{L}\p{N}\p{M}\s.,?!;:'\-—…]/gu, " ")
     .replace(/(^|\s)'+|'+(?=\s|$|[.,?!;:])/g, "$1")
     .replace(/\s+([.,?!;:…])/g, "$1")
-    .replace(/([,;:])(?:\s*[,;:])+/g, "$1")
+    .replace(/[.,;:!?…](?:\s*[.,;:!?…])+/g, (m: string) => {
+      // A clump of marks keeps the strongest: ? and ! end a question or exclamation, then . … ; : ,
+      for (const mark of ["?", "!", ".", "…", ";", ":", ","]) if (m.includes(mark)) return mark;
+      return m[0];
+    })
     .replace(/^[\s,;:.]+/, "")
     .replace(/[\s,;:]+$/, "")
     .replace(/\s+/g, " ")

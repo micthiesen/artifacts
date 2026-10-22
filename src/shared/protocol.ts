@@ -28,7 +28,9 @@ export type FrameMessage =
   /** Listen: the page's readable text, in reading order, one unit per block; `start` is the first unit on screen. */
   | { t: "speak:units"; units: SpeakUnit[]; start: number }
   /** Listen: the viewer tapped a block while listening; start reading there. */
-  | { t: "speak:jump"; i: number };
+  | { t: "speak:jump"; i: number }
+  /** Listen: the page re-rendered under the reading (the marked text is gone); collect it again. */
+  | { t: "speak:stale" };
 
 /** One block of the page as Listen reads it; `i` names the element in the frame, `h` the heading it sits under. */
 export type SpeakUnit = { i: number; text: string; h?: string };
@@ -72,8 +74,11 @@ export type ShellMessage =
   | { t: "speak:collect" }
   /** Listen: mark the block being read (null clears); `on` turns tap-to-jump on or off. */
   | { t: "speak:at"; i: number | null }
-  /** Listen: mark the word being spoken, [start, end) in unit `i`'s text (null clears); the wisp hops there in `hop` ms at most. */
-  | { t: "speak:word"; i: number | null; start: number; end: number; hop?: number }
+  /**
+   * Listen: mark the word being spoken, [start, end) in unit `i`'s text (null clears). The message comes `lead` ms
+   * before the word is heard: the wisp sets off now (hopping in `hop` ms at most) and the wash waits for the word.
+   */
+  | { t: "speak:word"; i: number | null; start: number; end: number; hop?: number; lead?: number }
   | { t: "speak:mode"; on: boolean };
 
 /** Shell <-> Worker sync WebSocket (one per open artifact tab). */
