@@ -107,7 +107,8 @@ if (!saveData && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
     () =>
       idle(() => {
         const url = `/static/splash-wisp.js${new URL(import.meta.url).search}`;
-        void import(/* @vite-ignore */ url).then((m: { startSplashWisp: () => void }) => m.startSplashWisp()).catch(() => {});
+        // A URL worked out at runtime, so the bundler leaves this file out of splash.js.
+        void import(url).then((m: { startSplashWisp: () => void }) => m.startSplashWisp()).catch(() => {});
       }),
     1600,
   );

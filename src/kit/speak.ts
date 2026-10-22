@@ -13,9 +13,18 @@
 import type { FrameMessage, SpeakUnit } from "../shared/protocol.ts";
 // The wisp is loaded the first time someone listens, so pages nobody listens to don't carry it.
 type Wisp = typeof import("./wisp.ts");
+type WispMood = import("./wisp.ts").WispMood;
 let wisp: Wisp | null = null;
 let wispLoading: Promise<Wisp> | null = null;
-const loadWisp = () => (wispLoading ??= import("./wisp.ts").then((m) => (wisp = m)));
+const loadWisp = () =>
+  (wispLoading ??= import("./wisp.ts").then(
+    (m) => (wisp = m),
+    (err: unknown) => {
+      // A failed fetch (a flaky network): try again next time someone listens.
+      wispLoading = null;
+      throw err;
+    },
+  ));
 
 const SKIP =
   "script,style,template,svg,canvas,button,input,textarea,select,nav,[hidden],[aria-hidden='true'],[data-speak='skip'],.art-contents,.art-linked-from,[role='tablist']";
@@ -284,9 +293,14 @@ function userScroll() {
 // (not one that works a control: Space on a button, arrows in tabs or a slider), or a press on the
 // scrollbar. Layout shifts, late images and Listen's own scrolling never count.
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
-const CONTROLS = "input,textarea,select,button,a,summary,[contenteditable],[role]";
+const CONTROLS =
+  "input,textarea,select,button,a,summary,[contenteditable],[role=button],[role=tab],[role=slider],[role=textbox],[role=combobox],[role=menuitem],[role=option],[role=radio],[role=checkbox],[role=switch],[role=spinbutton],[role=listbox],[role=menu],[role=tree],[role=grid]";
 let intentAt = 0;
-const intent = () => (intentAt = Date.now());
+// The reader's own move ends any scroll Listen started: what follows is theirs.
+const intent = () => {
+  intentAt = Date.now();
+  ownScrollUntil = 0;
+};
 const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && !(e.target as Element | null)?.closest?.(CONTROLS) && intent();
 const userPress = (e: PointerEvent) => (e.target === document.documentElement || e.target === document.scrollingElement) && intent();
 const onScroll = () => Date.now() - intentAt < 400 && Date.now() > ownScrollUntil && userScroll();
@@ -391,7 +405,7 @@ export function markWord(i: number | null, start: number, end: number) {
 }
 
 /** The voice's state, for the wisp: tracking words while it speaks, floating while it waits or rests. */
-let mood: "tracking" | "waiting" | "resting" = "waiting";
+let mood: WispMood = "waiting";
 export function speakState(state: "playing" | "waiting" | "resting") {
   mood = state === "playing" ? "tracking" : state === "waiting" ? "waiting" : "resting";
   wisp?.wispMood(mood);
@@ -431,11 +445,14 @@ export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
   }
   // Already listening (the shell asked again after the page changed): keep Follow as the tray has it.
   if (!already) following = true;
-  void loadWisp().then((w) => {
-    if (!notify) return;
-    w.wispArrive();
-    w.wispMood(mood);
-  });
+  loadWisp().then(
+    (w) => {
+      if (!notify) return;
+      w.wispArrive();
+      w.wispMood(mood);
+    },
+    () => {},
+  );
   addEventListener("wheel", intent, { passive: true });
   addEventListener("touchmove", intent, { passive: true });
   addEventListener("keydown", userKey);

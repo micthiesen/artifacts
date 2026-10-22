@@ -151,7 +151,8 @@ where a test can catch them; keep the rest by hand.
 | `--motion-spring` | `linear()` spring, 4% overshoot | things arriving |
 
 In Tailwind write `duration-(--motion-base) ease-(--motion-ease)`, never
-`duration-150`. Nothing runs longer than `--motion-slow` except data bars and
+`duration-150`. Nothing runs longer than `--motion-slow` except the wisp (a character on a
+spring, below), data bars and
 attention highlights. Only endless loops (spinners) may use their own
 duration.
 

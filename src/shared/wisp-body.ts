@@ -18,7 +18,7 @@ export type Point = { x: number; y: number };
  */
 const TAIL = 12;
 const TAIL_FOLLOW = 22;
-const TAIL_GAP = 0.85;
+const TAIL_GAP = 0.5;
 const DAMPING = 0.72;
 /** It never flies faster than this (px/s), so a long way is a flight, not a teleport. */
 const MAX_SPEED = 2600;
@@ -33,6 +33,10 @@ export class WispBody {
   radius = 6;
   /** Squash (positive: wide and low, as it lands) or stretch (negative: tall and narrow, in the air), drawn on the head. */
   squash = 0;
+  /** Drawn upright with `squash` (a hop) rather than stretched along its flight. */
+  upright = false;
+  /** How far above where it is the head is drawn this frame (a hop): the tail follows the lifted head. */
+  lift = 0;
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D | null;
   private glow: HTMLCanvasElement | null = null;
@@ -124,13 +128,13 @@ export class WispBody {
    * One step toward `goal` on a spring of stiffness `k` (per s²), the radius easing toward `size`. `still`
    * (reduced motion) puts it there at once, tail gathered.
    */
-  step(dt: number, goal: Point, k: number, size: number, still = false) {
+  step(dt: number, goal: Point, k: number, size: number, still = false, damping = DAMPING) {
     if (still) {
       this.place(goal);
       this.radius = size;
       return;
     }
-    const c = 2 * Math.sqrt(k) * DAMPING;
+    const c = 2 * Math.sqrt(k) * damping;
     this.vel.x += (k * (goal.x - this.head.x) - c * this.vel.x) * dt;
     this.vel.y += (k * (goal.y - this.head.y) - c * this.vel.y) * dt;
     const speed = Math.hypot(this.vel.x, this.vel.y);
@@ -143,19 +147,11 @@ export class WispBody {
     this.radius += (size - this.radius) * (1 - Math.exp(-8 * dt));
   }
 
-  /** Puts the head exactly at `p` this frame (a scripted move, like a hop), the tail chasing as usual. */
-  moveTo(p: Point, dt: number, size: number) {
-    this.vel = { x: (p.x - this.head.x) / dt, y: (p.y - this.head.y) / dt };
-    this.head = { ...p };
-    this.chase(dt);
-    this.radius += (size - this.radius) * (1 - Math.exp(-8 * dt));
-  }
-
   /** Each tail point chases the one before it, never further than a radius or so behind. */
   private chase(dt: number) {
     const follow = 1 - Math.exp(-TAIL_FOLLOW * dt);
     const gap = Math.max(1, this.radius * TAIL_GAP);
-    let lead = this.head;
+    let lead = { x: this.head.x, y: this.head.y - this.lift };
     this.tail = this.tail.map((p) => {
       let q = { x: p.x + (lead.x - p.x) * follow, y: p.y + (lead.y - p.y) * follow };
       const d = Math.hypot(q.x - lead.x, q.y - lead.y);
@@ -199,7 +195,7 @@ export class WispBody {
     if (!ctx) return;
     this.lastOffset = offset;
     this.lastTime = time;
-    const head = { x: this.head.x + offset.x, y: this.head.y + offset.y };
+    const head = { x: this.head.x + offset.x, y: this.head.y - this.lift + offset.y };
     const tail = this.tail.map((p) => ({ x: p.x + offset.x, y: p.y + offset.y }));
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -213,7 +209,7 @@ export class WispBody {
     // the chain, close enough together to read as one soft body.
     const body = new Path2D();
     const speed = Math.hypot(vel.x, vel.y);
-    const ripple = Math.min(1, speed / 500) * radius * 0.28;
+    const ripple = Math.min(1, speed / 500) * radius * 0.18;
     let prev = head;
     let along = 0;
     const n = tail.length;
@@ -225,10 +221,10 @@ export class WispBody {
       const steps = Math.min(40, Math.max(1, Math.ceil(d / Math.max(0.6, radius * 0.3))));
       for (let s = 1; s <= steps; s++) {
         const t = (i + s / steps) / n;
-        const r = radius * 0.94 * (1 - t ** 2.2) ** 0.75;
+        const r = radius * 0.96 * (1 - t ** 2.6) ** 0.6;
         if (r < 0.3) continue;
         along += d / steps;
-        const wave = d > 0 ? Math.sin(time * 14 - along * 0.35) * ripple * t : 0;
+        const wave = d > 0 ? Math.sin(time * 14 - along * 0.25) * ripple * t : 0;
         const x = prev.x + dx * (s / steps) + (d > 0 ? (-dy / d) * wave : 0);
         const y = prev.y + dy * (s / steps) + (d > 0 ? (dx / d) * wave : 0);
         body.moveTo(x + r, y);
@@ -236,16 +232,17 @@ export class WispBody {
       }
       prev = p;
     }
+    // Head and tail are one colour, one body (the canvas itself is a touch translucent, in CSS).
     ctx.fillStyle = this.light;
-    ctx.globalAlpha = 0.82;
+    ctx.globalAlpha = 1;
     ctx.fill(body);
     // The head: stretched along its flight and squashed across it; a hop's squash and stretch is upright.
     ctx.globalAlpha = 1;
     ctx.save();
     ctx.translate(head.x, head.y);
-    if (this.squash) {
-      // Squashed against the line it sits on: keep its bottom where it was.
-      ctx.translate(0, radius * this.squash);
+    if (this.upright) {
+      // Squashed on landing, it keeps its bottom where it was; stretched in the air, it stays centred.
+      if (this.squash > 0) ctx.translate(0, radius * this.squash);
       ctx.scale(1 + this.squash, 1 - this.squash);
     } else {
       const stretch = 1 + Math.min(0.38, speed / 1400);
@@ -282,11 +279,6 @@ export class WispBody {
     }
   }
 
-  clear() {
-    if (!this.ctx) return;
-    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-  }
 }
 
 /** The viewport's width without a classic scrollbar: what a fixed, full-width element actually covers. */

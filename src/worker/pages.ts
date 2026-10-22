@@ -429,7 +429,7 @@ ${fact("Made for the people reading", "Most people who open an artifact didn't m
 ])}
 ${fact("Pages that read themselves aloud", "Press Listen and the ghost reads the page to you, following along word by word.", [
   "The voice runs on the reader's own device: a small open model, downloaded once and cached, so no text leaves the browser and nothing is billed",
-  "It reads what the page shows, not its source: tables by their columns, charts and diagrams by their titles, code blocks skipped",
+  "It reads what the page shows, not its source: tables by their columns, charts and diagrams by their captions, and code by name rather than symbol by symbol",
   "A little wisp hops along each word to keep your place; the page scrolls along with the reading, or stays where you put it",
 ])}
 ${fact("Isolated by construction", "Tenancy and untrusted code are handled by the platform, not by convention.", [

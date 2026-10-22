@@ -13,7 +13,7 @@
 // text (only on top edges, in the space above), never darts about while you're heading for the call to
 // action, and its canvas ignores the pointer. Nor cost anything for the page: it is loaded after the page is
 // idle (and not at all with Save-Data or reduced motion: here it is play, not help), draws only while it
-// moves, and stops when the tab is hidden.
+// moves, and stops when the tab is hidden; its one canvas stays on the page, empty and still, while it rests.
 
 import { prefersStill, viewWidth, WispBody, type Point } from "../shared/wisp-body.ts";
 
@@ -101,14 +101,25 @@ export function startSplashWisp() {
     return { x: p.x, y: p.y + bob };
   }
 
+  /** Inside a frame: wake() leaves the scheduling to the frame itself, so only one loop ever runs. */
+  let inFrame = false;
   function wake() {
-    if (!started || raf || document.hidden) return;
+    if (!started || raf || inFrame || document.hidden) return;
     last = performance.now();
     raf = requestAnimationFrame(frame);
   }
 
   function frame(now: number) {
     raf = 0;
+    inFrame = true;
+    try {
+      step(now);
+    } finally {
+      inFrame = false;
+    }
+  }
+
+  function step(now: number) {
     const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
     last = now;
     clock += dt;
@@ -138,7 +149,7 @@ export function startSplashWisp() {
     const screenX = body.head.x - scrollX;
     const resting = state === "perched" && clock - landedAt > BOB_FOR && body.settled(g, RADIUS);
     const gone = state === "away" && (screenX < -30 || screenX > viewWidth() + 30) && body.settled(g, RADIUS);
-    if (!resting && !gone) raf = requestAnimationFrame(frame);
+    if (!resting && !gone && !document.hidden) raf = requestAnimationFrame(frame);
   }
 
   function schedule(seconds: number, then: () => void) {
@@ -206,9 +217,9 @@ export function startSplashWisp() {
   /** Near enough to startle, and not on the way to the call to action. */
   const near = (e: PointerEvent, reach: number) => {
     if (!started || state === "away") return false;
+    if (Math.hypot(e.clientX - (body.head.x - scrollX), e.clientY - (body.head.y - scrollY)) >= reach) return false;
     const zone = document.querySelector(QUIET_ZONE)?.getBoundingClientRect();
-    if (zone && e.clientX > zone.left - 40 && e.clientX < zone.right + 40 && e.clientY > zone.top - 40 && e.clientY < zone.bottom + 40) return false;
-    return Math.hypot(e.clientX - (body.head.x - scrollX), e.clientY - (body.head.y - scrollY)) < reach;
+    return !(zone && e.clientX > zone.left - 40 && e.clientX < zone.right + 40 && e.clientY > zone.top - 40 && e.clientY < zone.bottom + 40);
   };
   const onMove = (e: PointerEvent) => e.pointerType === "mouse" && near(e, SHY) && startle({ x: e.clientX, y: e.clientY });
   const onTap = (e: PointerEvent) => e.pointerType !== "mouse" && near(e, SHY * 0.8) && startle({ x: e.clientX, y: e.clientY });
