@@ -37,6 +37,8 @@ export class WispBody {
   upright = false;
   /** How far above where it is the head is drawn this frame (a hop): the tail follows the lifted head. */
   lift = 0;
+  /** How fast the lift is changing (px/s, up is positive), so the head stretches along its real path. */
+  liftSpeed = 0;
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D | null;
   private glow: HTMLCanvasElement | null = null;
@@ -245,8 +247,11 @@ export class WispBody {
       if (this.squash > 0) ctx.translate(0, radius * this.squash);
       ctx.scale(1 + this.squash, 1 - this.squash);
     } else {
-      const stretch = 1 + Math.min(0.38, speed / 1400);
-      ctx.rotate(Math.atan2(vel.y, vel.x));
+      // Along its real path: the spring's motion with the hop's lift on top.
+      const vx = vel.x;
+      const vy = vel.y - this.liftSpeed;
+      const stretch = 1 + Math.min(0.38, Math.hypot(vx, vy) / 1400);
+      ctx.rotate(Math.atan2(vy, vx));
       ctx.scale(stretch, 1 / stretch);
     }
     ctx.beginPath();

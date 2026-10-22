@@ -52,3 +52,19 @@ test("moving what it sits on moves all of it at once, so scrolling never sets it
   expect(body.settled({ x: 10, y: 510 }, body.radius)).toBe(true);
   body.dispose();
 });
+
+test("gliding word to word it never backs up, even when the next word comes before it has landed", () => {
+  const body = new WispBody("t", { light: "--x", ink: "--y" });
+  body.place({ x: 0, y: 0 });
+  // Words every 0.13 s (2x speech), 40 px apart, at 120 frames a second, on the glide spring (k 520, critically damped).
+  let goal = 0;
+  let lastX = 0;
+  for (let frame = 0; frame < 240; frame++) {
+    if (frame % 16 === 0) goal += 40;
+    body.step(1 / 120, { x: goal, y: 0 }, 520, 5, false, 1);
+    expect(body.head.x).toBeGreaterThanOrEqual(lastX - 1e-9);
+    expect(body.head.x).toBeLessThanOrEqual(goal + 1e-9);
+    lastX = body.head.x;
+  }
+  body.dispose();
+});

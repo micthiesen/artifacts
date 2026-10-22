@@ -188,7 +188,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   /** Follow: the page scrolls to keep the reading in view. On with every Listen; scrolling by hand turns it off. */
   let followOn = true;
   /** What the wisp was last told, so it hears each change once. */
-  let wispState = "";
+  let wispState: "playing" | "waiting" | "resting" | "" = "";
   /** A short line the tray shows (and announces) once, such as Follow turning off. */
   let notice = "";
   let noticeTimer = 0;
@@ -251,8 +251,9 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
       followButton.setAttribute("aria-pressed", String(followOn));
       followIcon.innerHTML = followOn ? ICON.follow : ICON.unfollow;
     }
-    // The wisp tracks words while the voice speaks, and floats while it waits or rests.
-    const ws = state === "playing" ? "playing" : busy() ? "waiting" : "resting";
+    // The wisp tracks words while the voice speaks, and floats while it waits or rests. A brief wait (the next
+    // sentence about to start) doesn't reach it, or it would set off for the margin and turn straight back.
+    const ws: "playing" | "waiting" | "resting" = state === "playing" ? "playing" : busy() ? (quiet ? wispState || "waiting" : "waiting") : "resting";
     if (ws !== wispState && !tray.hidden) {
       wispState = ws;
       opts.post({ t: "speak:state", state: ws });

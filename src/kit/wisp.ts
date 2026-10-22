@@ -50,7 +50,6 @@ const hopTime = (d: number) => Math.min(0.24, Math.max(0.13, 0.12 + d / 1600));
 const hopHeight = (d: number) => Math.min(7, Math.max(3.5, 3.5 + d * 0.04));
 /** A lift that's still rising (less than this far through) is let finish rather than restarted. */
 const HOP_RESTART = 0.6;
-const STRETCH = 0.16;
 const LAND_SQUASH = 0.2;
 const LAND_FOR = 0.14;
 const kick = (d: number) => Math.min(320, 120 + Math.max(0, d - 160) * 0.4);
@@ -197,23 +196,27 @@ function frame(now: number) {
   else body.step(dt, goal, SPRING[leaving ? "leaving" : parked ? "waiting" : mood], size, still);
   // The hop is a lift on top of the glide: up and down once per word, taller in the air, and a soft squash
   // as it comes down.
+  // In the air it stretches along the way it is actually going (the glide and the lift together), so it
+  // never stands up as an egg while it moves sideways; only the landing squash is upright.
+  const before = body.lift;
   body.lift = 0;
   body.squash = 0;
+  body.upright = false;
   if (hop) {
     const u = (clock - hop.start) / hop.time;
     if (u >= 1) {
       hop = null;
       landedAt = clock;
-    } else {
-      body.lift = hop.height * Math.sin(Math.PI * u);
-      body.squash = -STRETCH * Math.sin(Math.PI * u);
-    }
+    } else body.lift = hop.height * Math.sin(Math.PI * u);
   }
+  body.liftSpeed = (body.lift - before) / dt;
   if (!hop && !still) {
     const since = clock - landedAt;
-    if (landedAt >= 0 && since < LAND_FOR) body.squash = LAND_SQUASH * Math.sin(Math.PI * (since / LAND_FOR));
+    if (landedAt >= 0 && since < LAND_FOR) {
+      body.squash = LAND_SQUASH * Math.sin(Math.PI * (since / LAND_FOR));
+      body.upright = true;
+    }
   }
-  body.upright = body.squash !== 0;
   body.draw({ x: -sc.x, y: -sc.y }, clock);
   // Gone under the tray: stop.
   if (leaving && body.head.y - sc.y > innerHeight + 30) return finishLeaving();
