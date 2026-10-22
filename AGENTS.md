@@ -117,9 +117,13 @@ where a test can catch them; keep the rest by hand.
   reaching the page. Never animate on page load, on scroll, or for
   decoration. The splash page's drifting ghost and its wisp
   (`src/shell/splash-wisp.ts`) are the exceptions, on the splash page only.
-  The wisp comes out once the page is idle, perches on top edges (never on
-  text, buttons or links), darts away from a nearby pointer except on the way
-  to the call to action, and is absent under reduced motion or Save-Data.
+  The wisp comes out once the page is idle and lives in the clear background
+  behind the page: it finds its way round text, buttons and cards like a
+  maze and never crosses them (`src/shared/wisp-nav.ts`), hides behind cards
+  and peeks out, bolts from a nearby pointer except on the way to the call
+  to action, and is absent under reduced motion or Save-Data. Measure a
+  change with `spikes/splash-wisp-probe.js` on `spikes/splash-serve.ts`:
+  it must report no frames over text.
 - Keyboard-driven and very frequent actions (typing, arrowing, hovering a
   list) get colour changes at most, not movement.
 - Animate `transform` and `opacity`; never animate layout (height, width,
