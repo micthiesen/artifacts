@@ -163,6 +163,16 @@ function halfToFloat(h: number): number {
   return s * (1 + f / 1024) * 2 ** (e - 15);
 }
 
+let halfTable: Float32Array | undefined;
+/** Every float16 bit pattern as float32, so decoding the weights is a table lookup. */
+function halves(): Float32Array {
+  if (!halfTable) {
+    halfTable = new Float32Array(65536);
+    for (let h = 0; h < 65536; h++) halfTable[h] = halfToFloat(h);
+  }
+  return halfTable;
+}
+
 export function readG2pWeights(buf: ArrayBuffer): Map<string, Tensor> {
   const view = new DataView(buf);
   const magic = String.fromCharCode(...new Uint8Array(buf, 0, 4));
@@ -181,7 +191,8 @@ export function readG2pWeights(buf: ArrayBuffer): Map<string, Tensor> {
     if (header.dtype === "float32") data = new Float32Array(buf.slice(at, at + size * 4));
     else {
       data = new Float32Array(size);
-      for (let i = 0; i < size; i++) data[i] = halfToFloat(view.getUint16(at + i * 2, true));
+      const table = halves();
+      for (let i = 0; i < size; i++) data[i] = table[view.getUint16(at + i * 2, true)];
     }
     out.set(t.name, { data, shape: t.shape });
   }
@@ -340,54 +351,99 @@ function ensureStress(ipa: string): string {
   return stressFirstVowel(ipa, "ˈ");
 }
 
-export function parseLexicon(text: string): Map<string, string> {
-  const map = new Map<string, string>();
-  let start = 0;
-  while (start < text.length) {
-    let end = text.indexOf("\n", start);
-    if (end < 0) end = text.length;
-    const tab = text.indexOf("\t", start);
-    if (tab > start && tab < end) map.set(text.slice(start, tab), text.slice(tab + 1, end));
-    start = end + 1;
+/**
+ * The lexicon, looked up in place: lines are sorted by word (JS string order),
+ * so a binary search over the text finds a word without building a Map of
+ * 135k entries (which costs a phone hundreds of milliseconds and many MB).
+ */
+export class Lexicon {
+  constructor(private readonly text: string) {}
+
+  get(word: string): string | undefined {
+    const text = this.text;
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) {
+      const mid = text.lastIndexOf("\n", ((lo + hi) >>> 1) - 1) + 1;
+      let eol = text.indexOf("\n", mid);
+      if (eol < 0) eol = text.length;
+      let tab = text.indexOf("\t", mid);
+      if (tab < 0 || tab > eol) tab = eol;
+      const key = text.slice(mid, tab);
+      if (key === word) return tab < eol ? text.slice(tab + 1, eol) : undefined;
+      if (key < word) lo = eol + 1;
+      else hi = mid;
+    }
+    return undefined;
   }
-  return map;
+
+  has(word: string): boolean {
+    return this.get(word) !== undefined;
+  }
 }
+
+const MAX_G2P_LETTERS = 24;
 
 const WORD_OR_PUNCT = /[\p{L}\p{M}\p{N}]+(?:['-][\p{L}\p{M}\p{N}]+)*'?|[.,?!;:—…"]/gu;
 const STARTS_WITH_VOWEL_SOUND = /^[ˈˌ]?[ɑæʌɔaɛɜeɪiʊuoəɚᵻɐ]/;
 
 export class Phonemizer {
-  private lexicon: Map<string, string>;
+  private lexicon: Lexicon;
   private g2p: G2p;
   private cache = new Map<string, string>();
 
   constructor(lexicon: string, g2p: ArrayBuffer) {
-    this.lexicon = parseLexicon(lexicon);
+    this.lexicon = new Lexicon(lexicon);
     this.g2p = new G2p(g2p);
   }
 
   phonemize(text: string): string {
-    const tokens = text.normalize("NFC").match(WORD_OR_PUNCT) ?? [];
+    return this.phonemizeWords(text).phonemes;
+  }
+
+  /**
+   * phonemize(), also saying where each word went: `text` and `phonemes` are
+   * half-open UTF-16 ranges into text.normalize("NFC") and the returned
+   * phoneme string. Punctuation is in no word.
+   */
+  phonemizeWords(text: string): { phonemes: string; words: { text: [number, number]; phonemes: [number, number] }[] } {
+    const nfc = text.normalize("NFC");
+    const tokens = [...nfc.matchAll(WORD_OR_PUNCT)];
     const shouting = !/\p{Ll}/u.test(text);
+    const isWord = (t: string | undefined) => t !== undefined && /[\p{L}\p{N}]/u.test(t);
     let out = "";
+    const raw: { text: [number, number]; from: number; to: number }[] = [];
     for (let i = 0; i < tokens.length; i++) {
-      const tok = tokens[i];
-      if (!/[\p{L}\p{N}]/u.test(tok)) {
+      const tok = tokens[i][0];
+      if (!isWord(tok)) {
         if (tok === '"') continue;
-        out = out.trimEnd() + (tok === "—" ? " — " : `${tok} `);
+        out = out.trimEnd() + (tok === "\u2014" ? " \u2014 " : `${tok} `);
         continue;
       }
-      const next = tokens[i + 1];
-      const nextWord = next !== undefined && /[\p{L}\p{N}]/u.test(next) ? next : undefined;
+      const next = tokens[i + 1]?.[0];
+      const nextWord = isWord(next) ? next : undefined;
       let ipa = this.word(tok, shouting, nextWord);
       // Linking r and "to" before a vowel, within a phrase.
       if (nextWord && STARTS_WITH_VOWEL_SOUND.test(this.word(nextWord, shouting, undefined))) {
         if (ipa.endsWith("ɚ")) ipa += "ɹ";
         else if (ipa === "tə") ipa = "tʊ";
       }
+      const lead = ipa.length - ipa.trimStart().length;
+      raw.push({ text: [tokens[i].index, tokens[i].index + tok.length], from: out.length + lead, to: out.length + ipa.trimEnd().length });
       out += `${ipa} `;
     }
-    return out.replace(/\s+/g, " ").trim();
+    // Collapse whitespace runs and trim, mapping raw positions to final ones.
+    const phonemes = out.replace(/\s+/g, " ").trim();
+    const kept = new Int32Array(out.length + 1);
+    for (let i = 0, n = 0; i < out.length; i++) {
+      kept[i] = n;
+      if (!(/\s/.test(out[i]) && i > 0 && /\s/.test(out[i - 1]))) n++;
+      kept[i + 1] = n;
+    }
+    const leadTrim = out.length && /\s/.test(out[0]) ? 1 : 0;
+    const at = (p: number) => Math.min(phonemes.length, Math.max(0, kept[Math.min(p, out.length)] - leadTrim));
+    const words = raw.map((w) => ({ text: w.text, phonemes: [at(w.from), Math.max(at(w.from), at(w.to))] as [number, number] }));
+    return { phonemes, words };
   }
 
   /** One word in context: function words stay unstressed; "the" before a vowel is ðɪ. */
@@ -454,6 +510,11 @@ export class Phonemizer {
     }
     const letters = lower.normalize("NFD").replace(/[^a-z]/g, "");
     if (!letters) return "";
+    // The GRU was trained on dictionary words; very long strings are said in pieces, which also bounds its cost.
+    if (letters.length > MAX_G2P_LETTERS) {
+      const pieces = letters.match(new RegExp(`.{1,${MAX_G2P_LETTERS / 2}}`, "g"))!;
+      return pieces.map((p) => this.content(p, shouting)).join("");
+    }
     return ensureStress(arpabetToIpa(this.g2p.predict(letters), letters));
   }
 

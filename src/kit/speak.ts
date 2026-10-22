@@ -1,44 +1,91 @@
 // Listen: the page's readable text, gathered from what is rendered rather than
 // from the source, so MDX components, data-driven tables and app.tsx pages all
-// read the way they look. Each unit is one block; the element gets
+// read the way they look. Each unit is one block; its element gets
 // data-speak-i so the shell can mark it while it is read and the reader can
-// tap a block to start there.
+// tap a block to start there. Every character of a unit remembers the text
+// node it came from, so the word being spoken can be marked too (with the CSS
+// Custom Highlight API, which leaves the DOM alone).
 //
 // Components can steer it: data-speak="skip" leaves an element out,
 // data-speak="<kind>" reads it as one unit (stat, chart, diagram), and
 // aria-hidden content is never read.
 
 import type { SpeakUnit } from "../shared/protocol.ts";
+import { wispReflow, wispTo } from "./wisp.ts";
 
 const SKIP =
   "script,style,template,svg,canvas,button,input,textarea,select,nav,[hidden],[aria-hidden='true'],[data-speak='skip'],.art-contents,.art-linked-from,[role='tablist']";
 const BLOCK = "h1,h2,h3,h4,h5,h6,p,li,pre,table,blockquote,figure,dt,dd,[data-speak],[role='note']";
-const TONES: Record<string, string> = { warning: "Warning.", danger: "Caution.", success: "", info: "" };
+const TONES: Record<string, string> = { warning: "Warning.", danger: "Caution." };
+const INLINE = new Set(["A", "ABBR", "B", "BDI", "CITE", "CODE", "DATA", "EM", "I", "KBD", "LABEL", "MARK", "Q", "S", "SMALL", "SPAN", "STRONG", "SUB", "SUP", "TIME", "U", "VAR"]);
+const WORD_HIGHLIGHT = "art-speak-word";
 
-let units: Element[] = [];
+/** A unit's text as it is spoken, with the text node and offset each character came from (null for added words and pauses). */
+class Spoken {
+  text = "";
+  nodes: (Text | null)[] = [];
+  offsets: number[] = [];
 
-/** Text of an element as it reads, skipping what Listen never reads, with blocks separated. */
-function textOf(el: Element): string {
-  const parts: string[] = [];
-  const walk = (node: Node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      parts.push(node.textContent ?? "");
-      return;
+  private put(ch: string, node: Text | null, offset: number) {
+    this.text += ch;
+    this.nodes.push(node);
+    this.offsets.push(offset);
+  }
+
+  /** Words that aren't on the page ("A table of 3 rows", "Warning."). */
+  add(s: string) {
+    for (const ch of s) {
+      if (/\s/.test(ch)) this.space(null, 0);
+      else this.put(ch, null, 0);
     }
-    if (!(node instanceof Element) || node.matches(SKIP)) return;
-    const block = node !== el && isBlockish(node);
-    if (block) parts.push(" ");
-    if (node.tagName === "BR") parts.push(" ");
-    for (const child of node.childNodes) walk(child);
-    // A block that ends without punctuation (a title, a label) still gets a pause before what follows.
-    if (block && !/[.!?:;…,]\s*$/.test(parts.join("")) && parts.join("").trim()) parts.push(".");
-    if (block) parts.push(" ");
-  };
-  walk(el);
-  return parts.join("").replace(/\s+/g, " ").trim();
+  }
+
+  node(n: Text) {
+    const s = n.data;
+    for (let k = 0; k < s.length; k++) {
+      if (/\s/.test(s[k]!)) this.space(n, k);
+      else this.put(s[k]!, n, k);
+    }
+  }
+
+  private space(node: Text | null, offset: number) {
+    if (this.text && !this.text.endsWith(" ")) this.put(" ", node, offset);
+  }
+
+  /** Between blocks: a space, and a full stop when the last block (a title, a label) ended without punctuation. */
+  pause() {
+    this.trimEnd();
+    if (this.text && !/[.!?:;…,]$/.test(this.text)) this.put(".", null, 0);
+    this.space(null, 0);
+  }
+
+  trimEnd() {
+    while (this.text.endsWith(" ")) {
+      this.text = this.text.slice(0, -1);
+      this.nodes.pop();
+      this.offsets.pop();
+    }
+  }
+
+  /** Trimmed, ending with punctuation so every unit closes with a pause. */
+  finish(): Spoken {
+    this.trimEnd();
+    let lead = 0;
+    while (this.text[lead] === " ") lead++;
+    if (lead) {
+      this.text = this.text.slice(lead);
+      this.nodes = this.nodes.slice(lead);
+      this.offsets = this.offsets.slice(lead);
+    }
+    if (this.text && !/[.!?:;…]$/.test(this.text)) this.put(".", null, 0);
+    return this;
+  }
 }
 
-const INLINE = new Set(["A", "ABBR", "B", "BDI", "CITE", "CODE", "DATA", "EM", "I", "KBD", "LABEL", "MARK", "Q", "S", "SMALL", "SPAN", "STRONG", "SUB", "SUP", "TIME", "U", "VAR"]);
+type Unit = { el: Element; spoken: Spoken };
+let units: Unit[] = [];
+let out: SpeakUnit[] = [];
+let heading: string | undefined;
 
 function isBlockish(el: Element): boolean {
   const d = getComputedStyle(el).display;
@@ -48,31 +95,56 @@ function isBlockish(el: Element): boolean {
 }
 
 function visible(el: Element): boolean {
-  if (el.matches(SKIP)) return false;
-  return getComputedStyle(el).display !== "none";
+  return !el.matches(SKIP) && getComputedStyle(el).display !== "none";
 }
 
-/** Ends a unit with a full stop when it has no punctuation, so headings and labels get a pause. */
-function stop(text: string): string {
-  return /[.!?:;…]$/.test(text) ? text : `${text}.`;
+/** Appends an element's readable text, skipping what Listen never reads, with blocks separated by pauses. */
+function into(b: Spoken, el: Element) {
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) return b.node(node as Text);
+    if (!(node instanceof Element) || node.matches(SKIP)) return;
+    const block = node !== el && isBlockish(node);
+    if (block) b.pause();
+    if (node.tagName === "BR") b.add(" ");
+    for (const child of node.childNodes) walk(child);
+    if (block) b.pause();
+  };
+  walk(el);
 }
 
-function push(el: Element, text: string) {
-  const t = text.replace(/\s+/g, " ").trim();
-  if (!t) return;
-  el.setAttribute("data-speak-i", String(units.length));
-  units.push(el);
-  out.push({ i: units.length - 1, text: stop(t) });
+function textOf(el: Element): string {
+  const b = new Spoken();
+  into(b, el);
+  b.trimEnd();
+  return b.text.trim();
 }
 
-let out: SpeakUnit[] = [];
+function push(el: Element, b: Spoken) {
+  b.finish();
+  if (!b.text) return;
+  const i = units.length;
+  el.setAttribute("data-speak-i", String(i));
+  units.push({ el, spoken: b });
+  if (/^H[1-6]$/.test(el.tagName)) heading = b.text.replace(/[.:]$/, "");
+  out.push(heading ? { i, text: b.text, h: heading } : { i, text: b.text });
+}
 
-function readTable(table: HTMLTableElement): string {
-  const heads = [...table.querySelectorAll("thead th")].map((th) => textOf(th)).filter(Boolean);
+function pushText(el: Element) {
+  const b = new Spoken();
+  into(b, el);
+  push(el, b);
+}
+
+function readTable(table: HTMLTableElement): Spoken {
+  const b = new Spoken();
+  const heads = [...table.querySelectorAll("thead th")].map(textOf).filter(Boolean);
   const rows = table.querySelectorAll("tbody tr").length;
-  const caption = table.caption ? `${textOf(table.caption)}. ` : "";
-  const cols = heads.length ? `: ${heads.join(", ")}` : "";
-  return `${caption}A table of ${rows} ${rows === 1 ? "row" : "rows"}${cols}`;
+  if (table.caption) {
+    into(b, table.caption);
+    b.pause();
+  }
+  b.add(`A table of ${rows} ${rows === 1 ? "row" : "rows"}${heads.length ? `: ${heads.join(", ")}` : ""}`);
+  return b;
 }
 
 function walk(el: Element) {
@@ -81,90 +153,192 @@ function walk(el: Element) {
   const tag = el.tagName;
   if (kind === "stat") {
     // Label, value, delta and hint, each a separate phrase.
-    const bits = [...el.querySelectorAll(":scope > div, :scope > div > span")].filter((d) => !d.querySelector("div,span")).map(textOf).filter(Boolean);
-    return push(el, bits.join(", ") || textOf(el));
+    const b = new Spoken();
+    const bits = [...el.querySelectorAll(":scope > div, :scope > div > span")].filter((d) => !d.querySelector("div,span") && textOf(d));
+    for (const [k, bit] of bits.entries()) {
+      if (k) b.add(", ");
+      into(b, bit);
+      b.trimEnd();
+    }
+    if (!bits.length) into(b, el);
+    return push(el, b);
   }
   if (kind === "chart" || kind === "diagram" || tag === "FIGURE") {
+    const b = new Spoken();
     const caption = el.querySelector("figcaption");
-    const what = kind === "chart" ? "A chart" : kind === "diagram" ? "A diagram" : "";
+    if (caption) {
+      into(b, caption);
+      b.pause();
+    }
     const img = el.querySelector("img[alt]")?.getAttribute("alt");
-    return push(el, [caption ? stop(textOf(caption)) : "", what || img || ""].filter(Boolean).join(" "));
+    b.add(kind === "chart" ? "A chart" : kind === "diagram" ? "A diagram" : (img ?? ""));
+    return push(el, b);
   }
-  if (tag === "PRE") return push(el, "A code block");
+  if (tag === "PRE") {
+    const b = new Spoken();
+    b.add("A code block");
+    return push(el, b);
+  }
   if (tag === "TABLE") return push(el, readTable(el as HTMLTableElement));
   if (el.getAttribute("role") === "note") {
-    const tone = el.getAttribute("data-tone") ?? "";
-    return push(el, `${TONES[tone] ?? ""} ${textOf(el)}`);
+    const b = new Spoken();
+    const tone = TONES[el.getAttribute("data-tone") ?? ""];
+    if (tone) b.add(`${tone} `);
+    into(b, el);
+    return push(el, b);
   }
-  if (/^H[1-6]$|^P$|^DT$|^DD$/.test(tag)) return push(el, textOf(el));
+  if (/^H[1-6]$|^P$|^DT$|^DD$/.test(tag)) return pushText(el);
   if (tag === "LI" || tag === "BLOCKQUOTE") {
     // A list item with its own paragraphs or a nested list reads its parts one by one.
-    if (!el.querySelector(BLOCK)) return push(el, textOf(el));
-    const own = [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE || (n instanceof Element && !n.matches(BLOCK) && !n.querySelector(BLOCK)));
-    const lead = own.map((n) => (n instanceof Element ? (n.matches(SKIP) ? "" : textOf(n)) : n.textContent ?? "")).join(" ").trim();
-    if (lead) push(el, lead);
+    if (!el.querySelector(BLOCK)) return pushText(el);
+    const b = new Spoken();
+    for (const n of el.childNodes) {
+      if (n.nodeType === Node.TEXT_NODE) b.node(n as Text);
+      else if (n instanceof Element && !n.matches(BLOCK) && !n.querySelector(BLOCK)) into(b, n);
+    }
+    push(el, b);
     for (const child of el.children) if (child.matches(BLOCK) || child.querySelector(BLOCK)) walk(child);
     return;
   }
   // A container: if nothing inside is a block, it is one unit (app.tsx pages are mostly divs).
   if (!el.querySelector(BLOCK)) {
-    if (isBlockish(el)) push(el, textOf(el));
+    if (isBlockish(el)) pushText(el);
     return;
   }
-  // Mixed: loose text between blocks still counts.
-  let loose: Element[] = [];
+  // Mixed: loose inline content between blocks still counts.
+  let loose: Node[] = [];
   const flush = () => {
-    const text = loose.map(textOf).join(" ");
-    if (text.trim()) push(loose[0]!, text);
+    const b = new Spoken();
+    for (const n of loose) n instanceof Element ? into(b, n) : b.node(n as Text);
+    push(loose.find((n): n is Element => n instanceof Element) ?? el, b);
     loose = [];
   };
-  for (const child of el.children) {
-    if (child.matches(BLOCK) || child.querySelector(BLOCK) || isBlockish(child)) {
+  for (const child of el.childNodes) {
+    if (child instanceof Element && (child.matches(BLOCK) || child.querySelector(BLOCK) || isBlockish(child))) {
       flush();
       walk(child);
-    } else if (visible(child)) loose.push(child);
+    } else if (child instanceof Element ? visible(child) : child.nodeType === Node.TEXT_NODE) loose.push(child);
   }
   flush();
 }
 
-/** Collects the page's readable units, in reading order, and numbers their elements. */
-export function collectSpeech(root: Element): SpeakUnit[] {
-  for (const el of units) el.removeAttribute("data-speak-i");
+/**
+ * Collects the page's readable units, in reading order, and numbers their elements. `start` is the
+ * first unit on screen, so Listen begins where the reader is looking rather than at the top.
+ */
+export function collectSpeech(root: Element): { units: SpeakUnit[]; start: number } {
+  for (const u of units) u.el.removeAttribute("data-speak-i");
   units = [];
   out = [];
+  heading = undefined;
   walk(root);
-  return out;
+  let start = 0;
+  if (scrollY > 0) {
+    const i = units.findIndex((u) => u.el.getBoundingClientRect().bottom > 8);
+    if (i > 0) start = i;
+  }
+  return { units: out, start };
 }
 
+// ---- following along ---------------------------------------------------------------------
+
 let current: Element | null = null;
+/** When the reader last scrolled by hand; following waits a while after that so it doesn't fight them. */
+let userScrolledAt = 0;
+const FOLLOW_PAUSE_MS = 6000;
+const userScroll = () => (userScrolledAt = Date.now());
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && userScroll();
+
+const following = () => Date.now() - userScrolledAt > FOLLOW_PAUSE_MS;
+const scrollBehavior = (): ScrollBehavior => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
 
 /** Marks the block being read and keeps it in view. */
 export function markSpeaking(i: number | null) {
   current?.removeAttribute("data-speaking");
-  current = i === null ? null : (units[i] ?? null);
-  if (!current) return;
-  current.setAttribute("data-speaking", "");
-  const r = current.getBoundingClientRect();
-  if (r.top < 0 || r.bottom > innerHeight) {
-    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    current.scrollIntoView({ block: r.height > innerHeight * 0.6 ? "start" : "center", behavior: reduce ? "auto" : "smooth" });
+  current = i === null ? null : (units[i]?.el ?? null);
+  if (!current) {
+    wispTo(null);
+    return markWord(null, 0, 0);
   }
+  current.setAttribute("data-speaking", "");
+  // A block with nothing of its own to point at (a table or chart read as a summary) has no wisp.
+  if (!units[i!]!.spoken.nodes.some(Boolean)) wispTo(null);
+  const r = current.getBoundingClientRect();
+  if (following() && (r.top < 0 || r.bottom > innerHeight)) {
+    current.scrollIntoView({ block: r.height > innerHeight * 0.6 ? "start" : "center", behavior: scrollBehavior() });
+  }
+}
+
+/** The page range of [start, end) in unit `i`'s text, without the words Listen added; null when none of it is on the page. */
+export function wordRange(i: number, start: number, end: number): Range | null {
+  const unit = units[i];
+  if (!unit) return null;
+  const { nodes, offsets } = unit.spoken;
+  let a = start;
+  while (a < end && !nodes[a]) a++;
+  let z = end - 1;
+  while (z >= a && !nodes[z]) z--;
+  const from = nodes[a];
+  const to = nodes[z];
+  if (a > z || !from || !to || !from.isConnected || !to.isConnected) return null;
+  const range = document.createRange();
+  try {
+    range.setStart(from, offsets[a]!);
+    range.setEnd(to, offsets[z]! + 1);
+  } catch {
+    return null;
+  }
+  return range;
+}
+
+let wordAt: Range | null = null;
+addEventListener("resize", () => wispReflow(wordAt));
+
+/**
+ * Marks the word being spoken: [start, end) in the unit's text, with a wash and the wisp hopping over it
+ * (in `hop` ms at most). Words Listen added (not on the page) mark nothing and leave the wisp where it was.
+ */
+export function markWord(i: number | null, start: number, end: number, hop?: number) {
+  const highlights = (globalThis.CSS as { highlights?: Map<string, unknown> } | undefined)?.highlights;
+  const range = i === null ? null : wordRange(i, start, end);
+  wordAt = range;
+  if (range) wispTo(range, hop);
+  if (!highlights || typeof Highlight === "undefined") return;
+  if (!range) return void highlights.delete(WORD_HIGHLIGHT);
+  highlights.set(WORD_HIGHLIGHT, new Highlight(range));
+  // In a block taller than the screen the word can run off the bottom: bring its line back up.
+  if (!following()) return;
+  const r = range.getBoundingClientRect();
+  if (r.height && (r.bottom > innerHeight - 24 || r.top < 0)) scrollBy({ top: r.top - innerHeight * 0.35, behavior: scrollBehavior() });
 }
 
 let tapping: ((e: MouseEvent) => void) | null = null;
 
-/** While listening, tapping a block (not a control or link) starts reading there. */
+/** While listening, tapping a block (not a control or link) starts reading there, and hand scrolling pauses following. */
 export function speakMode(on: boolean, send: (i: number) => void) {
   if (tapping) document.removeEventListener("click", tapping, true);
   tapping = null;
+  removeEventListener("wheel", userScroll);
+  removeEventListener("touchmove", userScroll);
+  removeEventListener("keydown", userKey);
   document.documentElement.toggleAttribute("data-listening", on);
-  if (!on) return markSpeaking(null);
+  if (!on) {
+    wispTo(null);
+    return markSpeaking(null);
+  }
+  userScrolledAt = 0;
+  addEventListener("wheel", userScroll, { passive: true });
+  addEventListener("touchmove", userScroll, { passive: true });
+  addEventListener("keydown", userKey);
   tapping = (e) => {
     const target = e.target as Element | null;
-    if (!target || target.closest("a,button,input,textarea,select,label,[role='button'],[role='tab']")) return;
+    if (!target || target.closest("a,button,input,textarea,select,label,summary,[role='button'],[role='tab'],[role='checkbox']")) return;
     if (getSelection()?.toString()) return;
     const el = target.closest("[data-speak-i]");
-    if (el) send(Number(el.getAttribute("data-speak-i")));
+    if (!el) return;
+    userScrolledAt = 0;
+    send(Number(el.getAttribute("data-speak-i")));
   };
   document.addEventListener("click", tapping, true);
 }

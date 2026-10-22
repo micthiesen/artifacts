@@ -19,7 +19,7 @@ test("reads blocks in order, summarises tables and figures, skips code and contr
     <section data-speak="skip"><p>A comment</p></section>
     <div>Loose text in an app <button>Click me</button></div>
   </div></div>`;
-  const texts = collectSpeech(document.getElementById("root")!).map((u) => u.text);
+  const texts = collectSpeech(document.getElementById("root")!).units.map((u) => u.text);
   expect(texts).toEqual([
     "Picking a CI provider.",
     "Use Buildkite: fastest on our monorepo.",
@@ -34,4 +34,20 @@ test("reads blocks in order, summarises tables and figures, skips code and contr
     "Loose text in an app.",
   ]);
   expect(document.querySelector("h1")!.getAttribute("data-speak-i")).toBe("0");
+});
+
+test("each spoken character maps back to the page, so a word can be marked", async () => {
+  const { wordRange } = await import("./speak.ts");
+  document.body.innerHTML = `<div id="root"><p>Costs   <strong>$420</strong> a month</p><div data-speak="stat"><div>Fixed cost</div><div><span>$0</span></div></div></div>`;
+  const { units } = collectSpeech(document.getElementById("root")!);
+  expect(units.map((u) => u.text)).toEqual(["Costs $420 a month.", "Fixed cost, $0."]);
+  const at = (i: number, word: string) => {
+    const start = units[i]!.text.indexOf(word);
+    return wordRange(i, start, start + word.length)?.toString();
+  };
+  expect(at(0, "$420")).toBe("$420");
+  expect(at(0, "month")).toBe("month");
+  expect(at(1, "$0")).toBe("$0");
+  // The full stop Listen added maps to nothing on the page.
+  expect(wordRange(0, units[0]!.text.length - 1, units[0]!.text.length)).toBeNull();
 });

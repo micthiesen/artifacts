@@ -7,7 +7,7 @@
 //
 // Assets:
 //   kitten-nano-0.8.onnx   Kitten TTS nano 0.8 int8 (Apache-2.0, KittenML)
-//   voice-<Name>.bin       one voice's style table: raw little-endian float32,
+//   voice-Bruno.bin        the voice's style table: raw little-endian float32,
 //                          rows of STYLE_WIDTH (256), one row per text length
 //   lexicon.txt            CMUdict (BSD-2-Clause) as "word\tipa\n", see src/tts/phonemize.ts
 //   g2p.bin                g2p_en's GRU weights (Apache-2.0), layout in src/tts/phonemize.ts
@@ -53,8 +53,13 @@ export type Manifest = {
   lexicon: string;
   g2p: string;
   notices: string;
-  voices: Record<string, { url: string; speed: number }>;
+  voice: { url: string; speed: number };
+  /** Uncompressed file sizes, for a download progress total. */
+  bytes: { model: number; lexicon: number; g2p: number; voice: number };
 };
+
+/** The one voice Listen ships (a config.json alias). */
+const VOICE = "Bruno";
 
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
@@ -205,7 +210,7 @@ function notices(cmudictLicense: string, apache: string): string {
   return `Third-party components of the artifacts.boo speech engine
 ========================================================
 
-Kitten TTS nano 0.8 (kitten-nano-0.8.onnx, voice-*.bin)
+Kitten TTS nano 0.8 (kitten-nano-0.8.onnx, voice-Bruno.bin)
   Copyright KittenML. Licensed under the Apache License, Version 2.0.
   https://huggingface.co/KittenML/kitten-tts-nano-0.8-int8
   Voice tables converted from voices.npz to raw float32; the model is unmodified.
@@ -257,12 +262,11 @@ export async function buildTts(): Promise<Manifest> {
   const outputs = new Map<string, Uint8Array>();
   outputs.set("kitten-nano-0.8.onnx", model);
   const voices = readNpz(voicesNpz);
-  for (const [name, id] of Object.entries(config.voice_aliases)) {
-    const v = voices.get(id);
-    if (!v) throw new Error(`voices.npz lacks ${id}`);
-    if (v.shape[1] !== STYLE_WIDTH) throw new Error(`${id}: style width ${v.shape[1]}, expected ${STYLE_WIDTH}`);
-    outputs.set(`voice-${name}.bin`, new Uint8Array(v.data.buffer, v.data.byteOffset, v.data.byteLength));
-  }
+  const voiceId = config.voice_aliases[VOICE];
+  const v = voiceId ? voices.get(voiceId) : undefined;
+  if (!v) throw new Error(`voices.npz lacks ${VOICE} (${voiceId})`);
+  if (v.shape[1] !== STYLE_WIDTH) throw new Error(`${voiceId}: style width ${v.shape[1]}, expected ${STYLE_WIDTH}`);
+  outputs.set(`voice-${VOICE}.bin`, new Uint8Array(v.data.buffer, v.data.byteOffset, v.data.byteLength));
   outputs.set("lexicon.txt", new TextEncoder().encode(buildLexicon(new TextDecoder().decode(cmudict))));
   outputs.set("g2p.bin", packG2p(readNpz(checkpoint)));
   outputs.set("NOTICES.txt", new TextEncoder().encode(notices(new TextDecoder().decode(cmudictLicense), new TextDecoder().decode(apache))));
@@ -285,9 +289,13 @@ export async function buildTts(): Promise<Manifest> {
     lexicon: urls.get("lexicon.txt")!,
     g2p: urls.get("g2p.bin")!,
     notices: urls.get("NOTICES.txt")!,
-    voices: Object.fromEntries(
-      Object.entries(config.voice_aliases).map(([name, id]) => [name, { url: urls.get(`voice-${name}.bin`)!, speed: config.speed_priors?.[id] ?? 1 }]),
-    ),
+    voice: { url: urls.get(`voice-${VOICE}.bin`)!, speed: config.speed_priors?.[voiceId] ?? 1 },
+    bytes: {
+      model: outputs.get("kitten-nano-0.8.onnx")!.byteLength,
+      lexicon: outputs.get("lexicon.txt")!.byteLength,
+      g2p: outputs.get("g2p.bin")!.byteLength,
+      voice: outputs.get(`voice-${VOICE}.bin`)!.byteLength,
+    },
   };
   await writeFile(join(CACHE, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   const sizes = (await readdir(DIST)).length;

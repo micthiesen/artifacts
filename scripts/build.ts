@@ -42,7 +42,11 @@ await build({ ...common, entryPoints: ["src/shell/forms.ts"], outfile: "dist/kit
     platform: "browser",
     define: {
       __TTS_MANIFEST__: JSON.stringify(manifest),
-      __ORT_WASM__: JSON.stringify({ wasm: `/kit/v1/tts/ort-${ortVersion}/ort-wasm-simd-threaded.wasm`, mjs: `/kit/v1/tts/ort-${ortVersion}/ort-wasm-simd-threaded.mjs` }),
+      __ORT_WASM__: JSON.stringify({
+        wasm: `/kit/v1/tts/ort-${ortVersion}/ort-wasm-simd-threaded.wasm`,
+        mjs: `/kit/v1/tts/ort-${ortVersion}/ort-wasm-simd-threaded.mjs`,
+        bytes: Bun.file(`${ortDir}/ort-wasm-simd-threaded.wasm`).size,
+      }),
     },
   });
 }

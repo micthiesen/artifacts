@@ -74,8 +74,8 @@ function ordinalWord(word: string): string {
 /** 1 -> "first", 21 -> "twenty-first", 100 -> "one hundredth". */
 export function ordinalToWords(n: number): string {
   const words = numberToWords(n);
-  const m = /^(.*?)([a-z]+)$/.exec(words)!;
-  return m[1] + ordinalWord(m[2]);
+  const m = /^(.*?)([a-z]+)$/.exec(words);
+  return m ? m[1] + ordinalWord(m[2]) : words;
 }
 
 /** 1999 -> "nineteen ninety-nine", 2005 -> "two thousand five", 2026 -> "twenty twenty-six". */
@@ -282,32 +282,162 @@ function dimensionWords(raw: string): string {
 
 const NUM = String.raw`\d+(?:,\d{3})*(?:\.\d+)?`;
 
+/** Normalised text with, for each UTF-16 unit, the source range [start[i], end[i]) it came from. */
+export type SpannedText = { text: string; start: Int32Array; end: Int32Array };
+
+type Replacer = string | ((match: string, ...rest: any[]) => string);
+
+/** A string that remembers where each of its characters came from, edited with String.replace's semantics. */
+class Spanned {
+  text: string;
+  start: number[];
+  end: number[];
+
+  constructor(text: string) {
+    this.text = text;
+    this.start = Array.from({ length: text.length }, (_, i) => i);
+    this.end = this.start.map((i) => i + 1);
+  }
+
+  replace(re: RegExp, rep: Replacer): this {
+    const src = this.text;
+    const matches = re.global ? [...src.matchAll(re)] : [re.exec(src)].filter((m): m is RegExpExecArray => m !== null);
+    if (re.global === false) re.lastIndex = 0;
+    if (!matches.length) return this;
+    let text = "";
+    const start: number[] = [];
+    const end: number[] = [];
+    let at = 0;
+    for (const m of matches) {
+      const from = m.index;
+      const to = from + m[0].length;
+      const out = typeof rep === "string" ? expand(rep, m) : rep(m[0], ...m.slice(1), from, src);
+      text += src.slice(at, from);
+      for (let i = at; i < from; i++) start.push(this.start[i]), end.push(this.end[i]);
+      // Characters the edit kept at either end keep their own source; the rest map to what they replaced.
+      let pre = 0;
+      while (pre < out.length && pre < to - from && out[pre] === src[from + pre]) pre++;
+      let suf = 0;
+      while (suf < out.length - pre && suf < to - from - pre && out[out.length - 1 - suf] === src[to - 1 - suf]) suf++;
+      // ...but only when what changed was spacing or symbols: a rewritten word ("Oct 21" -> "October twenty-first") stays whole.
+      if (/[\p{L}\p{N}]/u.test(src.slice(from + pre, to - suf))) pre = suf = 0;
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let i = from + pre; i < to - suf; i++) (lo = Math.min(lo, this.start[i])), (hi = Math.max(hi, this.end[i]));
+      if (lo === Infinity) {
+        for (let i = from; i < to; i++) (lo = Math.min(lo, this.start[i])), (hi = Math.max(hi, this.end[i]));
+        if (lo === Infinity) (lo = from < src.length ? this.start[from] : this.end[from - 1] ?? 0), (hi = lo);
+      }
+      for (let i = 0; i < out.length; i++) {
+        if (i < pre) start.push(this.start[from + i]), end.push(this.end[from + i]);
+        else if (i >= out.length - suf) {
+          const j = to - (out.length - i);
+          start.push(this.start[j]), end.push(this.end[j]);
+        } else start.push(lo), end.push(hi);
+      }
+      text += out;
+      at = to;
+    }
+    text += src.slice(at);
+    for (let i = at; i < src.length; i++) start.push(this.start[i]), end.push(this.end[i]);
+    this.text = text;
+    this.start = start;
+    this.end = end;
+    return this;
+  }
+
+  trim(): this {
+    const lead = this.text.length - this.text.trimStart().length;
+    const kept = this.text.trim().length;
+    this.text = this.text.trim();
+    this.start = this.start.slice(lead, lead + kept);
+    this.end = this.end.slice(lead, lead + kept);
+    return this;
+  }
+
+  /** Unicode NFC, a base character and its marks at a time, so each composed character maps to its parts. */
+  nfc(): this {
+    const whole = this.text.normalize("NFC");
+    if (whole === this.text) return this;
+    const start: number[] = [];
+    const end: number[] = [];
+    let text = "";
+    for (const m of this.text.matchAll(/\P{M}\p{M}*|\p{M}+/gsu)) {
+      const piece = m[0].normalize("NFC");
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let i = m.index; i < m.index + m[0].length; i++) (lo = Math.min(lo, this.start[i])), (hi = Math.max(hi, this.end[i]));
+      text += piece;
+      for (let i = 0; i < piece.length; i++) start.push(lo), end.push(hi);
+    }
+    if (text !== whole) {
+      // Composition across marks (Hangul jamo): fall back to the whole text's range.
+      let lo = Infinity;
+      let hi = 0;
+      for (let i = 0; i < this.start.length; i++) (lo = Math.min(lo, this.start[i])), (hi = Math.max(hi, this.end[i]));
+      if (lo === Infinity) lo = 0;
+      this.text = whole;
+      this.start = new Array<number>(whole.length).fill(lo);
+      this.end = new Array<number>(whole.length).fill(hi);
+      return this;
+    }
+    this.text = text;
+    this.start = start;
+    this.end = end;
+    return this;
+  }
+}
+
+/** String.replace's replacement patterns: $&, $1-$99, $$. */
+function expand(rep: string, m: RegExpExecArray): string {
+  return rep.replace(/\$(\$|&|\d{1,2})/g, (all, g: string) => {
+    if (g === "$") return "$";
+    if (g === "&") return m[0];
+    const n = Number(g);
+    return n > 0 && n < m.length ? (m[n] ?? "") : all;
+  });
+}
+
+/** Text as said aloud. Equivalent to normalizeWithSpans(text).text. */
 export function normalizeForSpeech(text: string): string {
-  let t = text.normalize("NFC");
+  return normalizeWithSpans(text).text;
+}
+
+/**
+ * normalizeForSpeech, also mapping each UTF-16 unit of the output back to the
+ * half-open range of `text` (UTF-16 indices) it was made from. Expansions map
+ * every character to the whole source they replace ("$420" for all of "four
+ * hundred twenty dollars"); characters an edit kept map to themselves.
+ */
+export function normalizeWithSpans(text: string): SpannedText {
+  const t = new Spanned(text).nfc();
 
   // Typography to plain forms.
-  t = t
+  t
     .replace(/[‘’‛′]/g, "'")
     .replace(/[“”„″]/g, '"')
     .replace(/[\u00a0\u2007\u202f\u2009\u200a]/g, " ")
     .replace(/[\u200b-\u200d\ufeff\u00ad]/g, "")
     .replace(/\.{3,}/g, "…");
 
+  // Whitespace runs to one character first, so the \s* rules below stay linear on long gaps.
+  t.replace(/[^\S\n]*\n\s*/g, "\n").replace(/[^\S\n]{2,}/g, " ");
+
   // A line that ends without punctuation (a heading, a list item) still ends a sentence.
-  t = t.replace(/([^\s.,;:!?…—-])[ \t]*\n+\s*/g, "$1. ").replace(/\s*\n+\s*/g, " ");
+  t.replace(/([^\s.,;:!?…—-])[ \t]*\n+\s*/g, "$1. ").replace(/\s*\n+\s*/g, " ");
 
   // URLs: the domain only. Emails: local part "at" domain.
-  t = t.replace(/\b(?:https?|ftp):\/\/([^\s/?#:]+)(?::\d+)?[^\s]*?(?=[.,;:!?)\]]*(?:\s|$))/gi, (_, host: string) => domainWords(host));
-  t = t.replace(/\b([\w.+-]+)@([\w-]+(?:\.[\w-]+)*\.[a-z]{2,})\b/gi, (_, local: string, domain: string) => emailWords(local, domain));
-  t = t.replace(/\bwww\.([\w-]+(?:\.[\w-]+)+)[^\s]*?(?=[.,;:!?)\]]*(?:\s|$))/gi, (_, host: string) => domainWords(host));
-  t = t.replace(new RegExp(String.raw`\b((?:[a-z0-9-]+\.)+(?:${TLDS}))(\/[^\s]*?)?(?=[.,;:!?)\]]*(?:\s|$))`, "gi"), (m, host: string) =>
+  t.replace(/\b(?:https?|ftp):\/\/([^\s/?#:]+)(?::\d+)?[^\s]*?(?=[.,;:!?)\]]*(?:\s|$))/gi, (_, host: string) => domainWords(host));
+  t.replace(/\b([\w.+-]+)@([\w-]+(?:\.[\w-]+)*\.[a-z]{2,})\b/gi, (_, local: string, domain: string) => emailWords(local, domain));
+  t.replace(/\bwww\.([\w-]+(?:\.[\w-]+)+)[^\s]*?(?=[.,;:!?)\]]*(?:\s|$))/gi, (_, host: string) => domainWords(host));
+  t.replace(new RegExp(String.raw`\b((?:[a-z0-9-]+\.)+(?:${TLDS}))(\/[^\s]*?)?(?=[.,;:!?)\]]*(?:\s|$))`, "gi"), (m, host: string) =>
     /^\d+(\.\d+)*$/.test(host) ? m : domainWords(host),
   );
 
-  for (const [re, words] of ABBREVIATIONS) t = t.replace(re, words);
+  for (const [re, words] of ABBREVIATIONS) t.replace(re, words);
 
   // ISO dates and datetimes: 2026-10-21, 2026-10-21T14:05.
-  t = t.replace(/\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z)?)?\b/g, (m, y, mo, d, hh, mm, ss, z) => {
+  t.replace(/\b(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z)?)?\b/g, (m, y, mo, d, hh, mm, ss, z) => {
     const month = Number(mo);
     const day = Number(d);
     if (month < 1 || month > 12 || day < 1 || day > 31) return m;
@@ -316,89 +446,89 @@ export function normalizeForSpeech(text: string): string {
     return out;
   });
   // Month-name dates: "Oct 21, 2026", "October 21st 2026", "21 October 2026", "October 2026", "Oct 21".
-  t = t.replace(new RegExp(String.raw`\b${MONTH_RE}\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b`, "g"), (_, mon, d, y) =>
+  t.replace(new RegExp(String.raw`\b${MONTH_RE}\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b`, "g"), (_, mon, d, y) =>
     dateWords(mon, d, y),
   );
-  t = t.replace(new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+${MONTH_RE}(?:,?\s+(\d{4}))?\b`, "g"), (_, d, mon, y) =>
+  t.replace(new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+${MONTH_RE}(?:,?\s+(\d{4}))?\b`, "g"), (_, d, mon, y) =>
     `the ${ordinalToWords(Number(d))} of ${dateWords(mon, undefined, y)}`,
   );
-  t = t.replace(new RegExp(String.raw`\b${MONTH_RE}\s+(\d{4})\b`, "g"), (_, mon, y) => dateWords(mon, undefined, y));
+  t.replace(new RegExp(String.raw`\b${MONTH_RE}\s+(\d{4})\b`, "g"), (_, mon, y) => dateWords(mon, undefined, y));
 
   // Times: 3:30pm, 14:00, 9:05 AM, 10:15:30.
-  t = t.replace(/\b(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([ap])\.?m\.?\b|\s*([AP])M\b)?/gi, (m, h, min, s, ap1, ap2) => {
+  t.replace(/\b(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([ap])\.?m\.?\b|\s*([AP])M\b)?/gi, (m, h, min, s, ap1, ap2) => {
     const hour = Number(h);
     const mins = Number(min);
     if (hour > 24 || mins > 59) return m;
     return timeWords(hour, mins, s, ap1 ?? ap2);
   });
-  t = t.replace(/\b(\d{1,2})\s*([ap])\.?m\.?(?=[\s,.;:!?]|$)/gi, (m, h, ap) =>
+  t.replace(/\b(\d{1,2})\s*([ap])\.?m\.?(?=[\s,.;:!?]|$)/gi, (m, h, ap) =>
     Number(h) >= 1 && Number(h) <= 12 ? `${numberToWords(Number(h))} ${ap.toLowerCase() === "a" ? "AM" : "PM"}` : m,
   );
 
   // Money: $420, CA$12, €5, $4.99, $2.5M, 12 USD.
-  t = t.replace(
+  t.replace(
     new RegExp(String.raw`(?<![\w$])([A-Z]{1,2}\$|[$€£¥₹₩₿])\s?(${NUM}|\.\d+)(?:\s?(bn|mm|MM|[kKmMbBtT])(?![\w]))?`, "g"),
     (m, sym: string, amount: string, scale: string | undefined) => {
       const names = CURRENCY_PREFIX[sym];
       return names ? money(amount, scale, names) : m;
     },
   );
-  t = t.replace(new RegExp(String.raw`\b(${NUM})\s?(${Object.keys(CURRENCY_CODE).join("|")})\b`, "g"), (_, amount, code: string) =>
+  t.replace(new RegExp(String.raw`\b(${NUM})\s?(${Object.keys(CURRENCY_CODE).join("|")})\b`, "g"), (_, amount, code: string) =>
     money(amount, undefined, CURRENCY_CODE[code]),
   );
 
   // Ranges of percentages and plain percentages.
-  t = t.replace(new RegExp(String.raw`(?<![\w.])(-?${NUM})\s?[-–](\s?)(${NUM})\s?%`, "g"), (_, a, _s, b) => `${numberWords(a)} to ${numberWords(b)} percent`);
-  t = t.replace(new RegExp(String.raw`(?<![\w.])([-−]?${NUM}|[-−]?\.\d+)\s?%`, "g"), (_, n) => `${numberWords(n)} percent`);
+  t.replace(new RegExp(String.raw`(?<![\w.])(-?${NUM})\s?[-–](\s?)(${NUM})\s?%`, "g"), (_, a, _s, b) => `${numberWords(a)} to ${numberWords(b)} percent`);
+  t.replace(new RegExp(String.raw`(?<![\w.])([-−]?${NUM}|[-−]?\.\d+)\s?%`, "g"), (_, n) => `${numberWords(n)} percent`);
 
   // Ordinals: 1st, 22nd, 103rd.
-  t = t.replace(/\b(\d+)(st|nd|rd|th)\b/gi, (_, n) => ordinalToWords(Number(n)));
+  t.replace(/\b(\d+)(st|nd|rd|th)\b/gi, (_, n: string) => (n.length > 15 ? integerWords(n) : ordinalToWords(Number(n))));
 
   // Decades: 1980s, '90s, "the 80s". A bare "30s" elsewhere is a duration.
   const DECADES = ["hundreds", "tens", "twenties", "thirties", "forties", "fifties", "sixties", "seventies", "eighties", "nineties"];
-  t = t.replace(/\b(1\d|20)(\d)0s\b/g, (_, century: string, decade: string) =>
+  t.replace(/\b(1\d|20)(\d)0s\b/g, (_, century: string, decade: string) =>
     century === "20" && decade === "0" ? "two thousands" : `${numberToWords(Number(century))} ${DECADES[Number(decade)]}`,
   );
-  t = t.replace(/(?:'|(?<=\b(?:the|early|mid|late|of)\s))(\d)0s\b/gi, (_, decade: string) => DECADES[Number(decade)]);
+  t.replace(/(?:'|(?<=\b(?:the|early|mid|late|of)\s))(\d)0s\b/gi, (_, decade: string) => DECADES[Number(decade)]);
 
   // IPv4 addresses, octet by octet.
-  t = t.replace(/\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/g, (...m) => m.slice(1, 5).map((o: string) => integerWords(o)).join(" dot "));
+  t.replace(/\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/g, (...m) => m.slice(1, 5).map((o: string) => integerWords(o)).join(" dot "));
 
   // Versions: v1.2.3, 1.2.3, v2.
-  t = t.replace(/\b[vV](\d+(?:\.\d+)*)\b/g, (_, v: string) => `version ${versionWords(v)}`);
-  t = t.replace(/(?<![\d.])(\d+(?:\.\d+){2,})(?![\d.]*\d)/g, (_, v: string) => versionWords(v));
+  t.replace(/\b[vV](\d+(?:\.\d+)*)\b/g, (_, v: string) => `version ${versionWords(v)}`);
+  t.replace(/(?<![\d.])(\d+(?:\.\d+){2,})(?![\d.]*\d)/g, (_, v: string) => versionWords(v));
 
   // Model names: GPT-4, gpt-3.5, Llama-3.
-  t = t.replace(/\b([A-Za-z][A-Za-z]*)-(\d+(?:\.\d+)?)\b/g, (_, name: string, n: string) => `${name} ${numberWords(n)}`);
+  t.replace(/\b([A-Za-z][A-Za-z]*)-(\d+(?:\.\d+)?)\b/g, (_, name: string, n: string) => `${name} ${numberWords(n)}`);
 
   // Phone numbers before ranges claim the hyphens.
-  t = t.replace(/(?<![\d-])(?:(\+?1)[-. ])?\(?(\d{3})\)?[-. ](\d{3})[-.](\d{4})(?![\d-])/g, (_, c, a, b, d) =>
+  t.replace(/(?<![\d-])(?:(\+?1)[-. ])?\(?(\d{3})\)?[-. ](\d{3})[-.](\d{4})(?![\d-])/g, (_, c, a, b, d) =>
     [c, a, b, d].filter(Boolean).map((g: string) => spellDigits(g)).join(", "),
   );
 
   // Scientific notation: 1e-4, 6.022E23.
-  t = t.replace(/(?<![\w.])(-?\d+(?:\.\d+)?)[eE]([+-]?\d+)(?![\w.])/g, (_, c, e) => {
+  t.replace(/(?<![\w.])(-?\d+(?:\.\d+)?)[eE]([+-]?\d+)(?![\w.])/g, (_, c, e) => {
     const exp = Number(e);
     return `${decimalWords(c)} times ten to the ${exp < 0 ? "minus " : ""}${numberToWords(Math.abs(exp))}`;
   });
 
   // Durations and units glued to numbers or after a space: "6m 10s", "500ms", "12 MB", "3×".
   const unitKeys = Object.keys(UNITS).sort((a, b) => b.length - a.length).map((k) => k.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
-  t = t.replace(new RegExp(String.raw`(?<![\w.])(-?${NUM}|-?\.\d+)(\s?)(${unitKeys.join("|")})(?![\w°])`, "g"), (m, n: string, space: string, unit: string) => {
+  t.replace(new RegExp(String.raw`(?<![\w.])(-?${NUM}|-?\.\d+)(\s?)(${unitKeys.join("|")})(?![\w°])`, "g"), (m, n: string, space: string, unit: string) => {
     if (space && !SPACED_UNITS.has(unit)) return m;
     const words = numberWords(n);
     const [one, many] = UNITS[unit];
     return `${words} ${words === "one" ? one : many}`;
   });
   // Bare scale suffixes: 7B parameters, 340M, 1.5k.
-  t = t.replace(new RegExp(String.raw`(?<![\w.])(${NUM})\s?(bn|[kKMBT])(?![\w])`, "g"), (_, n, s: string) => `${decimalWords(n)} ${SCALE_SUFFIX[s]}`);
+  t.replace(new RegExp(String.raw`(?<![\w.])(${NUM})\s?(bn|[kKMBT])(?![\w])`, "g"), (_, n, s: string) => `${decimalWords(n)} ${SCALE_SUFFIX[s]}`);
 
   // Multiplication and dimensions: 1920×1080, 3 x 4.
-  t = t.replace(new RegExp(String.raw`(${NUM})\s?[×x]\s?(${NUM})`, "g"), (_, a, b) => `${dimensionWords(a)} by ${dimensionWords(b)}`);
-  t = t.replace(/\s?×\s?/g, " times ");
+  t.replace(new RegExp(String.raw`(${NUM})\s?[×x]\s?(${NUM})`, "g"), (_, a, b) => `${dimensionWords(a)} by ${dimensionWords(b)}`);
+  t.replace(/\s?×\s?/g, " times ");
 
   // Fractions: 1/2, 3/4, 5/8 (not dates like 10/21/2026, which read as numbers).
-  t = t.replace(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?![\d/])/g, (m, a: string, b: string) => {
+  t.replace(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?![\d/])/g, (m, a: string, b: string) => {
     const num = Number(a);
     const den = Number(b);
     if (!den) return m;
@@ -411,10 +541,10 @@ export function normalizeForSpeech(text: string): string {
   });
 
   // Numeric ranges: 10-20, 2020-2024, pages 5–7.
-  t = t.replace(new RegExp(String.raw`(?<![\w.-])(${NUM})\s?[-–]\s?(${NUM})(?![\w.])`, "g"), (_, a, b) => `${numberWords(a)} to ${numberWords(b)}`);
+  t.replace(new RegExp(String.raw`(?<![\w.-])(${NUM})\s?[-–]\s?(${NUM})(?![\w.])`, "g"), (_, a, b) => `${numberWords(a)} to ${numberWords(b)}`);
 
   // Symbols between words.
-  t = t
+  t
     .replace(/\s*&\s*/g, " and ")
     .replace(new RegExp(String.raw`(${NUM})\s?\+\s?(${NUM})`, "g"), "$1 plus $2")
     .replace(/(\w)\+(?=\s|$)/g, "$1 plus")
@@ -426,12 +556,12 @@ export function normalizeForSpeech(text: string): string {
     .replace(/([A-Za-z])\/([A-Za-z])/g, "$1 $2");
 
   // Remaining numbers, split from letters they touch ("M3" -> "M three", "3D" -> "three D").
-  t = t.replace(/(\p{L})(?=\d)|(\d)(?=\p{L})/gu, "$1$2 ");
-  t = t.replace(/(?<![\w.])([-−]?\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)(?![\d])/g, (_, n: string) => numberWords(n));
-  t = t.replace(/\d+/g, (n) => ` ${integerWords(n)} `);
+  t.replace(/(\p{L})(?=\d)|(\d)(?=\p{L})/gu, "$1$2 ");
+  t.replace(/(?<![\w.])([-−]?\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)(?![\d])/g, (_, n: string) => numberWords(n));
+  t.replace(/\d+/g, (n) => ` ${integerWords(n)} `);
 
   // Punctuation the speech model can use; parentheses and brackets become commas.
-  t = t
+  t
     .replace(/\s+[-–]\s+/g, " — ")
     .replace(/\s*—\s*/g, " — ")
     .replace(/\s*[([{]\s*/g, ", ")
@@ -444,8 +574,9 @@ export function normalizeForSpeech(text: string): string {
     .replace(/^[\s,;:.]+/, "")
     .replace(/[\s,;:]+$/, "")
     .replace(/\s+/g, " ")
-    .trim();
-  return t;
+    .trim()
+    .nfc();
+  return { text: t.text, start: Int32Array.from(t.start), end: Int32Array.from(t.end) };
 }
 
 const NON_BOUNDARY = new Set([

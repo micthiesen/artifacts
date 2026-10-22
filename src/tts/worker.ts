@@ -1,33 +1,43 @@
 // Listen's speech worker. Runs on the shell's origin (never in the artifact
 // frame, which has no network or workers), downloads the model once (the
 // files are immutable static assets, so the browser cache keeps them for
-// every workspace on this site), and turns sentences into WAV audio on the
-// reader's device. Nothing is sent anywhere.
+// every workspace on this site), and turns sentences into WAV audio, with
+// the time each word is heard, on the reader's device. Nothing is sent
+// anywhere, and nothing runs on a server.
 import * as ort from "onnxruntime-web/wasm";
-import { normalizeForSpeech } from "./normalize.ts";
 import { Phonemizer } from "./phonemize.ts";
-import { tokenize } from "./tokens.ts";
+import { planParts, wordTimes } from "./plan.ts";
 import { styleFor, STYLE_WIDTH } from "./style.ts";
-import { ghostly, toWav, SAMPLE_RATE } from "./dsp.ts";
-import type { TtsManifest, ToWorker, FromWorker } from "./types.ts";
+import { toWav, SAMPLE_RATE } from "./dsp.ts";
+import type { FromWorker, TimedWord, ToWorker, TtsManifest } from "./types.ts";
 
 declare const __TTS_MANIFEST__: TtsManifest;
-declare const __ORT_WASM__: { wasm: string; mjs: string };
+declare const __ORT_WASM__: { wasm: string; mjs: string; bytes: number };
 const manifest = __TTS_MANIFEST__;
+
+/** Bruno at the model's own pace sounds slow; this is Listen's 1×. The reader's speed control scales playback on top. */
+const BASE_RATE = 1.15;
+/** The model ends every clip with a tail of near-silence, which the reference implementation trims. */
+const TAIL_SAMPLES = 5000;
 
 const scope = self as unknown as { postMessage(msg: FromWorker, transfer?: Transferable[]): void; onmessage: ((e: MessageEvent<ToWorker>) => void) | null };
 const reply = (msg: FromWorker, transfer: Transferable[] = []) => scope.postMessage(msg, transfer);
 
-/** Fetches several files, reporting combined progress. */
-async function fetchAll(urls: string[]): Promise<ArrayBuffer[]> {
-  const loaded = urls.map(() => 0);
-  const totals = urls.map(() => 0);
-  const report = () => reply({ t: "progress", loaded: loaded.reduce((a, b) => a + b, 0), total: totals.reduce((a, b) => a + b, 0) });
+/** Fetches the files the voice needs, reporting progress against their known sizes (bodies arrive decompressed). */
+async function fetchAll(files: { url: string; bytes: number }[]): Promise<ArrayBuffer[]> {
+  const total = files.reduce((n, f) => n + f.bytes, 0);
+  const loaded = files.map(() => 0);
+  let last = 0;
+  const report = () => {
+    const now = performance.now();
+    if (now - last < 100) return;
+    last = now;
+    reply({ t: "progress", loaded: Math.min(total, loaded.reduce((a, b) => a + b, 0)), total });
+  };
   return Promise.all(
-    urls.map(async (url, i) => {
+    files.map(async ({ url }, i) => {
       const res = await fetch(url);
-      if (!res.ok || !res.body) throw new Error(`Couldn't load ${url} (${res.status})`);
-      totals[i] = Number(res.headers.get("content-length")) || 0;
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
       const chunks: Uint8Array[] = [];
       for (;;) {
@@ -35,7 +45,6 @@ async function fetchAll(urls: string[]): Promise<ArrayBuffer[]> {
         if (done) break;
         chunks.push(value);
         loaded[i]! += value.byteLength;
-        if (totals[i]! < loaded[i]!) totals[i] = loaded[i]!;
         report();
       }
       const out = new Uint8Array(loaded[i]!);
@@ -49,89 +58,89 @@ async function fetchAll(urls: string[]): Promise<ArrayBuffer[]> {
   );
 }
 
-type Engine = { session: ort.InferenceSession; phonemizer: Phonemizer };
+type Engine = { session: ort.InferenceSession; phonemizer: Phonemizer; voice: Float32Array };
 let engine: Promise<Engine> | null = null;
-const voices = new Map<string, Promise<Float32Array>>();
 
 function load(): Promise<Engine> {
   engine ??= (async () => {
-    const t0 = performance.now();
-    const [model, wasm, lexicon, g2p] = await fetchAll([manifest.model, __ORT_WASM__.wasm, manifest.lexicon, manifest.g2p]);
+    const [model, wasm, lexicon, g2p, voice] = await fetchAll([
+      { url: manifest.model, bytes: manifest.bytes.model },
+      { url: __ORT_WASM__.wasm, bytes: __ORT_WASM__.bytes },
+      { url: manifest.lexicon, bytes: manifest.bytes.lexicon },
+      { url: manifest.g2p, bytes: manifest.bytes.g2p },
+      { url: manifest.voice.url, bytes: manifest.bytes.voice },
+    ]);
     ort.env.wasm.numThreads = 1; // no cross-origin isolation, so no SharedArrayBuffer threads
     ort.env.wasm.wasmBinary = wasm;
     ort.env.wasm.wasmPaths = { mjs: __ORT_WASM__.mjs, wasm: __ORT_WASM__.wasm };
     const session = await ort.InferenceSession.create(new Uint8Array(model!), { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
     const phonemizer = new Phonemizer(new TextDecoder().decode(lexicon), g2p!);
-    reply({ t: "ready", ms: Math.round(performance.now() - t0) });
-    return { session, phonemizer };
+    reply({ t: "ready" });
+    return { session, phonemizer, voice: new Float32Array(voice!) };
   })();
+  // A failed download can be retried: the next load starts over.
   engine.catch(() => (engine = null));
   return engine;
 }
 
-function voice(name: string): Promise<Float32Array> {
-  const entry = manifest.voices[name] ?? Object.values(manifest.voices)[0]!;
-  let v = voices.get(entry.url);
-  if (!v) {
-    v = fetch(entry.url).then(async (r) => {
-      if (!r.ok) throw new Error(`Couldn't load the voice (${r.status})`);
-      return new Float32Array(await r.arrayBuffer());
+/** The model starts every clip with about 0.8 s of silence (all on the start token); keep only a breath of it. */
+const LEAD_KEEP_SAMPLES = Math.round(0.12 * SAMPLE_RATE);
+const SAMPLES_PER_FRAME = 600;
+
+async function synth(text: string): Promise<{ pcm: Float32Array; words: TimedWord[] }> {
+  const { session, phonemizer, voice } = await load();
+  const pieces: Float32Array[] = [];
+  const words: TimedWord[] = [];
+  let offset = 0;
+  // A sentence longer than the model takes (512 ids) is said in parts, back to back.
+  for (const part of planParts(phonemizer, text)) {
+    if (part.ids.length <= 3) continue;
+    const out = await session.run({
+      input_ids: new ort.Tensor("int64", BigInt64Array.from(part.ids, BigInt), [1, part.ids.length]),
+      style: new ort.Tensor("float32", styleFor(voice, part.styleLength), [1, STYLE_WIDTH]),
+      speed: new ort.Tensor("float32", new Float32Array([manifest.voice.speed * BASE_RATE]), [1]),
     });
-    v.catch(() => voices.delete(entry.url));
-    voices.set(entry.url, v);
+    const wave = out.waveform!.data as Float32Array;
+    const durations = Array.from(out.duration!.data as ArrayLike<number | bigint>, Number);
+    const cut = Math.max(0, Math.min(wave.length, Math.round((durations[0] ?? 0) * SAMPLES_PER_FRAME) - LEAD_KEEP_SAMPLES));
+    const pcm = wave.subarray(cut, Math.max(cut, wave.length - TAIL_SAMPLES));
+    const seconds = pcm.length / SAMPLE_RATE;
+    for (const w of wordTimes(part.words, durations, wave.length, SAMPLE_RATE)) {
+      const t0 = Math.max(0, Math.min(seconds, w.start - cut / SAMPLE_RATE));
+      const t1 = Math.max(t0, Math.min(seconds, w.end - cut / SAMPLE_RATE));
+      words.push({ s: w.src[0], e: w.src[1], t0: offset + t0, t1: offset + t1 });
+    }
+    pieces.push(pcm);
+    offset += seconds;
   }
-  return v;
+  const pcm = new Float32Array(pieces.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of pieces) {
+    pcm.set(p, at);
+    at += p.length;
+  }
+  return { pcm, words };
 }
 
-/** The ghost's voice sits a little higher; raising pitch by resampling also shortens it, so synthesise that much slower. */
-const GHOST_PITCH = 1.07;
-
-async function synth(text: string, voiceName: string, ghost: boolean): Promise<{ pcm: Float32Array; phonemes: string }> {
-  const { session, phonemizer } = await load();
-  const ref = await voice(voiceName);
-  const spoken = normalizeForSpeech(text);
-  const phonemes = phonemizer.phonemize(spoken);
-  const ids = tokenize(phonemes);
-  const prior = manifest.voices[voiceName]?.speed ?? 1;
-  const speed = prior / (ghost ? GHOST_PITCH : 1);
-  const out = await session.run({
-    input_ids: new ort.Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, ids.length]),
-    style: new ort.Tensor("float32", styleFor(ref, [...spoken].length), [1, STYLE_WIDTH]),
-    speed: new ort.Tensor("float32", new Float32Array([speed]), [1]),
-  });
-  const first = out[session.outputNames[0]!]!;
-  let pcm = first.data as Float32Array;
-  // The model pads its output with a tail of near-silence, which the reference implementation trims.
-  pcm = pcm.subarray(0, Math.max(0, pcm.length - 5000));
-  if (ghost) pcm = ghostly(pcm, GHOST_PITCH);
-  return { pcm, phonemes };
-}
-
-// One sentence at a time, in the order asked.
+// One sentence at a time, in the order asked; a jump cancels what was queued before it.
 let queue: Promise<void> = Promise.resolve();
 let cancelledBefore = 0;
 
 scope.onmessage = (e) => {
   const msg = e.data;
   if (msg.t === "load") {
-    load().catch((err: Error) => reply({ t: "error", message: err.message }));
-    void voice(msg.voice).catch(() => {});
-    return;
-  }
-  if (msg.t === "cancel") {
+    load().catch((err: Error) => reply({ t: "error", message: err.message, fatal: true }));
+  } else if (msg.t === "cancel") {
     cancelledBefore = Math.max(cancelledBefore, msg.before);
-    return;
-  }
-  if (msg.t === "synth") {
+  } else if (msg.t === "synth") {
     queue = queue.then(async () => {
       if (msg.id < cancelledBefore) return reply({ t: "error", id: msg.id, message: "cancelled" });
       try {
-        const t0 = performance.now();
-        const { pcm, phonemes } = await synth(msg.text, msg.voice, msg.ghost);
+        const { pcm, words } = await synth(msg.text);
         const wav = toWav(pcm, SAMPLE_RATE);
-        reply({ t: "audio", id: msg.id, wav, ms: Math.round(performance.now() - t0), seconds: pcm.length / SAMPLE_RATE, phonemes }, [wav]);
+        reply({ t: "audio", id: msg.id, wav, seconds: pcm.length / SAMPLE_RATE, words }, [wav]);
       } catch (err) {
-        reply({ t: "error", id: msg.id, message: err instanceof Error ? err.message : String(err) });
+        reply({ t: "error", id: msg.id, message: err instanceof Error ? err.message : String(err), fatal: engine === null });
       }
     });
   }

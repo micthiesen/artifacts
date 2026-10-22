@@ -2,7 +2,7 @@
 // against espeak-ng phonemes:
 //
 //   bun scripts/build-tts.ts            # once, for node_modules/.cache/tts/out
-//   bun spikes/tts-say.ts "Hello, world." --voice Luna --out /tmp/x.wav [--espeak] [--speed 1] [--threads 1]
+//   bun spikes/tts-say.ts "Hello, world." --out /tmp/x.wav [--espeak] [--words] [--speed 1] [--threads 1]
 //
 // --espeak phonemizes with the espeak-ng CLI instead of src/tts/phonemize.ts.
 // espeak-ng is GPL: it is used here and in tests only to measure our phonemes,
@@ -10,7 +10,7 @@
 
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { chunkText, normalizeForSpeech } from "../src/tts/normalize.ts";
+import { planParts, wordTimes } from "../src/tts/plan.ts";
 import { Phonemizer } from "../src/tts/phonemize.ts";
 import { styleFor } from "../src/tts/style.ts";
 import { tokenize } from "../src/tts/tokens.ts";
@@ -73,17 +73,16 @@ async function main() {
     const [value] = args.splice(i, 2).slice(1);
     return value;
   };
-  const voiceName = flag("--voice") ?? "Luna";
   const outPath = flag("--out") ?? "/tmp/tts-say.wav";
   const speedArg = Number(flag("--speed") ?? 1);
   const threads = Number(flag("--threads") ?? 1);
   const useEspeak = args.includes("--espeak");
-  const text = args.filter((a) => a !== "--espeak").join(" ");
-  if (!text) throw new Error('usage: bun spikes/tts-say.ts "text" [--voice Luna] [--out x.wav] [--espeak] [--speed 1]');
+  const showWords = args.includes("--words");
+  const text = args.filter((a) => a !== "--espeak" && a !== "--words").join(" ");
+  if (!text) throw new Error('usage: bun spikes/tts-say.ts "text" [--out x.wav] [--espeak] [--words] [--speed 1] [--threads 1]');
 
-  const manifest = (await Bun.file(join(ROOT, "node_modules/.cache/tts/manifest.json")).json()) as { voices: Record<string, { speed: number }> };
-  const voiceMeta = manifest.voices[voiceName];
-  if (!voiceMeta) throw new Error(`unknown voice ${voiceName}; try ${Object.keys(manifest.voices).join(", ")}`);
+  const manifest = (await Bun.file(join(ROOT, "node_modules/.cache/tts/manifest.json")).json()) as { voice: { url: string; speed: number } };
+  const voiceFile = manifest.voice.url.split("/").pop()!.replace(/\.[0-9a-f]{12}\.bin$/, ".bin");
 
   const ort = await import("onnxruntime-web");
   ort.env.wasm.numThreads = threads;
@@ -94,29 +93,42 @@ async function main() {
   });
   const loadModelMs = performance.now() - t;
   t = performance.now();
-  const phonemizer = useEspeak ? undefined : new Phonemizer(await Bun.file(join(OUT, "lexicon.txt")).text(), await Bun.file(join(OUT, "g2p.bin")).arrayBuffer());
+  const phonemizer = new Phonemizer(await Bun.file(join(OUT, "lexicon.txt")).text(), await Bun.file(join(OUT, "g2p.bin")).arrayBuffer());
   const loadPhonemizerMs = performance.now() - t;
-  const voice = new Float32Array(await Bun.file(join(OUT, `voice-${voiceName}.bin`)).arrayBuffer());
+  const voice = new Float32Array(await Bun.file(join(OUT, voiceFile)).arrayBuffer());
 
-  const normalized = normalizeForSpeech(text);
+  // Sentence by sentence, as the reader does; planParts keeps each under the model's 512-id limit.
+  const sentences = text.split(/(?<=[.!?])\s+/);
   const pieces: Float32Array[] = [];
   let phonemeMs = 0;
   let inferMs = 0;
-  for (const chunk of chunkText(normalized)) {
+  let offset = 0;
+  for (const sentence of sentences) {
     t = performance.now();
-    const phonemes = phonemizer ? phonemizer.phonemize(chunk) : espeakPhonemize(chunk);
+    const parts = planParts(phonemizer, sentence);
     phonemeMs += performance.now() - t;
-    const ids = tokenize(phonemes);
-    console.log(`  ${chunk}\n  ${phonemes}`);
-    t = performance.now();
-    const result = await session.run({
-      input_ids: new ort.Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, ids.length]),
-      style: new ort.Tensor("float32", styleFor(voice, [...chunk].length), [1, 256]),
-      speed: new ort.Tensor("float32", new Float32Array([speedArg * voiceMeta.speed]), [1]),
-    });
-    inferMs += performance.now() - t;
-    const audio = result[session.outputNames[0]].data as Float32Array;
-    pieces.push(audio.slice(0, Math.max(0, audio.length - TRIM)));
+    for (const p of parts) {
+      const ids = useEspeak ? tokenize(espeakPhonemize(p.spoken)) : p.ids;
+      console.log(`  ${p.spoken}\n  ${useEspeak ? espeakPhonemize(p.spoken) : phonemizer.phonemize(p.spoken)}`);
+      t = performance.now();
+      const result = await session.run({
+        input_ids: new ort.Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, ids.length]),
+        style: new ort.Tensor("float32", styleFor(voice, p.styleLength), [1, 256]),
+        speed: new ort.Tensor("float32", new Float32Array([speedArg * manifest.voice.speed]), [1]),
+      });
+      inferMs += performance.now() - t;
+      const audio = result.waveform.data as Float32Array;
+      const frames = Array.from(result.duration.data as ArrayLike<number | bigint>, Number);
+      const sum = frames.reduce((a, b) => a + b, 0);
+      console.log(`  tokens ${ids.length}, durations ${frames.length}, frames ${sum}, waveform ${audio.length} samples = ${(audio.length / sum).toFixed(3)} samples/frame`);
+      const kept = Math.max(0, audio.length - TRIM);
+      if (showWords && !useEspeak) {
+        for (const w of wordTimes(p.words, frames, audio.length, SAMPLE_RATE, kept / SAMPLE_RATE))
+          console.log(`    ${(offset + w.start).toFixed(2).padStart(6)} ${(offset + w.end).toFixed(2).padStart(6)}  ${sentence.slice(...w.src)}`);
+      }
+      pieces.push(audio.slice(0, kept));
+      offset += kept / SAMPLE_RATE;
+    }
   }
   const total = new Float32Array(pieces.reduce((n, p) => n + p.length, 0));
   let at = 0;

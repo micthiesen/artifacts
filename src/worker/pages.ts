@@ -45,7 +45,10 @@ export function scriptJson(value: unknown): string {
 // Cloudflare injects its Web Analytics beacon into shell pages; the CSP lets it
 // load and report. Artifact frames opt out with no-transform (see frameDocument).
 const PAGE_CSP =
-  "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob: data:; font-src 'self'; connect-src 'self' https://cloudflareinsights.com; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+  "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://cloudflareinsights.com; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+// The artifact page also hosts Listen: its speech worker compiles WebAssembly (a browser that gives a
+// dedicated worker its page's policy needs it here), and the spoken sentences play from blob: URLs.
+const SHELL_CSP = PAGE_CSP.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'").replace("font-src", "media-src 'self' blob: data:; font-src");
 
 // Declared inline so the very first paint is dark: without it the browser shows
 // its white default canvas until the stylesheet arrives, and a frame that is
@@ -81,7 +84,7 @@ ${forms}${head}</head>
 </html>`;
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "text/html; charset=utf-8");
-  headers.set("Content-Security-Policy", PAGE_CSP);
+  if (!headers.has("Content-Security-Policy")) headers.set("Content-Security-Policy", PAGE_CSP);
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Cache-Control", "no-store");
@@ -1010,6 +1013,7 @@ export function shellPage(boot: ShellBoot, brand: Brand, reportUrl?: string): Re
 </div>
 <script type="application/json" id="shell-boot">${scriptJson(boot)}</script>
 <script type="module" src="${asset("/static/shell.js")}"></script>`,
+    { headers: { "Content-Security-Policy": SHELL_CSP } },
   );
 }
 

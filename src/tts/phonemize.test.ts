@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { espeakPhonemize, hasEspeak } from "../../spikes/tts-say.ts";
 import { normalizeForSpeech } from "./normalize.ts";
+import { HELD_OUT } from "./test-sentences.ts";
 import { G2p, Phonemizer, arpabetToIpa } from "./phonemize.ts";
 
 const OUT = join(import.meta.dir, "../../node_modules/.cache/tts/out");
@@ -104,57 +105,3 @@ function levenshtein(a: string[], b: string[]): number {
   }
   return d[b.length];
 }
-
-// Not used to tune the rules in phonemize.ts, so the score is a fair estimate.
-const HELD_OUT = [
-  "Good morning! Did you sleep well?",
-  "The library closes early on Sundays during the summer.",
-  "Our quarterly revenue grew 12% to $4.2M, beating forecasts.",
-  "Please review the pull request before Friday's release.",
-  "A thunderstorm knocked out power across the neighborhood.",
-  "She speaks French, Spanish, and a little Japanese.",
-  "The database migration finished in 3m 42s without errors.",
-  "Turn left at the second traffic light, then go straight.",
-  "Why didn't anyone tell me the meeting was cancelled?",
-  "The recipe needs two eggs, a cup of milk, and some vanilla.",
-  "Version 2.1.0 fixes a crash when uploading large images.",
-  "Elephants can remember places they visited decades ago.",
-  "I'm not sure whether we should wait or leave now.",
-  "The startup hired its first designer in March 2024.",
-  "Keep your password private and change it regularly.",
-  "The novel's ending surprised almost every reader.",
-  "Our office is on the fourth floor, next to the elevator.",
-  "Lightning never strikes the same place twice, or so they say.",
-  "The dashboard shows live usage for each workspace.",
-  "Could you send me the slides after the presentation?",
-  "Bananas are an excellent source of potassium.",
-  "The volunteers planted three hundred trees in one afternoon.",
-  "Customers can cancel their subscription at any time.",
-  "The professor explained the theory with simple diagrams.",
-  "We'll meet at the café on Queen Street at 6:30pm.",
-  "His favorite hobby is building model airplanes.",
-  "The package was delivered to the wrong address yesterday.",
-  "Measure twice and cut once, my father always said.",
-  "Artificial intelligence is changing how people write software.",
-  "The hikers reached the summit just before sunrise.",
-  "Every comment is visible to the people you share it with.",
-  "The concert was postponed because of the snowstorm.",
-  "My neighbor's dog barks whenever the mail arrives.",
-  "Students must submit their essays by the end of the week.",
-  "The new bridge will reduce traffic in the downtown core.",
-  "They celebrated their anniversary with a quiet dinner.",
-  "Please restart your computer to finish the update.",
-  "The museum's newest exhibit features ancient pottery.",
-  "Fresh bread smells wonderful in the early morning.",
-  "Our support team usually replies within two hours.",
-  "The marathon route passes through five different parks.",
-  "Is this the right way to the train station?",
-  "The scientist published her findings in a major journal.",
-  "Children under twelve must be accompanied by an adult.",
-  "The river flooded after a week of heavy rain.",
-  "We moved the archive to cheaper storage last month.",
-  "Grandpa tells the same funny stories every holiday.",
-  "Download the report as a PDF or share a private link.",
-  "The orchestra tuned their instruments before the performance.",
-  "Thanks for listening, and have a wonderful evening.",
-];

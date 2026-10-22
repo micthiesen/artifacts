@@ -14,6 +14,8 @@ const LETTERS_IPA =
 const SYMBOLS = new Map<string, number>();
 [PAD, ...PUNCTUATION, ...LETTERS, ...LETTERS_IPA].forEach((s, i) => SYMBOLS.set(s, i));
 
+const SPACE = SYMBOLS.get(" ")!;
+
 /** The id the Python appends after the text, before the final pad. */
 export const END_TOKEN = 10;
 
@@ -22,12 +24,34 @@ export const END_TOKEN = 10;
 const WORD_OR_PUNCT = /[\p{L}\p{N}_]+|[^\p{L}\p{N}_\s]/gu;
 
 export function tokenize(phonemes: string): number[] {
-  const joined = (phonemes.match(WORD_OR_PUNCT) ?? []).join(" ");
+  return tokenizeWithOffsets(phonemes).ids;
+}
+
+/**
+ * tokenize(), plus where each character of `phonemes` went: the characters
+ * [a, b) became ids [start[a], end[b]). The separating space the tokenizer puts
+ * before a token belongs to neither neighbour unless both are in the range.
+ */
+export function tokenizeWithOffsets(phonemes: string): { ids: number[]; start: Int32Array; end: Int32Array } {
   const ids = [0];
-  for (const ch of joined) {
-    const id = SYMBOLS.get(ch);
-    if (id !== undefined) ids.push(id);
+  const start = new Int32Array(phonemes.length + 1);
+  const end = new Int32Array(phonemes.length + 1);
+  let p = 0;
+  let first = true;
+  for (const m of phonemes.matchAll(WORD_OR_PUNCT)) {
+    for (; p < m.index; p++) start[p] = end[p] = ids.length;
+    end[p] = ids.length;
+    if (!first) ids.push(SPACE);
+    first = false;
+    start[p] = ids.length;
+    for (const ch of m[0]) {
+      const id = SYMBOLS.get(ch);
+      if (id !== undefined) ids.push(id);
+      for (let k = 1; k <= ch.length; k++) start[p + k] = end[p + k] = ids.length;
+      p += ch.length;
+    }
   }
+  for (; p <= phonemes.length; p++) start[p] = end[p] = ids.length;
   ids.push(END_TOKEN, 0);
-  return ids;
+  return { ids, start, end };
 }
