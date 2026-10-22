@@ -35,10 +35,13 @@ export class WispBody {
   squash = 0;
   /** Drawn upright with `squash` (a hop) rather than stretched along its flight. */
   upright = false;
-  /** How far above where it is the head is drawn this frame (a hop): the tail follows the lifted head. */
-  lift = 0;
-  /** How fast the lift is changing (px/s, up is positive), so the head stretches along its real path. */
-  liftSpeed = 0;
+  /**
+   * How far off its straight path the head is drawn this frame (a hop or flight bowing out into a curve);
+   * the tail follows the head where it's drawn.
+   */
+  arc: Point = { x: 0, y: 0 };
+  /** How fast that offset is changing (px/s), so the head stretches along its real path. */
+  arcVel: Point = { x: 0, y: 0 };
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D | null;
   private glow: HTMLCanvasElement | null = null;
@@ -153,7 +156,7 @@ export class WispBody {
   private chase(dt: number) {
     const follow = 1 - Math.exp(-TAIL_FOLLOW * dt);
     const gap = Math.max(1, this.radius * TAIL_GAP);
-    let lead = { x: this.head.x, y: this.head.y - this.lift };
+    let lead = { x: this.head.x + this.arc.x, y: this.head.y + this.arc.y };
     this.tail = this.tail.map((p) => {
       let q = { x: p.x + (lead.x - p.x) * follow, y: p.y + (lead.y - p.y) * follow };
       const d = Math.hypot(q.x - lead.x, q.y - lead.y);
@@ -197,7 +200,7 @@ export class WispBody {
     if (!ctx) return;
     this.lastOffset = offset;
     this.lastTime = time;
-    const head = { x: this.head.x + offset.x, y: this.head.y - this.lift + offset.y };
+    const head = { x: this.head.x + this.arc.x + offset.x, y: this.head.y + this.arc.y + offset.y };
     const tail = this.tail.map((p) => ({ x: p.x + offset.x, y: p.y + offset.y }));
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -247,9 +250,9 @@ export class WispBody {
       if (this.squash > 0) ctx.translate(0, radius * this.squash);
       ctx.scale(1 + this.squash, 1 - this.squash);
     } else {
-      // Along its real path: the spring's motion with the hop's lift on top.
-      const vx = vel.x;
-      const vy = vel.y - this.liftSpeed;
+      // Along its real path: the spring's motion with the curve's on top.
+      const vx = vel.x + this.arcVel.x;
+      const vy = vel.y + this.arcVel.y;
       const stretch = 1 + Math.min(0.38, Math.hypot(vx, vy) / 1400);
       ctx.rotate(Math.atan2(vy, vx));
       ctx.scale(stretch, 1 / stretch);

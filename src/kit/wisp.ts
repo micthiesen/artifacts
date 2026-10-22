@@ -51,23 +51,37 @@ const hopHeight = (d: number) => Math.min(7, Math.max(3.5, 3.5 + d * 0.04));
 const LAND_SQUASH = 0.2;
 const LAND_FOR = 0.14;
 /**
- * A hop: from where it took off (fromX) to the word, `height` at the top, plus whatever lift it still had
- * from a hop it was in the middle of (`carry`), let down smoothly. The lift follows how far along the way
- * it is, not the clock, so the path is always a curve in space: never straight up, however the glide starts.
+ * A hop or a flight: from where it took off to its spot, bowed out into a curve `height` px at the top
+ * (upward for a move across the page, to one side for a move up or down it), plus whatever curve it was
+ * still in from the move before (`carry`), let down smoothly. The curve follows how far along the way it
+ * is, not the clock, so the path is always a curve in space: it never sets off straight up.
  */
-type Hop = { start: number; time: number; height: number; fromX: number; carry: number };
+type Hop = { start: number; time: number; height: number; from: Point; carry: Point };
 let hop: Hop | null = null;
-/** How far through its hop it is (0 to 1): by distance along the way when it's going sideways, else by time. */
-function hopProgress(h: Hop, goalX: number): number {
-  const span = goalX - h.fromX;
+/** How far through its move it is (0 to 1), by distance along the way; by time for a move of a pixel or two. */
+function hopProgress(h: Hop, goal: Point): number {
+  const span = { x: goal.x - h.from.x, y: goal.y - h.from.y };
+  const len2 = span.x * span.x + span.y * span.y;
   const byTime = (clock - h.start) / h.time;
-  if (Math.abs(span) < 4) return Math.min(1, byTime);
-  const along = (body!.head.x - h.fromX) / span;
-  // Landed when it is (all but) there; a hop that somehow never arrives ends after twice its time.
+  if (len2 < 16) return Math.min(1, byTime);
+  const along = ((body!.head.x - h.from.x) * span.x + (body!.head.y - h.from.y) * span.y) / len2;
+  // There when it is all but there; a move that somehow never arrives ends after twice its time.
   return along >= 0.998 || byTime >= 2 ? 1 : Math.max(0, along);
+}
+/** The way a curve bows from `from` to `to`: up for a move across the page, to the right for one up or down it. */
+function bow(from: Point, to: Point): Point {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const a = { x: dy / len, y: -dx / len };
+  const b = { x: -a.x, y: -a.y };
+  if (Math.abs(a.y - b.y) > 0.2) return a.y < b.y ? a : b;
+  return a.x > b.x ? a : b;
 }
 let landedAt = -1;
 let lastWordAt = -1;
+/** Where it was heading last frame, so a big change of destination (a far word, a tap) becomes a flight. */
+let lastGoal: Point | null = null;
 /** Until when it is flying (a far word, a line wrap) on the looser spring, rather than gliding. */
 let flyingUntil = -1;
 /** How far above a block (with no words) it floats, the bob around its spot, and when it stops bobbing (s). */
@@ -205,27 +219,39 @@ function frame(now: number) {
   floated = floating() ? floated + dt : 0;
   const size = floating() && !cramped ? R_FLOAT : fit;
   const still = prefersStill();
-  if (hop && (still || leaving || floating())) hop = null;
+  // Its destination jumped (a far word, a new line, a tap elsewhere, back from the margin): fly there on a
+  // curve, on the looser spring. Not while it waits at the edge, leaves, or sits still for reduced motion.
+  if (lastGoal && !still && !leaving && !parked && Math.hypot(goal.x - lastGoal.x, goal.y - lastGoal.y) > HOP_REACH) {
+    const d = Math.hypot(goal.x - body.head.x, goal.y - body.head.y);
+    flyingUntil = clock + 0.6;
+    hop = { start: clock, time: 0.6, height: Math.min(30, Math.max(8, d * 0.08)), from: { ...body.head }, carry: { ...body.arc } };
+  }
+  lastGoal = leaving || parked ? null : goal;
+  if (hop && (still || leaving)) hop = null;
   // Along the line it glides on a firm spring; far words and line wraps are flights on a looser one.
   const gliding = mood === "tracking" && !floating() && !leaving && clock >= flyingUntil;
   if (gliding) body.step(dt, goal, GLIDE.k, size, still, GLIDE.damping);
   else body.step(dt, goal, SPRING[leaving ? "leaving" : parked ? "waiting" : mood], size, still);
   // The hop is a lift on top of the glide: up and down once per word, taller in the air, and a soft squash
   // as it comes down.
-  // In the air it stretches along the way it is actually going (the glide and the lift together), so it
+  // In the air it stretches along the way it is actually going (the glide and the curve together), so it
   // never stands up as an egg while it moves sideways; only the landing squash is upright.
-  const before = body.lift;
-  body.lift = 0;
+  const before = body.arc;
+  body.arc = { x: 0, y: 0 };
   body.squash = 0;
   body.upright = false;
   if (hop) {
-    const p = hopProgress(hop, goal.x);
+    const p = hopProgress(hop, goal);
     if (p >= 1) {
       hop = null;
       landedAt = clock;
-    } else body.lift = hop.carry * (1 - p) + hop.height * Math.sin(Math.PI * p);
+    } else {
+      const out = bow(hop.from, goal);
+      const h = hop.height * Math.sin(Math.PI * p);
+      body.arc = { x: hop.carry.x * (1 - p) + out.x * h, y: hop.carry.y * (1 - p) + out.y * h };
+    }
   }
-  body.liftSpeed = (body.lift - before) / dt;
+  body.arcVel = { x: (body.arc.x - before.x) / dt, y: (body.arc.y - before.y) / dt };
   if (!hop && !still) {
     const since = clock - landedAt;
     if (landedAt >= 0 && since < LAND_FOR) {
@@ -301,16 +327,12 @@ export function wispFollow(to: Range | Element) {
       const interval = lastWordAt >= 0 ? clock - lastWordAt : 0.3;
       lastWordAt = clock;
       const wrap = dy > r.height * 0.6 && dx < -120;
-      if (d >= HOP_REACH || wrap) {
-        // A flight: the looser spring, under a taller arc (the same curve in space as a hop, so it never
-        // leaves straight up).
-        flyingUntil = clock + 0.5;
-        hop = { start: clock, time: 0.45, height: Math.min(30, Math.max(8, d * 0.08)), fromX: body.head.x, carry: body.lift };
-      } else if (d > 1) {
+      // Far words and new lines are flights, started by the frame when it sees the destination jump.
+      if (d < HOP_REACH && !wrap && d > 1) {
         // A new hop takes off from wherever it is, carrying the height it already had, so the curve never kinks.
         // Sized to the speech: fast reading gets a faint ripple, slow reading a full hop.
         const time = Math.min(hopTime(d), Math.max(0.09, 0.8 * interval));
-        hop = { start: clock, time, height: hopHeight(d) * Math.min(1, interval / 0.28), fromX: body.head.x, carry: body.lift };
+        hop = { start: clock, time, height: hopHeight(d) * Math.min(1, interval / 0.28), from: { ...body.head }, carry: { ...body.arc } };
       }
     }
   }
