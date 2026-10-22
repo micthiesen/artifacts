@@ -420,7 +420,17 @@ ${fact("An edit-and-check loop for agents", "Agents change artifacts the way the
 ${fact("People answer, agents close the loop", "An artifact can ask for a decision and get it back, not just be read.", [
   "Approvals, form responses and comments anchored to exact text, each signed with the person's verified email",
   "The agent reads every answer over MCP, and MCP events or a webhook can wake it when one arrives; fixes are marked addressed in the version that made them",
-  "Owners and agents see who has read which version; readers see what changed since their last visit",
+  "Owners and agents see who has read which version, so nobody has to ask whether a change was seen",
+])}
+${fact("Made for the people reading", "Most people who open an artifact didn't make it, and many open it on a phone.", [
+  "No account to make: a link and an emailed code, or a passkey next time; every page fits a phone without scrolling sideways",
+  "An inbox, email and push notifications when someone replies, mentions them or a page they follow changes, and a note of what changed since their last visit",
+  "Print or save any page as a PDF with its tabs and sections opened out, or copy it as Markdown for their own AI",
+])}
+${fact("Pages that read themselves aloud", "Press Listen and the ghost reads the page to you, following along word by word.", [
+  "The voice runs on the reader's own device: a small open model, downloaded once and cached, so no text leaves the browser and nothing is billed",
+  "It reads what the page shows, not its source: tables by their columns, charts and diagrams by their titles, code blocks skipped",
+  "A little wisp hops along each word to keep your place; the page scrolls along with the reading, or stays where you put it",
 ])}
 ${fact("Isolated by construction", "Tenancy and untrusted code are handled by the platform, not by convention.", [
   "Each workspace is its own Durable Object with its own SQLite database, on its own subdomain and browser origin",

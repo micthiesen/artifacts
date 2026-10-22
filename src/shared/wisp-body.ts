@@ -31,6 +31,8 @@ export class WispBody {
   vel: Point = { x: 0, y: 0 };
   tail: Point[] = [];
   radius = 6;
+  /** Squash (positive: wide and low, as it lands) or stretch (negative: tall and narrow, in the air), drawn on the head. */
+  squash = 0;
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D | null;
   private glow: HTMLCanvasElement | null = null;
@@ -137,6 +139,20 @@ export class WispBody {
       this.vel.y *= MAX_SPEED / speed;
     }
     this.head = { x: this.head.x + this.vel.x * dt, y: this.head.y + this.vel.y * dt };
+    this.chase(dt);
+    this.radius += (size - this.radius) * (1 - Math.exp(-8 * dt));
+  }
+
+  /** Puts the head exactly at `p` this frame (a scripted move, like a hop), the tail chasing as usual. */
+  moveTo(p: Point, dt: number, size: number) {
+    this.vel = { x: (p.x - this.head.x) / dt, y: (p.y - this.head.y) / dt };
+    this.head = { ...p };
+    this.chase(dt);
+    this.radius += (size - this.radius) * (1 - Math.exp(-8 * dt));
+  }
+
+  /** Each tail point chases the one before it, never further than a radius or so behind. */
+  private chase(dt: number) {
     const follow = 1 - Math.exp(-TAIL_FOLLOW * dt);
     const gap = Math.max(1, this.radius * TAIL_GAP);
     let lead = this.head;
@@ -147,7 +163,6 @@ export class WispBody {
       lead = q;
       return q;
     });
-    this.radius += (size - this.radius) * (1 - Math.exp(-8 * dt));
   }
 
   /** At rest on `goal`: not moving, tail gathered, the size it wants. Settling snaps the last fraction of a pixel. */
@@ -224,13 +239,19 @@ export class WispBody {
     ctx.fillStyle = this.light;
     ctx.globalAlpha = 0.82;
     ctx.fill(body);
-    // The head: stretched along its flight, squashed across it.
-    const stretch = 1 + Math.min(0.38, speed / 1400);
+    // The head: stretched along its flight and squashed across it; a hop's squash and stretch is upright.
     ctx.globalAlpha = 1;
     ctx.save();
     ctx.translate(head.x, head.y);
-    ctx.rotate(Math.atan2(vel.y, vel.x));
-    ctx.scale(stretch, 1 / stretch);
+    if (this.squash) {
+      // Squashed against the line it sits on: keep its bottom where it was.
+      ctx.translate(0, radius * this.squash);
+      ctx.scale(1 + this.squash, 1 - this.squash);
+    } else {
+      const stretch = 1 + Math.min(0.38, speed / 1400);
+      ctx.rotate(Math.atan2(vel.y, vel.x));
+      ctx.scale(stretch, 1 / stretch);
+    }
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fill();

@@ -9,14 +9,14 @@
 // - It is always there while you listen. It arrives when Listen starts, rising out from behind the tray at
 //   the bottom of the page, and leaves when Listen closes, diving back down under it. It never fades in or
 //   out and never blinks away mid-reading: something that keeps your place shouldn't vanish.
-// - It moves like something with a body. A spring pulls it toward where it wants to be, so it accelerates,
-//   overshoots a touch and settles; each new word gives it a small upward kick, so a word-to-word move is a
-//   hop and a paragraph-to-paragraph move is a flight. Its tail is a chain of points that each chase the one
+// - It moves like something with a body. Word to word it hops: a short arc, a little taller in the air, a
+//   soft squash as it lands. Further off (a paragraph down the page) a spring carries it in a flight, so it
+//   accelerates, overshoots a touch and settles. Its tail is a chain of points that each chase the one
 //   before, so the faster it goes the longer and softer the tail streams behind, and at rest it gathers back
 //   into one round blob.
 // - It squashes and stretches along its flight and, when it's still, shows the logo's happy closed eyes.
-// - It is drawn small while it tracks words (so it fits in the gap between lines without covering letters)
-//   and grows a little when it floats. When it pauses beside a word it steps out into the margin to the left
+// - It is drawn small while it tracks words (so it fits in the gap between lines without covering letters,
+//   smaller still where lines sit tight) and grows a little when it floats. When it pauses beside a word it steps out into the margin to the left
 //   of that line, so it keeps your place without sitting on anything you're reading.
 // - It lives on the page, not the screen: scrolling carries it along with the text, so scrolling alone never
 //   sets its tail streaming. If the reading is scrolled out of view, it waits at that edge of the screen, in
@@ -39,10 +39,19 @@ const R_FLOAT = 7;
 /** The spring toward the wisp's spot (stiffness per s²), by what it's doing. */
 const SPRING = { tracking: 210, resting: 38, waiting: 46, leaving: 70 } as const;
 /**
- * The upward kick a new word gives it (px/s), by how far away the word is: the next word on the line gets a
- * skip that stays in the gap between lines, a word on another line or further off a real leap.
+ * Word to word it hops: a short arc, a little taller in the air and a soft squash as it lands, timed to land
+ * as the word begins. Further than HOP_REACH (a block far down the page) it flies on its spring instead,
+ * with an upward kick so even a flight leaves with a little leap.
  */
-const kick = (d: number) => (d < 160 ? Math.min(120, 40 + d * 0.5) : Math.min(320, 120 + (d - 160) * 0.4));
+const HOP_REACH = 520;
+const hopTime = (d: number) => Math.min(0.26, Math.max(0.14, 0.13 + d / 1800));
+const hopHeight = (d: number) => Math.min(8, Math.max(3.5, 3.5 + d * 0.03));
+const LAND_SQUASH = 0.2;
+const LAND_FOR = 0.16;
+const kick = (d: number) => Math.min(320, 120 + Math.max(0, d - 160) * 0.4);
+type Hop = { from: Point; start: number; time: number; height: number };
+let hop: Hop | null = null;
+let landedAt = -1;
 /** How far above a block (with no words) it floats, the bob around its spot, and when it stops bobbing (s). */
 const FLOAT_LIFT = 16;
 const BOB = { x: 2.2, y: 3.2, speed: 2.1 };
@@ -86,6 +95,8 @@ function marginX(el: Element | null): number | null {
 }
 /** With no margin, it waits small in the gap above the line, as it does while reading. */
 let cramped = false;
+/** Its size over the word: R_TRACK, or smaller where the lines sit tight (a big number under its label). */
+let fit = R_TRACK;
 
 /** The gap above a word's line (half the line's leading), worked out once per word. */
 let gapFor: { range: Range; gap: number } | null = null;
@@ -115,7 +126,9 @@ function spot(): Point {
     const host = target.startContainer.parentElement;
     if (r && (r.width || r.height) && target.startContainer.isConnected) {
       const margin = marginX(host);
-      const above = { x: r.left + r.width / 2, y: r.top - lineGap(target, r.height) - 1 };
+      const gap = lineGap(target, r.height);
+      fit = Math.min(R_TRACK, Math.max(3, gap + 1));
+      const above = { x: r.left + r.width / 2, y: r.top - gap - 1 };
       if (r.bottom < 0 || r.top > innerHeight) {
         // Out of view: wait at that edge, in the margin (or over the column's start on a narrow screen), on
         // screen. It doesn't follow each word along the edge; it keeps watch until the reading scrolls back.
@@ -164,14 +177,33 @@ function frame(now: number) {
   lastScroll = sc;
   const goal = spot();
   floated = floating() ? floated + dt : 0;
-  const size = floating() && !cramped ? R_FLOAT : R_TRACK;
+  const size = floating() && !cramped ? R_FLOAT : fit;
   const still = prefersStill();
-  body.step(dt, goal, SPRING[leaving ? "leaving" : parked ? "waiting" : mood], size, still);
+  if (hop && (still || leaving || floating())) hop = null;
+  if (hop) {
+    // Along the arc toward wherever the word is now (the page may have moved), easing in and out.
+    const t = Math.min(1, (clock - hop.start) / hop.time);
+    const along = 0.5 - 0.5 * Math.cos(Math.PI * t);
+    const lift = hop.height * 4 * t * (1 - t);
+    body.moveTo({ x: hop.from.x + (goal.x - hop.from.x) * along, y: hop.from.y + (goal.y - hop.from.y) * along - lift }, dt, size);
+    body.squash = -0.12 * Math.sin(Math.PI * t);
+    if (t >= 1) {
+      hop = null;
+      landedAt = clock;
+      body.vel = { x: 0, y: 0 };
+    }
+  } else {
+    body.step(dt, goal, SPRING[leaving ? "leaving" : parked ? "waiting" : mood], size, still);
+    // A soft squash as it lands, easing back to round.
+    const since = clock - landedAt;
+    body.squash = landedAt >= 0 && since < LAND_FOR && !still ? LAND_SQUASH * Math.exp(-since / 0.045) : 0;
+  }
   body.draw({ x: -sc.x, y: -sc.y }, clock);
   // Gone under the tray: stop and clear.
   if (leaving && body.head.y - sc.y > innerHeight + 30) return finishLeaving();
   const bobbing = floating() && !still && floated <= DOZE_AFTER;
-  if (leaving || bobbing || !body.settled(goal, size)) raf = requestAnimationFrame(frame);
+  const landing = clock - landedAt < LAND_FOR;
+  if (hop || landing || leaving || bobbing || !body.settled(goal, size)) raf = requestAnimationFrame(frame);
 }
 
 function finishLeaving() {
@@ -224,10 +256,17 @@ export function wispFollow(to: Range | Element) {
   const before = target;
   target = to;
   floated = 0;
-  // A new word: a hop up, bigger for a longer way to go (not while it waits at the edge for the reading).
+  // A new word: hop to it, or fly if it's far (not while it waits at the edge for the reading).
   if (to instanceof Range && before !== to && mood === "tracking" && !parked && !prefersStill()) {
     const r = to.getBoundingClientRect();
-    if (r.bottom >= 0 && r.top <= innerHeight) body.vel.y -= kick(Math.hypot(r.left + r.width / 2 + scrollX - body.head.x, r.top + scrollY - body.head.y));
+    if (r.bottom >= 0 && r.top <= innerHeight) {
+      const d = Math.hypot(r.left + r.width / 2 + scrollX - body.head.x, r.top + scrollY - body.head.y);
+      if (d < HOP_REACH && d > 1) hop = { from: { ...body.head }, start: clock, time: hopTime(d), height: hopHeight(d) };
+      else {
+        hop = null;
+        body.vel.y -= kick(d);
+      }
+    }
   }
   wake();
 }
