@@ -19,8 +19,11 @@ const RATE_KEY = "art:listen:rate";
 const HINT_KEY = "art:listen:hinted";
 /** Sentences made ahead of the one playing. */
 const AHEAD = 2;
-/** Words are passed to the wisp this far ahead of being heard (seconds of real time), so its hop lands as each begins. */
-const WISP_LEAD = 0.12;
+/**
+ * Words are passed to the wisp this far ahead of being heard (seconds of real time), so its hop lands as each
+ * begins; never more than half the word it's on, so it never leaves a word before it's spoken.
+ */
+const WISP_LEAD = 0.15;
 /** Short waits don't announce themselves: a status that flashes for a moment is noise. */
 const QUIET_MS = 400;
 /** If the page doesn't answer (its script failed), say so rather than wait forever. */
@@ -487,9 +490,11 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     cancelAnimationFrame(raf);
     const tick = () => {
       if (state !== "playing" || !current) return;
-      // Looking slightly ahead (in audio time, so it holds at any speed).
-      const t = audio.currentTime + WISP_LEAD * rate;
+      // Looking slightly ahead (in audio time, so it holds at any speed), by at most half the current word.
       const words = current.words;
+      const now = words[Math.max(0, word)];
+      const lead = Math.min(WISP_LEAD * rate, now ? 0.5 * (now.t1 - now.t0) : WISP_LEAD * rate);
+      const t = audio.currentTime + lead;
       let k = word >= 0 && words[word] && words[word]!.t0 <= t ? word : 0;
       while (k + 1 < words.length && words[k + 1]!.t0 <= t) k++;
       const on = words[k] && words[k]!.t0 <= t ? k : -1;
