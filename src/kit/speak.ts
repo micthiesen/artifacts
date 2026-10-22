@@ -299,6 +299,8 @@ let intentAt = 0;
 // The reader's own move ends any scroll Listen started: what follows is theirs.
 const intent = () => {
   intentAt = Date.now();
+  // A scroll of Listen's own still on its way stops where it is, so the reader's takes over cleanly.
+  if (Date.now() < ownScrollUntil) scrollTo({ left: scrollX, top: scrollY, behavior: "instant" });
   ownScrollUntil = 0;
 };
 const userKey = (e: KeyboardEvent) => SCROLL_KEYS.has(e.key) && !(e.target as Element | null)?.closest?.(CONTROLS) && intent();

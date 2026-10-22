@@ -2,8 +2,9 @@
 //
 // What it is. The wisp is a character, not an indicator. It is the agent's light (moon white, AGENTS.md
 // "Look"), and while Listen reads it keeps you company: it hops from word to word as each is spoken, flies
-// to the next paragraph, and when there's nothing to point at (paused, waiting for the voice, a table read
-// as a summary) it floats up a little and bobs where it is, keeping your place.
+// to the next paragraph, and when there's nothing to point at (paused, a table read as a summary) it floats
+// up a little and bobs where it is, keeping your place. While the voice catches up mid-reading it just
+// hovers over the word it's on: a pause in the speech never sends it anywhere.
 //
 // How it behaves, and why:
 // - It is always there while you listen. It arrives when Listen starts, rising out from behind the tray at
@@ -39,9 +40,8 @@ const R_FLOAT = 7;
 /** The spring toward the wisp's spot (stiffness per s²), by what it's doing. */
 const SPRING = { tracking: 210, resting: 38, waiting: 46, leaving: 70 } as const;
 /**
- * Word to word it hops: a short arc, a little taller in the air and a soft squash as it lands, timed to land
- * as the word begins. Further than HOP_REACH (a block far down the page) it flies on its spring instead,
- * with an upward kick so even a flight leaves with a little leap.
+ * Word to word it hops: a short arc and a soft squash as it lands, timed to land as the word begins.
+ * Further than HOP_REACH, or onto the next line, it flies on a looser spring under a taller arc.
  */
 const HOP_REACH = 150;
 /** A firm, critically damped spring carries it along the line, so the glide never stops and starts. */
@@ -50,7 +50,6 @@ const hopTime = (d: number) => Math.min(0.24, Math.max(0.13, 0.12 + d / 1600));
 const hopHeight = (d: number) => Math.min(7, Math.max(3.5, 3.5 + d * 0.04));
 const LAND_SQUASH = 0.2;
 const LAND_FOR = 0.14;
-const kick = (d: number) => Math.min(320, 120 + Math.max(0, d - 160) * 0.4);
 /**
  * A hop: from where it took off (fromX) to the word, `height` at the top, plus whatever lift it still had
  * from a hop it was in the middle of (`carry`), let down smoothly. The lift follows how far along the way
@@ -156,8 +155,13 @@ function spot(): Point {
         parked = true;
         const y = r.bottom < 0 ? EDGE + R_FLOAT : innerHeight - EDGE - R_FLOAT;
         p = { x: margin ?? EDGE + R_FLOAT, y };
+      } else if (mood === "waiting") {
+        // Waiting for the voice mid-reading (the next sentence isn't ready yet): it hovers right where it
+        // is, small, over the word, rather than setting off anywhere and coming back.
+        cramped = true;
+        p = above;
       } else if (floating() && margin !== null) {
-        // Paused or waiting: step out into the margin beside the line.
+        // Paused: step out into the margin beside the line.
         p = { x: margin, y: r.top + r.height / 2 };
       } else if (floating()) {
         // Paused with no margin (a phone): float over the paragraph, above its first line, full size.
@@ -172,7 +176,7 @@ function spot(): Point {
   // Nothing with a box right now (a word inside something collapsed, or nothing yet): stay where it was.
   if (!p) return lastSpot ?? { ...body!.head };
   if (floating()) {
-    const bob = prefersStill() ? 0 : Math.min(1, Math.max(0, (DOZE_AFTER + DOZE_EASE - floated) / DOZE_EASE));
+    const bob = (prefersStill() ? 0 : Math.min(1, Math.max(0, (DOZE_AFTER + DOZE_EASE - floated) / DOZE_EASE))) * (cramped ? 0.35 : 1);
     p = { x: p.x + Math.sin(clock * BOB.speed * 0.5) * BOB.x * bob, y: p.y + Math.sin(clock * BOB.speed) * BOB.y * bob };
   }
   const x = Math.min(viewWidth() - EDGE, Math.max(EDGE, p.x));
@@ -298,10 +302,10 @@ export function wispFollow(to: Range | Element) {
       lastWordAt = clock;
       const wrap = dy > r.height * 0.6 && dx < -120;
       if (d >= HOP_REACH || wrap) {
-        // A flight: a little leap as it leaves, then the looser spring.
-        hop = null;
-        flyingUntil = clock + 0.45;
-        body.vel.y -= kick(d);
+        // A flight: the looser spring, under a taller arc (the same curve in space as a hop, so it never
+        // leaves straight up).
+        flyingUntil = clock + 0.5;
+        hop = { start: clock, time: 0.45, height: Math.min(30, Math.max(8, d * 0.08)), fromX: body.head.x, carry: body.lift };
       } else if (d > 1) {
         // A new hop takes off from wherever it is, carrying the height it already had, so the curve never kinks.
         // Sized to the speech: fast reading gets a faint ripple, slow reading a full hop.
