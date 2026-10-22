@@ -7,7 +7,7 @@
 // fixed, full-screen canvas that ignores the pointer: a tapered run of discs along the tail (one filled
 // path, so it reads as a single soft body), the head stretched along its flight, a small radial glow
 // under it (the ghost's halo, the one kind of gradient the look allows), and, when it is still, the logo's
-// happy closed eyes. It is moon white because it is the agent's light (AGENTS.md "Look").
+// happy closed eyes and blush. It is moon white because it is the agent's light (AGENTS.md "Look").
 
 export type Point = { x: number; y: number };
 
@@ -22,6 +22,9 @@ const TAIL_GAP = 0.9;
 const DAMPING = 0.72;
 /** It never flies faster than this (px/s), so a long way is a flight, not a teleport. */
 const MAX_SPEED = 2600;
+
+/** The logo's blush (src/shell/icons/logo.svg). */
+const BLUSH = "#ff7ab0";
 
 export class WispBody {
   head: Point = { x: 0, y: 0 };
@@ -191,6 +194,16 @@ export class WispBody {
         ctx.beginPath();
         ctx.arc(side * radius * 0.36, radius * 0.06, radius * 0.2, Math.PI * 1.15, Math.PI * 1.85);
         ctx.stroke();
+      }
+      // And its blush, once it's big enough to see.
+      if (radius >= 5.5) {
+        ctx.fillStyle = BLUSH;
+        ctx.globalAlpha = calm * 0.7;
+        for (const side of [-1, 1]) {
+          ctx.beginPath();
+          ctx.ellipse(side * radius * 0.5, radius * 0.36, radius * 0.16, radius * 0.1, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
       ctx.restore();
     }
