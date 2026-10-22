@@ -251,6 +251,7 @@ export function collectSpeech(root: Element): { units: SpeakUnit[]; start: numbe
   out = [];
   heading = undefined;
   staleSent = false;
+  speakingUnit = null;
   // Blocks, and every ancestor of one up to the root.
   blocky = new Set();
   for (const b of root.querySelectorAll(BLOCK)) {
@@ -344,15 +345,22 @@ function keepInView() {
 }
 
 /** Marks the block being read (a soft glow, rounded) and keeps it in view. */
+let speakingUnit: number | null = null;
+
 export function markSpeaking(i: number | null) {
   current?.removeAttribute("data-speaking");
   const unit = i === null ? undefined : units[i];
   current = unit?.mark ? glowTarget(unit.el) : null;
-  wordAt = null;
+  const moved = i !== speakingUnit;
+  speakingUnit = i;
   if (!unit) return;
-  // A block with nothing of its own to point at (a table or chart read as a summary): the wisp floats over it.
-  // Otherwise it stays where it is until the first word, and hops there.
-  if (!unit.spoken.nodes.some(Boolean)) wisp?.wispFollow(unit.el);
+  // A new block (not just the next sentence in this one): the wisp sets off for it at once, rather than
+  // lingering at the last word while the voice gets the next one ready, to its first word or, for a block
+  // with nothing of its own to point at (a table or chart read as a summary), to float over it.
+  if (moved) {
+    wordAt = null;
+    wisp?.wispFollow(firstWord(i!) ?? unit.el);
+  }
   if (!current) return;
   // Shaped boxes keep their own corners; anything square gets softly rounded ones.
   current.setAttribute("data-speaking", parseFloat(getComputedStyle(current).borderTopLeftRadius) > 0 ? "" : "round");
@@ -379,6 +387,16 @@ export function wordRange(i: number, start: number, end: number): Range | null {
     return null;
   }
   return range;
+}
+
+/** The range of a unit's first word on the page, or null when none of its text is on the page. */
+function firstWord(i: number): Range | null {
+  const { text, nodes } = units[i]!.spoken;
+  const start = nodes.findIndex(Boolean);
+  if (start < 0) return null;
+  let end = start;
+  while (end < text.length && nodes[end] && !/\s/.test(text[end]!)) end++;
+  return wordRange(i, start, Math.max(end, start + 1));
 }
 
 /** Tells the shell (once per collection) that the page changed under the reading, so it collects again. */
@@ -440,6 +458,7 @@ export function speakMode(on: boolean, send: (msg: FrameMessage) => void) {
   if (!on) {
     wisp?.wispLeave();
     markSpeaking(null);
+    speakingUnit = null;
     for (const u of units) u.el.removeAttribute("data-speak-i");
     units = [];
     out = [];
