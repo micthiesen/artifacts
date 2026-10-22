@@ -266,8 +266,6 @@ function frame(now: number) {
     }
   }
   body.draw({ x: -sc.x, y: -sc.y }, clock);
-  // TEMPORARY (debugging flight curves): what the wisp is doing this frame, for the QA harness.
-  (globalThis as { __wisp?: unknown }).__wisp = { t: clock, mood, parked, floating: floating(), gliding, hop: hop && { ...hop, p: hopProgress(hop, goal) }, goal, head: { ...body.head }, arc: { ...body.arc }, jump, flyingUntil, scroll: sc };
   if (leaving && body.head.y - sc.y > innerHeight + 30) return finishLeaving();
   const bobbing = floating() && !still && floated <= DOZE_AFTER + DOZE_EASE;
   const landing = clock - landedAt < LAND_FOR;
