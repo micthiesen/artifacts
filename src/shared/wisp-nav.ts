@@ -289,14 +289,30 @@ export class NavGrid {
     return true;
   }
 
-  /** How many points of `path` lie on soft things. */
-  private tolls(path: Point[]): number {
-    let n = 0;
+  /** The soft cells `path` passes through. */
+  private tolls(path: Point[]): Set<number> {
+    const cells = new Set<number>();
     for (const p of path) {
       const [c, r] = this.index(p);
-      if (c >= 0 && r >= 0 && c < this.cols && r < this.rows && this.toll[r * this.cols + c]) n++;
+      if (c >= 0 && r >= 0 && c < this.cols && r < this.rows && this.toll[r * this.cols + c]) cells.add(r * this.cols + c);
     }
-    return n;
+    return cells;
+  }
+
+  /**
+   * Every soft cell `curve` passes through is one `plain` passes through, or next to one: rounding may wobble
+   * within a soft thing the route crosses anyway (the strip off a phone's edge, which is all the margin there
+   * is), but never cut across one the route went round.
+   */
+  private softWithin(curve: Set<number>, plain: Set<number>): boolean {
+    const cols = this.cols;
+    for (const i of curve) {
+      const c = i % cols;
+      let near = false;
+      for (let dr = -1; dr <= 1 && !near; dr++) for (let dc = -1; dc <= 1 && !near; dc++) near = c + dc >= 0 && c + dc < cols && plain.has(i + dr * cols + dc);
+      if (!near) return false;
+    }
+    return true;
   }
 
   /** Every point of `path` (but its ends) is at least `margin` px from anything solid, measured exactly. */
@@ -331,7 +347,7 @@ export class NavGrid {
       [route, 3],
     ] as const) {
       const curve = densify(chaikin(base, passes), 3);
-      if (this.clearAll(curve, hard) && this.tolls(curve) <= crossings) return curve;
+      if (this.clearAll(curve, hard) && this.softWithin(this.tolls(curve), crossings)) return curve;
     }
     return plain;
   }

@@ -54,6 +54,29 @@ test("it would rather go round a soft thing than across it, but will cross when 
   expect(across).not.toBeNull();
 });
 
+test("along a phone's margin, which lies in the soft strip off the screen's edge, a route is still rounded off", () => {
+  // A phone: text from 20 px to near the right edge, so the only way down is the margin, and the cells it runs
+  // through are in the strip just off the screen (soft, so it doesn't use it as a short cut).
+  const vw = 390;
+  const page: Rect = { left: -80, top: 0, right: vw + 80, bottom: 900 };
+  const random = rng(5);
+  const text: Rect[] = [];
+  for (let y = 60; y < 840; y += 22) text.push({ left: 20, top: y, right: 330 + random() * 42, bottom: y + 16 });
+  const grid = new NavGrid(page, text, { clearance: 17, soft: [{ ...page, right: -8 }, { ...page, left: vw + 8 }] });
+  const path = grid.path({ x: 200, y: 30 }, { x: 200, y: 870 }, HARD)!;
+  expect(path).not.toBeNull();
+  for (const p of path) expect(nearest(text, p)).toBeGreaterThanOrEqual(HARD);
+  // No corners: the heading changes by only a little between steps (the raw grid route turns 45° at once).
+  let sharpest = 0;
+  for (let i = 1; i + 1 < path.length; i++) {
+    const [a, b, c] = [path[i - 1]!, path[i]!, path[i + 1]!];
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 1 || Math.hypot(c.x - b.x, c.y - b.y) < 1) continue;
+    const turn = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(b.y - a.y, b.x - a.x);
+    sharpest = Math.max(sharpest, Math.abs(Math.atan2(Math.sin(turn), Math.cos(turn))));
+  }
+  expect((sharpest * 180) / Math.PI).toBeLessThan(25);
+});
+
 test("running from the pointer, it keeps away from it", () => {
   const grid = new NavGrid(BOUNDS, []);
   const pointer = { x: 400, y: 300 };
