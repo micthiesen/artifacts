@@ -1,7 +1,8 @@
 // Watches the splash page's wisp for a while and scores it: does it ever touch text, how smooth is it, what
 // does it get up to. Paste into the page's console (or evaluate it from a browser driver) once the page has
 // loaded; it resolves with a report after `seconds`. It plays a visitor along the way: rests, chases the wisp
-// with the pointer, leaves the pointer still, scrolls down and back up.
+// with the pointer, leaves the pointer still, scrolls down and back up (which may call it over to read a
+// heading: `calls` lists what caught its eye and whether it came).
 //
 // Usage: await (PASTE)({ seconds: 70 })
 async ({ seconds = 70, chase = true, scroll = true } = {}) => {
@@ -11,6 +12,7 @@ async ({ seconds = 70, chase = true, scroll = true } = {}) => {
   const COVERS = ".showcase-window, .splash-code, .splash-ghost";
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   globalThis.__wispTrace = [];
+  globalThis.__wispCalls = [];
   const trace = globalThis.__wispTrace;
   const t0 = performance.now();
   const elapsed = () => (performance.now() - t0) / 1000;
@@ -55,6 +57,8 @@ async ({ seconds = 70, chase = true, scroll = true } = {}) => {
   }
   while (elapsed() < seconds) await sleep(500);
   globalThis.__wispTrace = undefined;
+  const calls = (globalThis.__wispCalls ?? []).map((c) => ({ ...c, t: +((c.t - t0) / 1000).toFixed(1) }));
+  globalThis.__wispCalls = undefined;
 
   // The page, in page px.
   const page = (r) => ({ left: r.left + scrollX, top: r.top + scrollY, right: r.right + scrollX, bottom: r.bottom + scrollY });
@@ -87,10 +91,12 @@ async ({ seconds = 70, chase = true, scroll = true } = {}) => {
     visible++;
     const d = Math.min(...walls.map((w) => gap(w, f)));
     nearest = Math.min(nearest, d);
-    if (d < RADIUS) {
+    // Its body as drawn that frame (it grows a little while it sits reading).
+    const r = f.r ?? RADIUS;
+    if (d < r) {
       over++;
       if (overAt.length < 12) overAt.push({ t: +((f.t - trace[0].t) / 1000).toFixed(2), x: Math.round(f.x), y: Math.round(f.y), mode: f.mode, d: +d.toFixed(1) });
-    } else if (d < RADIUS + 3) close++;
+    } else if (d < r + 3) close++;
   }
 
   // Smoothness while moving: velocity and acceleration from a quadratic fit over five frames (frame times
@@ -121,6 +127,7 @@ async ({ seconds = 70, chase = true, scroll = true } = {}) => {
   };
   const d = trace.map((_, i) => fit(i));
   let jolts = 0;
+  const joltAt = [];
   let maxSpeed = 0;
   let teleports = 0;
   for (let i = 1; i < trace.length; i++) {
@@ -136,7 +143,10 @@ async ({ seconds = 70, chase = true, scroll = true } = {}) => {
     if (trace[i].mode !== "moving" || trace[i].t - trace[i - 1].t > 40 || trace[i + 1].t - trace[i].t > 40 || trace[i - 1].t - trace[i - 2].t > 40) continue;
     maxSpeed = Math.max(maxSpeed, d[i].v);
     const da = (k) => Math.hypot(d[k].ax - d[k - 1].ax, d[k].ay - d[k - 1].ay);
-    if (da(i) > 4000 && da(i) > 2.5 * Math.max(da(i - 1), da(i + 1))) jolts++;
+    if (da(i) > 4000 && da(i) > 2.5 * Math.max(da(i - 1), da(i + 1))) {
+      jolts++;
+      if (joltAt.length < 12) joltAt.push({ t: +((trace[i].t - trace[0].t) / 1000).toFixed(2), x: Math.round(trace[i].x), y: Math.round(trace[i].y), v: Math.round(d[i].v), scrolling: trace[i].sy !== trace[i - 1].sy });
+    }
   }
   return {
     seconds: +elapsed().toFixed(1),
@@ -148,10 +158,12 @@ async ({ seconds = 70, chase = true, scroll = true } = {}) => {
     overAt,
     teleports,
     jolts,
+    joltAt,
     maxSpeed: Math.round(maxSpeed),
     modes,
     story: story.slice(0, 80),
     events,
+    calls,
     viewport: `${innerWidth}x${innerHeight}`,
   };
 };

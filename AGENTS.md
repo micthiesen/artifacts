@@ -121,9 +121,13 @@ where a test can catch them; keep the rest by hand.
   behind the page: it finds its way round text, buttons and cards like a
   maze and never crosses them (`src/shared/wisp-nav.ts`), hides behind cards
   and peeks out, bolts from a nearby pointer except on the way to the call
-  to action, and is absent under reduced motion or Save-Data. Measure a
+  to action, and is absent under reduced motion or Save-Data. It notices
+  what you read: it comes to sit by a section you've scrolled to or words
+  you've selected with the pointer, never by a long way round, and finishes
+  the move it's making before it turns to come. Measure a
   change with `spikes/splash-wisp-probe.js` on `spikes/splash-serve.ts`:
-  it must report no frames over text.
+  it must report no frames over text, and no more jolts on a phone than
+  before (compare against the previous build; runs vary, so take three).
 - Keyboard-driven and very frequent actions (typing, arrowing, hovering a
   list) get colour changes at most, not movement.
 - Animate `transform` and `opacity`; never animate layout (height, width,

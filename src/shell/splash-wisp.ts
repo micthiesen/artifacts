@@ -19,6 +19,15 @@
 // Chase it about and it runs off the screen for a while. Leave the pointer still and it may creep a little
 // closer, until you move. On a touch screen, tap near it to shoo it.
 //
+// What catches its eye. What you're reading. Scroll to a new section and stay there a moment, and it comes
+// over and sits by the heading, swelling a little so its face shows, leaning in, with a little double hop:
+// it's reading too. Pick out some words and it hurries over to look at them. Switch the example or its view
+// and it ducks behind the window to peek at the new one. It finishes the move it's making before it turns to
+// come, and never comes the long way round (on a phone that's down the screen's edge and back). Each section
+// catches its eye once a visit, and never straight after another or while it's still wary from being chased:
+// company, not a cursor. Only what you do with the pointer catches its eye (keyboard selection and
+// switching get nothing that moves).
+//
 // What it must never do. Get between you and the page: it never crosses text, buttons or links, never rests
 // beside the call to action or reacts to a pointer on its way there, and its canvas ignores the pointer.
 // Nor cost anything for the page: it is loaded after the page is idle (and not at all with Save-Data or
@@ -28,6 +37,11 @@ import { prefersStill, viewWidth, WispBody, type Point } from "../shared/wisp-bo
 import { densify, inflate, NavGrid, PathFollower, rectDistance, type Avoid, type Pace, type Rect } from "../shared/wisp-nav.ts";
 
 const RADIUS = 6;
+/**
+ * Sitting by something you're reading it swells a little, so its face (and a bigger halo) shows. With its
+ * lean (2.5 px) and hop (4.5 px) its stretched body still stays inside CLEARANCE.
+ */
+const READING_RADIUS = 7.5;
 /** How far its centre keeps from anything on the page when it can (its body and some air)... */
 const CLEARANCE = RADIUS + 11;
 /** ...and the least it ever comes to it, rounding a corner. */
@@ -54,9 +68,10 @@ const GHOST_MIDDLE = { u: 0.5, v: 0.6 };
 /** How deep behind a card it hides (px past the edge): out of sight, glow and all. */
 const DEPTH = 30;
 
-/** How it moves: a potter, a careful creep, a bolt. */
+/** How it moves: a potter, a hurry to see something, a careful creep, a bolt. */
 const PACE = {
   stroll: { cruise: 230, accel: 700, lateral: 1100 },
+  eager: { cruise: 480, accel: 1100, lateral: 1500 },
   sneak: { cruise: 110, accel: 380, lateral: 700 },
   scurry: { cruise: 640, accel: 2800, lateral: 3400 },
 } satisfies Record<string, Pace>;
@@ -74,6 +89,16 @@ const HIDE_FOR = [2.5, 6] as const;
 const PEEK_FOR = [1.2, 2.6] as const;
 const LOOK_FOR = [0.5, 1.1] as const;
 const AWAY_FOR = [4, 9] as const;
+/** Seconds: how long it reads beside something, its happy double hop, and the least between two call-outs. */
+const READ_FOR = [7, 12] as const;
+const PERK_FOR = 0.66;
+const CALL_GAP = 6;
+/** The longest way round it takes to come and look (px, or most of a wide screen's width): further, and it lets it be. */
+const callRoute = () => Math.max(700, viewWidth() * 0.9);
+/** Seconds after it was last chased that nothing will call it over. */
+const WARY_FOR = 15;
+/** What it reads along with: the sections' headings (the hero's needs no pointing out). */
+const HEADINGS = "main.splash h2, main.splash h3";
 
 type Mode = "away" | "moving" | "resting" | "hidden" | "peeking";
 /** Something on the page and where it is (page px). */
@@ -90,6 +115,7 @@ type Leg = { f: PathFollower; then: () => void; fleeing: boolean; replan?: () =>
 const between = ([a, b]: readonly [number, number]) => a + Math.random() * (b - a);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+const length = (path: Point[]) => path.reduce((sum, p, i) => sum + (i ? dist(path[i - 1]!, p) : 0), 0);
 const pageRect = (r: DOMRect | Rect): Rect => ({ left: r.left + scrollX, top: r.top + scrollY, right: r.right + scrollX, bottom: r.bottom + scrollY });
 
 /** Lines of text from a range's boxes: the boxes on one line merged into one. */
@@ -119,6 +145,17 @@ export function startSplashWisp() {
   let spot: Point | null = null;
   let bobbing = false;
   let landedAt = 0;
+  /** Something it's looking at (it leans towards it), when it last hopped for joy, and when (wall clock) it last came to look. */
+  let lookAt: Point | null = null;
+  let perkAt = -Infinity;
+  let calledAt = -Infinity;
+  /** Headings it has already come to read this visit, and the words it last came to look at. */
+  const read = new Set<Element>();
+  let lastWords = "";
+  /** The primary button is held (mid-drag), when it was last let go, and when a key was last pressed. */
+  let pressed = false;
+  let releasedAt = -Infinity;
+  let keyedAt = -Infinity;
   /** Where it rested lately, so it doesn't keep going back to the same nook. */
   let recent: Point[] = [];
   let timer = 0;
@@ -126,7 +163,7 @@ export function startSplashWisp() {
   let last = 0;
   let clock = 0;
   let darts: number[] = [];
-  let lastDart = 0;
+  let lastDart = -Infinity;
   /** The pointer, on the screen, when it last moved, and whether it's a mouse (that can hover). */
   let pointer: { x: number; y: number; t: number; mouse: boolean } | null = null;
   /** Bumped when the page reflows, so the maze is redrawn. */
@@ -303,6 +340,7 @@ export function startSplashWisp() {
     }
     leg = { f: new PathFollower(pts, pace, start), then, fleeing, replan };
     mode = "moving";
+    lookAt = null;
     clearTimeout(timer);
     body.upright = false;
     wake();
@@ -337,6 +375,7 @@ export function startSplashWisp() {
     mode = "resting";
     spot = { ...at };
     hole = null;
+    lookAt = null;
     landedAt = clock;
     bobbing = bob;
     body.upright = true;
@@ -559,6 +598,204 @@ export function startSplashWisp() {
     flee(from);
   }
 
+  // What you're reading.
+
+  /** For measuring (spikes/splash-wisp-probe.js): what caught its eye, and whether it came. */
+  const note = (what: string, came: boolean) => (globalThis as { __wispCalls?: object[] }).__wispCalls?.push({ t: performance.now(), what, came, mode });
+
+  /** A happy double hop where it sits. */
+  function perk(): void {
+    perkAt = clock;
+    wake();
+  }
+
+  /** Still wary from a chase, just came to look at something, or running. Not now. */
+  function notNow(): boolean {
+    const now = performance.now();
+    return !started || document.hidden || now - calledAt < CALL_GAP * 1000 || now - lastDart < WARY_FOR * 1000 || (mode === "moving" && !!leg?.fleeing);
+  }
+
+  /**
+   * Comes to sit by something you're reading: at a nook near one of `near` (page px), out of the pointer's
+   * way, leaning towards `look`. From off the screen it flies in from the nearer side. False if there's no spot.
+   */
+  function callOut(look: Point, near: Point[]): boolean {
+    if (notNow()) return false;
+    // On its way somewhere: it gets there first, then comes (turning mid-stride would jolt it).
+    if (mode === "moving" && leg && !hole) {
+      const then = leg.then;
+      leg.then = () => {
+        then();
+        callOut(look, near);
+      };
+      return true;
+    }
+    const n = nav();
+    const at = pointerAt();
+    const fresh = at && pointer && performance.now() - pointer.t < 8000;
+    const spots = nooks(n, (p) => {
+      const d = Math.min(...near.map((a) => dist(p, a)));
+      if (d > 80 || (fresh && dist(p, at) < SHY + 20)) return null;
+      return -d / 60;
+    }, 4);
+    const arrive = (spot: Point) => () => {
+      rest(spot, false);
+      recent = [spot, ...recent].slice(0, 4);
+      // Scrolled on while it came: it just settles, with nothing on screen to look at.
+      if (!onScreen(look)) return;
+      lookAt = look;
+      perk();
+      // Scrolled away while it was on its way: rest() has it catching up instead.
+      if (onScreen(spot, -RADIUS)) schedule(between(READ_FOR), wander);
+    };
+    // Behind a card (or creeping out from one): it comes out round the edge it knows, then over.
+    const behind = hole && (mode === "hidden" || mode === "peeking" || mode === "moving") ? hole : null;
+    // The page may have moved under the card since it went in: only out by an edge that's still clear.
+    if (behind && !usable(behind, n)) return false;
+    const exit = behind?.out();
+    for (const spot of spots) {
+      if (behind) {
+        const path = exit && n.grid.path(exit, spot, HARD, avoidPointer());
+        if (!path || length(path) > callRoute()) continue;
+        hole = null;
+        travel([...densify([body.head, exit], 3), ...path], PACE.eager, arrive(spot), false, () => goTo(spot, PACE.eager, arrive(spot)));
+        calledAt = performance.now();
+        return true;
+      }
+      // Already there (or near enough): just look.
+      if (mode === "resting" && dist(body.head, spot) < 24 && onScreen(body.head, 10)) {
+        arrive(spot)();
+        calledAt = performance.now();
+        return true;
+      }
+      const again = () => goTo(spot, PACE.eager, arrive(spot), { avoid: avoidPointer() });
+      if (mode !== "away" && n.grid.room(body.head) >= HARD) {
+        const path = n.grid.path(body.head, spot, HARD, avoidPointer());
+        if (path && length(path) <= callRoute()) {
+          travel(path, PACE.eager, arrive(spot), false, again);
+          calledAt = performance.now();
+          return true;
+        }
+      }
+      if (!unseen()) continue;
+      const side = spot.x - scrollX < viewWidth() / 2 ? "left" : "right";
+      const h = edgeHole(side, clamp(spot.y, scrollY + 70, scrollY + innerHeight - 50));
+      const path = usable(h, n) && n.grid.path(h.out()!, spot, HARD);
+      if (!path || length(path) > callRoute()) continue;
+      body.place(h.inside()!);
+      mode = "away";
+      hole = null;
+      travel([...densify([h.inside()!, h.out()!], 3), ...path], PACE.eager, arrive(spot), false, again);
+      calledAt = performance.now();
+      return true;
+    }
+    return false;
+  }
+
+  /** The heading of the section you've settled on: near the top of the screen, and new to it this visit. */
+  function readingNow(): Element | null {
+    const top = 56;
+    const bottom = innerHeight * 0.5;
+    const near: Element[] = [];
+    for (const el of document.querySelectorAll(HEADINGS)) {
+      if (read.has(el) || el.closest(SOLID)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width && r.top >= top && r.bottom <= bottom) near.push(el);
+    }
+    if (!near.length) return null;
+    // A row of them side by side: the one under the pointer if there's one about, else the first in reading order.
+    const rowTop = Math.min(...near.map((el) => el.getBoundingClientRect().top));
+    const row = near.filter((el) => el.getBoundingClientRect().top - rowTop < 40);
+    const x = pointer?.mouse ? pointer.x : null;
+    const centre = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return (r.left + r.right) / 2;
+    };
+    return x === null ? row.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0]! : row.sort((a, b) => Math.abs(centre(a) - x) - Math.abs(centre(b) - x))[0]!;
+  }
+
+  /** Where to sit by some lines of text: just past the end of the last line, or before the first. */
+  function beside(ls: Rect[]): { look: Point; near: Point[] } | null {
+    const first = ls[0];
+    const last = ls[ls.length - 1];
+    if (!first || !last) return null;
+    const mid = (l: Rect) => (l.top + l.bottom) / 2;
+    return {
+      look: { x: (last.left + last.right) / 2, y: mid(last) },
+      near: [
+        { x: last.right + CLEARANCE + 6, y: mid(last) },
+        { x: first.left - CLEARANCE - 6, y: mid(first) },
+        { x: last.right - 20, y: last.bottom + CLEARANCE + 4 },
+      ],
+    };
+  }
+
+  const pageLines = (rects: DOMRectList) => lines(rects).map((l) => pageRect(l));
+
+  function readHeading(): void {
+    if (notNow()) return;
+    const el = readingNow();
+    if (!el) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const at = beside(pageLines(range.getClientRects()));
+    const came = !!at && callOut(at.look, at.near);
+    if (came) read.add(el);
+    note(`heading: ${el.textContent?.trim().slice(0, 40)}`, came);
+  }
+
+  /** Words you picked out: it comes to look (once per choice of words). */
+  function readSelection(): void {
+    const sel = getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+    const words = sel.toString().trim();
+    // Picked out with the pointer and let go: not mid-drag, not by keyboard.
+    if (pressed || keyedAt > releasedAt || performance.now() - releasedAt > 2500) return;
+    if (words.length < 2 || words === lastWords || notNow()) return;
+    const range = sel.getRangeAt(0);
+    const host = range.commonAncestorContainer;
+    if (!(host instanceof Element ? host : host.parentElement)?.closest("main.splash")) return;
+    const at = beside(pageLines(range.getClientRects()));
+    const came = !!at && callOut(at.look, at.near);
+    if (came) lastWords = words;
+    note(`words: ${words.slice(0, 40)}`, came);
+  }
+
+  /** You switched the example (or its view): it ducks behind the window and peeks round at the new one. */
+  function peekAtExample(): void {
+    note("example", peekAt());
+  }
+  function peekAt(): boolean {
+    // Out of sight (away, or behind another card), it can already be behind the window.
+    const unseenNow = mode === "away" || (mode === "hidden" && unseen());
+    if (notNow() || (mode !== "resting" && !unseenNow)) return false;
+    const win = document.querySelector(".showcase-panel:not([hidden]) .showcase-window");
+    if (!win) return false;
+    const n = nav();
+    const holes = coverHoles(win)
+      .filter((h) => usable(h, n) && shyOf(h.out()!, 200))
+      .sort((a, b) => dist(a.out()!, body.head) - dist(b.out()!, body.head));
+    for (const h of holes.slice(0, 3)) {
+      const then = () => {
+        mode = "hidden";
+        hole = h;
+        schedule(between([0.4, 0.9]), peekOut);
+        wake();
+      };
+      if (mode === "resting" && goTo(h.out()!, PACE.scurry, then, { into: h, avoid: avoidPointer() })) {
+        calledAt = performance.now();
+        return true;
+      }
+      if (unseenNow) {
+        calledAt = performance.now();
+        body.place(h.inside()!);
+        then();
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Each frame.
 
   /** How near the pointer is, 0 (not noticed) to 1 (about to bolt), and which way is away from it. */
@@ -580,7 +817,19 @@ export function startSplashWisp() {
     const bob = bobbing && t < BOB_FOR ? Math.sin(t * 5) * 2.2 * (1 - t / BOB_FOR) : 0;
     // It leans away from a pointer it has noticed.
     const { k, away } = wary();
-    return { x: spot.x + away.x * 3 * k, y: spot.y + bob + away.y * 3 * k };
+    // ...and towards what it's reading, hopping when it gets there.
+    const toward = lookAt ? { x: lookAt.x - spot.x, y: lookAt.y - spot.y } : { x: 0, y: 0 };
+    const len = Math.hypot(toward.x, toward.y) || 1;
+    return { x: spot.x + away.x * 3 * k + (toward.x / len) * 2.5, y: spot.y + bob + away.y * 3 * k + (toward.y / len) * 2.5 - hop() * 4.5 };
+  }
+
+  /** Its size now: a little bigger while it sits reading. */
+  const size = () => (mode === "resting" && lookAt ? READING_RADIUS : RADIUS);
+
+  /** How high it is in its double hop (0 on the ground, 1 at the top). */
+  function hop(): number {
+    const t = clock - perkAt;
+    return t >= 0 && t < PERK_FOR ? Math.abs(Math.sin((t / PERK_FOR) * Math.PI * 2)) : 0;
   }
 
   /** Inside a frame: wake() leaves the scheduling to the frame itself, so only one loop ever runs. */
@@ -618,21 +867,24 @@ export function startSplashWisp() {
       }
     } else {
       goal = target();
-      body.step(dt, goal, mode === "peeking" ? 220 : 160, RADIUS);
+      const hopping = clock - perkAt < PERK_FOR + 0.3;
+      body.step(dt, goal, mode === "peeking" ? 220 : hopping ? 420 : 160, size());
     }
-    // Squashed as it lands, then crouched low when a pointer it has noticed is near.
-    const crouch = mode === "resting" ? wary().k * 0.12 : 0;
+    // Squashed as it lands, then crouched low when a pointer it has noticed is near; stretched up in a hop.
+    const h = hop();
+    const crouch = mode === "resting" ? (h > 0 ? 0.1 - h * 0.2 : wary().k * 0.12) : 0;
     body.squash += (crouch - body.squash) * (1 - Math.exp(-dt / 0.09));
     if (Math.abs(body.squash - crouch) < 0.003) body.squash = crouch;
     // Peeking in from the side of the screen it is pinned there; everywhere else it rides with the page.
     body.draw(clock, (mode === "peeking" || mode === "hidden") && !!hole && !hole.el);
-    trace.__wispTrace?.push({ t: now, x: body.head.x, y: body.head.y, mode, sx: scrollX, sy: scrollY });
+    trace.__wispTrace?.push({ t: now, x: body.head.x, y: body.head.y, mode, sx: scrollX, sy: scrollY, r: body.radius, look: lookAt && { ...lookAt } });
     const busy =
       mode === "moving" ||
       mode === "peeking" ||
       (mode === "resting" && bobbing && clock - landedAt < BOB_FOR) ||
+      clock - perkAt < PERK_FOR ||
       body.squash !== crouch ||
-      !body.settled(goal ?? body.head, RADIUS);
+      !body.settled(goal ?? body.head, size());
     if (busy && !document.hidden) raf = requestAnimationFrame(frame);
   }
 
@@ -667,6 +919,9 @@ export function startSplashWisp() {
     wake();
     clearTimeout(scrolled);
     scrolled = window.setTimeout(() => {
+      // Settled on a new section: it may come and read it with you (which takes care of catching up too).
+      readHeading();
+      if (performance.now() - calledAt < 500) return;
       if (mode === "resting" || mode === "hidden" || mode === "peeking") {
         if (mode !== "resting" && hole && !hole.el) return;
         const at = mode === "resting" ? body.head : hole?.inside();
@@ -674,6 +929,32 @@ export function startSplashWisp() {
       }
     }, 900);
   };
+  let selecting = 0;
+  const onSelection = () => {
+    clearTimeout(selecting);
+    selecting = window.setTimeout(readSelection, 700);
+  };
+  const onPress = (e: PointerEvent) => {
+    if (e.button === 0) pressed = true;
+  };
+  // Let go after holding still: the selection settled while the button was down, so look now.
+  const onRelease = () => {
+    if (!pressed) return;
+    pressed = false;
+    releasedAt = performance.now();
+    onSelection();
+  };
+  // A modifier alone (Shift before a click, Cmd before copying) isn't keyboard selection.
+  const onKey = (e: KeyboardEvent) => {
+    if (!["Shift", "Meta", "Control", "Alt"].includes(e.key)) keyedAt = performance.now();
+  };
+  // Pointer presses only: switching by keyboard gets nothing that moves.
+  // Seen before the page's own handler, so a press on what's already showing doesn't count.
+  const onShowcase = (e: MouseEvent) => {
+    const el = (e.target as Element | null)?.closest(".showcase-tabs [role=tab], .showcase-toggle [data-view]");
+    if (e.detail > 0 && el && el.getAttribute("aria-selected") !== "true" && el.getAttribute("aria-pressed") !== "true") window.setTimeout(peekAtExample, 250);
+  };
+
   let reflowed = 0;
   const onLayout = () => {
     layout++;
@@ -697,6 +978,12 @@ export function startSplashWisp() {
   addEventListener("scroll", onScroll, { passive: true });
   addEventListener("resize", onLayout);
   document.addEventListener("visibilitychange", wake);
+  document.addEventListener("selectionchange", onSelection);
+  document.addEventListener("click", onShowcase, true);
+  addEventListener("pointerdown", onPress, { passive: true });
+  addEventListener("pointerup", onRelease, { passive: true });
+  addEventListener("pointercancel", onRelease, { passive: true });
+  addEventListener("keydown", onKey, { passive: true });
   body.observe(onLayout);
   // Reduced motion switched on mid-visit: it goes home for good.
   const still = matchMedia("(prefers-reduced-motion: reduce)");
@@ -706,6 +993,7 @@ export function startSplashWisp() {
     clearTimeout(timer);
     clearTimeout(scrolled);
     clearTimeout(reflowed);
+    clearTimeout(selecting);
     cancelAnimationFrame(raf);
     removeEventListener("pointermove", onMove);
     removeEventListener("pointerdown", onTap);
@@ -713,6 +1001,12 @@ export function startSplashWisp() {
     removeEventListener("scroll", onScroll);
     removeEventListener("resize", onLayout);
     document.removeEventListener("visibilitychange", wake);
+    document.removeEventListener("selectionchange", onSelection);
+    document.removeEventListener("click", onShowcase, true);
+    removeEventListener("pointerdown", onPress);
+    removeEventListener("pointerup", onRelease);
+    removeEventListener("pointercancel", onRelease);
+    removeEventListener("keydown", onKey);
     still.removeEventListener("change", stop);
     body.dispose();
   };
